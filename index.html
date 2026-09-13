@@ -208,6 +208,30 @@
             margin-bottom: 14px;
         }
 
+        .badge-wrapper {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .btn-reset {
+            display: none;
+            background-color: #21262d;
+            border: 1px solid #3b4252;
+            color: #ff7b72;
+            font-size: 10px;
+            font-weight: 700;
+            padding: 3px 6px;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: background-color 0.15s, border-color 0.15s;
+        }
+
+        .btn-reset:hover {
+            background-color: rgba(242, 54, 69, 0.2);
+            border-color: var(--accent-red);
+        }
+
         .sym-group {
             display: flex;
             flex-direction: column;
@@ -262,6 +286,10 @@
             font-family: "SF Mono", Menlo, Consolas, monospace;
             font-weight: 600;
             color: var(--text-main);
+        }
+
+        .val-sl {
+            color: #ef5350;
         }
 
         /* PROGRESSION */
@@ -329,10 +357,14 @@
             <div class="card" id="card-GOLD">
                 <div class="card-top">
                     <div class="sym-group"><span class="sym-name">GOLD</span><span class="sym-sub">XAU/USD • OR COMPTANT</span></div>
-                    <span class="badge-status" id="badge-GOLD">STANDBY</span>
+                    <div class="badge-wrapper">
+                        <button class="btn-reset" id="reset-GOLD" onclick="resetAsset('GOLD')">✕ Reset</button>
+                        <span class="badge-status" id="badge-GOLD">STANDBY</span>
+                    </div>
                 </div>
                 <div class="metrics">
                     <div class="data-row"><span>Entrée Setup</span><span class="val-mono" id="entry-GOLD">--</span></div>
+                    <div class="data-row"><span>Stop Loss (SL)</span><span class="val-mono val-sl" id="sl-GOLD">--</span></div>
                     <div class="data-row"><span>Objectif TP</span><span class="val-mono" id="tp-GOLD">--</span></div>
                     <div class="data-row"><span>Dernier Prix</span><span class="val-mono" id="price-GOLD">--</span></div>
                 </div>
@@ -346,10 +378,14 @@
             <div class="card" id="card-US100">
                 <div class="card-top">
                     <div class="sym-group"><span class="sym-name">US100</span><span class="sym-sub">NASDAQ 100 INDEX</span></div>
-                    <span class="badge-status" id="badge-US100">STANDBY</span>
+                    <div class="badge-wrapper">
+                        <button class="btn-reset" id="reset-US100" onclick="resetAsset('US100')">✕ Reset</button>
+                        <span class="badge-status" id="badge-US100">STANDBY</span>
+                    </div>
                 </div>
                 <div class="metrics">
                     <div class="data-row"><span>Entrée Setup</span><span class="val-mono" id="entry-US100">--</span></div>
+                    <div class="data-row"><span>Stop Loss (SL)</span><span class="val-mono val-sl" id="sl-US100">--</span></div>
                     <div class="data-row"><span>Objectif TP</span><span class="val-mono" id="tp-US100">--</span></div>
                     <div class="data-row"><span>Dernier Prix</span><span class="val-mono" id="price-US100">--</span></div>
                 </div>
@@ -363,10 +399,14 @@
             <div class="card" id="card-SPX500">
                 <div class="card-top">
                     <div class="sym-group"><span class="sym-name">SPX500</span><span class="sym-sub">S&P 500 INDEX</span></div>
-                    <span class="badge-status" id="badge-SPX500">STANDBY</span>
+                    <div class="badge-wrapper">
+                        <button class="btn-reset" id="reset-SPX500" onclick="resetAsset('SPX500')">✕ Reset</button>
+                        <span class="badge-status" id="badge-SPX500">STANDBY</span>
+                    </div>
                 </div>
                 <div class="metrics">
                     <div class="data-row"><span>Entrée Setup</span><span class="val-mono" id="entry-SPX500">--</span></div>
+                    <div class="data-row"><span>Stop Loss (SL)</span><span class="val-mono val-sl" id="sl-SPX500">--</span></div>
                     <div class="data-row"><span>Objectif TP</span><span class="val-mono" id="tp-SPX500">--</span></div>
                     <div class="data-row"><span>Dernier Prix</span><span class="val-mono" id="price-SPX500">--</span></div>
                 </div>
@@ -380,10 +420,14 @@
             <div class="card" id="card-GER40">
                 <div class="card-top">
                     <div class="sym-group"><span class="sym-name">GER40</span><span class="sym-sub">DAX 40 INDEX</span></div>
-                    <span class="badge-status" id="badge-GER40">STANDBY</span>
+                    <div class="badge-wrapper">
+                        <button class="btn-reset" id="reset-GER40" onclick="resetAsset('GER40')">✕ Reset</button>
+                        <span class="badge-status" id="badge-GER40">STANDBY</span>
+                    </div>
                 </div>
                 <div class="metrics">
                     <div class="data-row"><span>Entrée Setup</span><span class="val-mono" id="entry-GER40">--</span></div>
+                    <div class="data-row"><span>Stop Loss (SL)</span><span class="val-mono val-sl" id="sl-GER40">--</span></div>
                     <div class="data-row"><span>Objectif TP</span><span class="val-mono" id="tp-GER40">--</span></div>
                     <div class="data-row"><span>Dernier Prix</span><span class="val-mono" id="price-GER40">--</span></div>
                 </div>
@@ -397,10 +441,14 @@
             <div class="card" id="card-FR40">
                 <div class="card-top">
                     <div class="sym-group"><span class="sym-name">FR40</span><span class="sym-sub">CAC 40 INDEX</span></div>
-                    <span class="badge-status" id="badge-FR40">STANDBY</span>
+                    <div class="badge-wrapper">
+                        <button class="btn-reset" id="reset-FR40" onclick="resetAsset('FR40')">✕ Reset</button>
+                        <span class="badge-status" id="badge-FR40">STANDBY</span>
+                    </div>
                 </div>
                 <div class="metrics">
                     <div class="data-row"><span>Entrée Setup</span><span class="val-mono" id="entry-FR40">--</span></div>
+                    <div class="data-row"><span>Stop Loss (SL)</span><span class="val-mono val-sl" id="sl-FR40">--</span></div>
                     <div class="data-row"><span>Objectif TP</span><span class="val-mono" id="tp-FR40">--</span></div>
                     <div class="data-row"><span>Dernier Prix</span><span class="val-mono" id="price-FR40">--</span></div>
                 </div>
@@ -414,10 +462,14 @@
             <div class="card" id="card-USOIL">
                 <div class="card-top">
                     <div class="sym-group"><span class="sym-name">USOIL</span><span class="sym-sub">CRUDE OIL (WTI)</span></div>
-                    <span class="badge-status" id="badge-USOIL">STANDBY</span>
+                    <div class="badge-wrapper">
+                        <button class="btn-reset" id="reset-USOIL" onclick="resetAsset('USOIL')">✕ Reset</button>
+                        <span class="badge-status" id="badge-USOIL">STANDBY</span>
+                    </div>
                 </div>
                 <div class="metrics">
                     <div class="data-row"><span>Entrée Setup</span><span class="val-mono" id="entry-USOIL">--</span></div>
+                    <div class="data-row"><span>Stop Loss (SL)</span><span class="val-mono val-sl" id="sl-USOIL">--</span></div>
                     <div class="data-row"><span>Objectif TP</span><span class="val-mono" id="tp-USOIL">--</span></div>
                     <div class="data-row"><span>Dernier Prix</span><span class="val-mono" id="price-USOIL">--</span></div>
                 </div>
@@ -431,10 +483,14 @@
             <div class="card" id="card-NATGAS">
                 <div class="card-top">
                     <div class="sym-group"><span class="sym-name">NATGAS</span><span class="sym-sub">GAZ NATUREL</span></div>
-                    <span class="badge-status" id="badge-NATGAS">STANDBY</span>
+                    <div class="badge-wrapper">
+                        <button class="btn-reset" id="reset-NATGAS" onclick="resetAsset('NATGAS')">✕ Reset</button>
+                        <span class="badge-status" id="badge-NATGAS">STANDBY</span>
+                    </div>
                 </div>
                 <div class="metrics">
                     <div class="data-row"><span>Entrée Setup</span><span class="val-mono" id="entry-NATGAS">--</span></div>
+                    <div class="data-row"><span>Stop Loss (SL)</span><span class="val-mono val-sl" id="sl-NATGAS">--</span></div>
                     <div class="data-row"><span>Objectif TP</span><span class="val-mono" id="tp-NATGAS">--</span></div>
                     <div class="data-row"><span>Dernier Prix</span><span class="val-mono" id="price-NATGAS">--</span></div>
                 </div>
@@ -448,10 +504,14 @@
             <div class="card" id="card-EURUSD">
                 <div class="card-top">
                     <div class="sym-group"><span class="sym-name">EURUSD</span><span class="sym-sub">EURO / US DOLLAR</span></div>
-                    <span class="badge-status" id="badge-EURUSD">STANDBY</span>
+                    <div class="badge-wrapper">
+                        <button class="btn-reset" id="reset-EURUSD" onclick="resetAsset('EURUSD')">✕ Reset</button>
+                        <span class="badge-status" id="badge-EURUSD">STANDBY</span>
+                    </div>
                 </div>
                 <div class="metrics">
                     <div class="data-row"><span>Entrée Setup</span><span class="val-mono" id="entry-EURUSD">--</span></div>
+                    <div class="data-row"><span>Stop Loss (SL)</span><span class="val-mono val-sl" id="sl-EURUSD">--</span></div>
                     <div class="data-row"><span>Objectif TP</span><span class="val-mono" id="tp-EURUSD">--</span></div>
                     <div class="data-row"><span>Dernier Prix</span><span class="val-mono" id="price-EURUSD">--</span></div>
                 </div>
@@ -465,10 +525,14 @@
             <div class="card" id="card-USDJPY">
                 <div class="card-top">
                     <div class="sym-group"><span class="sym-name">USDJPY</span><span class="sym-sub">US DOLLAR / YEN JAPONAIS</span></div>
-                    <span class="badge-status" id="badge-USDJPY">STANDBY</span>
+                    <div class="badge-wrapper">
+                        <button class="btn-reset" id="reset-USDJPY" onclick="resetAsset('USDJPY')">✕ Reset</button>
+                        <span class="badge-status" id="badge-USDJPY">STANDBY</span>
+                    </div>
                 </div>
                 <div class="metrics">
                     <div class="data-row"><span>Entrée Setup</span><span class="val-mono" id="entry-USDJPY">--</span></div>
+                    <div class="data-row"><span>Stop Loss (SL)</span><span class="val-mono val-sl" id="sl-USDJPY">--</span></div>
                     <div class="data-row"><span>Objectif TP</span><span class="val-mono" id="tp-USDJPY">--</span></div>
                     <div class="data-row"><span>Dernier Prix</span><span class="val-mono" id="price-USDJPY">--</span></div>
                 </div>
@@ -492,10 +556,14 @@
             <div class="card" id="card-BTCUSD">
                 <div class="card-top">
                     <div class="sym-group"><span class="sym-name">BTCUSD</span><span class="sym-sub">BITCOIN / USD</span></div>
-                    <span class="badge-status" id="badge-BTCUSD">STANDBY</span>
+                    <div class="badge-wrapper">
+                        <button class="btn-reset" id="reset-BTCUSD" onclick="resetAsset('BTCUSD')">✕ Reset</button>
+                        <span class="badge-status" id="badge-BTCUSD">STANDBY</span>
+                    </div>
                 </div>
                 <div class="metrics">
                     <div class="data-row"><span>Entrée Setup</span><span class="val-mono" id="entry-BTCUSD">--</span></div>
+                    <div class="data-row"><span>Stop Loss (SL)</span><span class="val-mono val-sl" id="sl-BTCUSD">--</span></div>
                     <div class="data-row"><span>Objectif TP</span><span class="val-mono" id="tp-BTCUSD">--</span></div>
                     <div class="data-row"><span>Dernier Prix</span><span class="val-mono" id="price-BTCUSD">--</span></div>
                 </div>
@@ -509,10 +577,14 @@
             <div class="card" id="card-ETHUSD">
                 <div class="card-top">
                     <div class="sym-group"><span class="sym-name">ETHUSD</span><span class="sym-sub">ETHEREUM / USD</span></div>
-                    <span class="badge-status" id="badge-ETHUSD">STANDBY</span>
+                    <div class="badge-wrapper">
+                        <button class="btn-reset" id="reset-ETHUSD" onclick="resetAsset('ETHUSD')">✕ Reset</button>
+                        <span class="badge-status" id="badge-ETHUSD">STANDBY</span>
+                    </div>
                 </div>
                 <div class="metrics">
                     <div class="data-row"><span>Entrée Setup</span><span class="val-mono" id="entry-ETHUSD">--</span></div>
+                    <div class="data-row"><span>Stop Loss (SL)</span><span class="val-mono val-sl" id="sl-ETHUSD">--</span></div>
                     <div class="data-row"><span>Objectif TP</span><span class="val-mono" id="tp-ETHUSD">--</span></div>
                     <div class="data-row"><span>Dernier Prix</span><span class="val-mono" id="price-ETHUSD">--</span></div>
                 </div>
@@ -526,10 +598,14 @@
             <div class="card" id="card-SOLUSD">
                 <div class="card-top">
                     <div class="sym-group"><span class="sym-name">SOLUSD</span><span class="sym-sub">SOLANA / USD</span></div>
-                    <span class="badge-status" id="badge-SOLUSD">STANDBY</span>
+                    <div class="badge-wrapper">
+                        <button class="btn-reset" id="reset-SOLUSD" onclick="resetAsset('SOLUSD')">✕ Reset</button>
+                        <span class="badge-status" id="badge-SOLUSD">STANDBY</span>
+                    </div>
                 </div>
                 <div class="metrics">
                     <div class="data-row"><span>Entrée Setup</span><span class="val-mono" id="entry-SOLUSD">--</span></div>
+                    <div class="data-row"><span>Stop Loss (SL)</span><span class="val-mono val-sl" id="sl-SOLUSD">--</span></div>
                     <div class="data-row"><span>Objectif TP</span><span class="val-mono" id="tp-SOLUSD">--</span></div>
                     <div class="data-row"><span>Dernier Prix</span><span class="val-mono" id="price-SOLUSD">--</span></div>
                 </div>
@@ -543,10 +619,14 @@
             <div class="card" id="card-ADAUSDT">
                 <div class="card-top">
                     <div class="sym-group"><span class="sym-name">ADAUSDT</span><span class="sym-sub">CARDANO / USDT</span></div>
-                    <span class="badge-status" id="badge-ADAUSDT">STANDBY</span>
+                    <div class="badge-wrapper">
+                        <button class="btn-reset" id="reset-ADAUSDT" onclick="resetAsset('ADAUSDT')">✕ Reset</button>
+                        <span class="badge-status" id="badge-ADAUSDT">STANDBY</span>
+                    </div>
                 </div>
                 <div class="metrics">
                     <div class="data-row"><span>Entrée Setup</span><span class="val-mono" id="entry-ADAUSDT">--</span></div>
+                    <div class="data-row"><span>Stop Loss (SL)</span><span class="val-mono val-sl" id="sl-ADAUSDT">--</span></div>
                     <div class="data-row"><span>Objectif TP</span><span class="val-mono" id="tp-ADAUSDT">--</span></div>
                     <div class="data-row"><span>Dernier Prix</span><span class="val-mono" id="price-ADAUSDT">--</span></div>
                 </div>
@@ -560,10 +640,14 @@
             <div class="card" id="card-DOGEUSDT">
                 <div class="card-top">
                     <div class="sym-group"><span class="sym-name">DOGEUSDT</span><span class="sym-sub">DOGECOIN / USDT</span></div>
-                    <span class="badge-status" id="badge-DOGEUSDT">STANDBY</span>
+                    <div class="badge-wrapper">
+                        <button class="btn-reset" id="reset-DOGEUSDT" onclick="resetAsset('DOGEUSDT')">✕ Reset</button>
+                        <span class="badge-status" id="badge-DOGEUSDT">STANDBY</span>
+                    </div>
                 </div>
                 <div class="metrics">
                     <div class="data-row"><span>Entrée Setup</span><span class="val-mono" id="entry-DOGEUSDT">--</span></div>
+                    <div class="data-row"><span>Stop Loss (SL)</span><span class="val-mono val-sl" id="sl-DOGEUSDT">--</span></div>
                     <div class="data-row"><span>Objectif TP</span><span class="val-mono" id="tp-DOGEUSDT">--</span></div>
                     <div class="data-row"><span>Dernier Prix</span><span class="val-mono" id="price-DOGEUSDT">--</span></div>
                 </div>
@@ -585,6 +669,22 @@
         setInterval(updateClock, 1000);
         updateClock();
 
+        // Réinitialisation manuelle d'un actif via l'API FastAPI
+        async function resetAsset(sym) {
+            try {
+                const response = await fetch('/api/reset', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ symbol: sym })
+                });
+                if (!response.ok) {
+                    console.error("Erreur lors de la réinitialisation de " + sym);
+                }
+            } catch (err) {
+                console.error("Erreur réseau reset:", err);
+            }
+        }
+
         // Connexion WebSocket
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         const ws = new WebSocket(`${protocol}//${window.location.host}/ws`);
@@ -601,41 +701,68 @@
             if (!card) return;
 
             const badge = document.getElementById("badge-" + sym);
+            const resetBtn = document.getElementById("reset-" + sym);
             const entry = document.getElementById("entry-" + sym);
+            const sl = document.getElementById("sl-" + sym);
             const tp = document.getElementById("tp-" + sym);
             const price = document.getElementById("price-" + sym);
             const bar = document.getElementById("bar-" + sym);
             const pct = document.getElementById("pct-" + sym);
 
-            if (data.status === "ACTIVE") {
-                card.className = "card " + (data.direction === "BUY" ? "active-buy" : "active-sell");
-                badge.className = "badge-status " + data.direction;
-                badge.textContent = data.direction + " ACTIF";
-                entry.textContent = data.entry_price;
-                tp.textContent = data.tp_price;
-                price.textContent = data.current_price;
+            // Gestion du statut STANDBY
+            if (!data.status || data.status === "STANDBY") {
+                card.className = "card";
+                badge.className = "badge-status";
+                badge.textContent = "STANDBY";
+                if (resetBtn) resetBtn.style.display = "none";
+                if (entry) entry.textContent = "--";
+                if (sl) sl.textContent = "--";
+                if (tp) tp.textContent = "--";
+                if (price && data.current_price) price.textContent = data.current_price;
+                if (bar) bar.style.width = "0%";
+                if (pct) pct.textContent = "0%";
+                return;
+            }
+
+            // Gestion des statuts actifs (ACTIVE, TURTLE SOUP, REVERSAL...)
+            const isBuy = data.direction === "BUY" || (data.status && data.status.includes("BUY"));
+            const isSell = data.direction === "SELL" || (data.status && data.status.includes("SELL"));
+
+            if (isBuy || isSell || data.status === "ACTIVE") {
+                const dir = isBuy ? "BUY" : "SELL";
+                card.className = "card " + (dir === "BUY" ? "active-buy" : "active-sell");
+                badge.className = "badge-status " + dir;
+                badge.textContent = (data.status && data.status !== "ACTIVE") ? data.status : (dir + " ACTIF");
+                if (resetBtn) resetBtn.style.display = "inline-block";
+
+                if (entry && data.entry_price) entry.textContent = data.entry_price;
+                if (sl && data.sl_price) sl.textContent = data.sl_price;
+                if (tp && data.tp_price) tp.textContent = data.tp_price;
+                if (price && data.current_price) price.textContent = data.current_price;
 
                 const ep = parseFloat(data.entry_price);
                 const tpP = parseFloat(data.tp_price);
                 const cp = parseFloat(data.current_price);
                 let progress = 0;
-                if (data.direction === "BUY" && tpP > ep) {
+                if (dir === "BUY" && tpP > ep && !isNaN(cp)) {
                     progress = Math.max(0, Math.min(100, Math.round(((cp - ep) / (tpP - ep)) * 100)));
-                } else if (data.direction === "SELL" && ep > tpP) {
+                } else if (dir === "SELL" && ep > tpP && !isNaN(cp)) {
                     progress = Math.max(0, Math.min(100, Math.round(((ep - cp) / (ep - tpP)) * 100)));
                 }
-                bar.style.width = progress + "%";
-                pct.textContent = progress + "%";
+                if (bar) bar.style.width = progress + "%";
+                if (pct) pct.textContent = progress + "%";
             } else if (data.status === "RETEST_OB") {
                 card.className = "card retest-ob";
                 badge.className = "badge-status RETEST";
-                badge.textContent = "TEST OB " + data.direction;
-                price.textContent = data.current_price;
+                badge.textContent = "TEST OB " + (data.direction || "");
+                if (resetBtn) resetBtn.style.display = "inline-block";
+                if (price && data.current_price) price.textContent = data.current_price;
             } else if (data.status === "RETEST_FVG") {
                 card.className = "card retest-fvg";
                 badge.className = "badge-status RETEST";
-                badge.textContent = "TEST FVG " + data.direction;
-                price.textContent = data.current_price;
+                badge.textContent = "TEST FVG " + (data.direction || "");
+                if (resetBtn) resetBtn.style.display = "inline-block";
+                if (price && data.current_price) price.textContent = data.current_price;
             }
         };
 

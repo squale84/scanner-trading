@@ -1,6 +1,7 @@
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
+from pydantic import BaseModel
 import json
 import os
 from typing import List
@@ -43,6 +44,27 @@ class ConnectionManager:
 manager = ConnectionManager()
 market_state = {}
 
+class ResetRequest(BaseModel):
+    symbol: str
+
+@app.post("/api/reset")
+async def reset_card(data: ResetRequest):
+    sym = data.symbol.upper()
+    reset_data = {
+        "symbol": sym,
+        "status": "STANDBY",
+        "direction": "NONE",
+        "entry_price": "--",
+        "sl_price": "--",
+        "tp_price": "--",
+        "current_price": market_state.get(sym, {}).get("current_price", "--"),
+        "progress": 0
+    }
+    market_state[sym] = reset_data
+    await manager.broadcast(json.dumps(reset_data))
+    print(f"🔄 [{sym}] Carte remise en STANDBY manuellement.")
+    return {"status": "success", "symbol": sym}
+
 @app.post("/webhook")
 async def receive_webhook(request: Request):
     try:
@@ -57,7 +79,7 @@ async def receive_webhook(request: Request):
     if "RETEST" in status:
         print(f"⚠️ [{symbol}] {status} | Niveau: {data.get('level')} | Prix: {data.get('current_price')}")
     else:
-        print(f"🚀 [{symbol}] {status} {data.get('direction')} | Entree: {data.get('entry_price')} | TP: {data.get('tp_price')}")
+        print(f"🚀 [{symbol}] {status} {data.get('direction')} | Entree: {data.get('entry_price')} | SL: {data.get('sl_price')} | TP: {data.get('tp_price')}")
 
     market_state[symbol] = data
     await manager.broadcast(json.dumps(data))
@@ -70,7 +92,6 @@ async def websocket_endpoint(websocket: WebSocket):
         for sym, item in market_state.items():
             await websocket.send_text(json.dumps(item))
         while True:
-            # Écoute en continu le ping du dashboard
             await websocket.receive_text()
     except (WebSocketDisconnect, Exception):
         manager.disconnect(websocket)
