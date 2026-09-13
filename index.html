@@ -1,0 +1,647 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ICT Institutional Scanner Pro — M5 Terminal</title>
+    <style>
+        :root {
+            --bg-body: #0b0e14;
+            --bg-card: #151921;
+            --bg-card-hover: #1c222d;
+            --border-color: #262c38;
+            --text-main: #f0f3f6;
+            --text-muted: #8b949e;
+            --accent-blue: #2962ff;
+            --accent-green: #089981;
+            --accent-red: #f23645;
+            --accent-yellow: #ffee00;
+            --accent-pink: #e91e63;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+        }
+
+        body {
+            background-color: var(--bg-body);
+            color: var(--text-main);
+            min-height: 100vh;
+            padding-bottom: 40px;
+        }
+
+        /* HEADER NAVBAR PRO */
+        .navbar {
+            background-color: rgba(21, 25, 33, 0.85);
+            backdrop-filter: blur(12px);
+            border-bottom: 1px solid var(--border-color);
+            padding: 14px 28px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+
+        .brand-section {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .logo-badge {
+            background: linear-gradient(135deg, #2962ff, #089981);
+            color: #ffffff;
+            font-weight: 800;
+            font-size: 14px;
+            padding: 6px 12px;
+            border-radius: 6px;
+            letter-spacing: 1px;
+        }
+
+        .title-group h1 {
+            font-size: 18px;
+            font-weight: 700;
+            letter-spacing: -0.3px;
+        }
+
+        .title-group p {
+            font-size: 11px;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.8px;
+        }
+
+        .status-section {
+            display: flex;
+            align-items: center;
+            gap: 20px;
+        }
+
+        .system-pill {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            background-color: #0b0e14;
+            border: 1px solid var(--border-color);
+            padding: 6px 14px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 500;
+        }
+
+        .live-dot {
+            width: 8px;
+            height: 8px;
+            background-color: var(--accent-green);
+            border-radius: 50%;
+            box-shadow: 0 0 10px var(--accent-green);
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.4; transform: scale(0.9); }
+            100% { opacity: 1; transform: scale(1); }
+        }
+
+        .clock-display {
+            font-family: "SF Mono", Menlo, Consolas, monospace;
+            color: var(--text-muted);
+            font-size: 13px;
+        }
+
+        /* MAIN CONTAINER */
+        .container {
+            max-width: 1600px;
+            margin: 0 auto;
+            padding: 24px 28px;
+        }
+
+        /* CATEGORY SECTION */
+        .section-header {
+            margin-top: 25px;
+            margin-bottom: 16px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            border-bottom: 1px solid var(--border-color);
+            padding-bottom: 10px;
+        }
+
+        .section-tag {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 15px;
+            font-weight: 600;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+        }
+
+        .tag-trad { color: #58a6ff; }
+        .tag-crypto { color: #f0883e; }
+
+        .count-pill {
+            font-size: 11px;
+            background: #21262d;
+            color: var(--text-muted);
+            padding: 2px 8px;
+            border-radius: 10px;
+        }
+
+        /* GRILLES DE CARTES */
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(290px, 1fr));
+            gap: 16px;
+        }
+
+        .card {
+            background-color: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: 10px;
+            padding: 16px;
+            position: relative;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.25);
+            transition: transform 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+        }
+
+        .card:hover {
+            transform: translateY(-2px);
+            background-color: var(--bg-card-hover);
+            border-color: #3b4252;
+        }
+
+        /* STATES DYNAMIQUES */
+        .card.active-buy {
+            border-color: var(--accent-green);
+            background: linear-gradient(180deg, rgba(8, 153, 129, 0.08) 0%, var(--bg-card) 100%);
+            box-shadow: 0 0 15px rgba(8, 153, 129, 0.25);
+        }
+
+        .card.active-sell {
+            border-color: var(--accent-red);
+            background: linear-gradient(180deg, rgba(242, 54, 69, 0.08) 0%, var(--bg-card) 100%);
+            box-shadow: 0 0 15px rgba(242, 54, 69, 0.25);
+        }
+
+        .card.retest-ob {
+            border-color: var(--accent-pink);
+            box-shadow: 0 0 15px rgba(233, 30, 99, 0.35);
+        }
+
+        .card.retest-fvg {
+            border-color: var(--accent-yellow);
+            box-shadow: 0 0 15px rgba(255, 238, 0, 0.35);
+        }
+
+        /* CARD HEADER */
+        .card-top {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            margin-bottom: 14px;
+        }
+
+        .sym-group {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+
+        .sym-name {
+            font-size: 17px;
+            font-weight: 700;
+            letter-spacing: -0.2px;
+        }
+
+        .sym-sub {
+            font-size: 10px;
+            font-weight: 600;
+            color: var(--text-muted);
+            letter-spacing: 0.5px;
+        }
+
+        .badge-status {
+            font-size: 10.5px;
+            font-weight: 700;
+            padding: 4px 8px;
+            border-radius: 4px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            background-color: #21262d;
+            color: var(--text-muted);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+        }
+
+        .badge-status.BUY { background-color: rgba(8, 153, 129, 0.2); color: #26a69a; border-color: #26a69a; }
+        .badge-status.SELL { background-color: rgba(242, 54, 69, 0.2); color: #ef5350; border-color: #ef5350; }
+        .badge-status.RETEST { background-color: rgba(255, 238, 0, 0.15); color: #ffee00; border-color: #ffee00; }
+
+        /* DATA ROWS */
+        .metrics {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            margin-bottom: 12px;
+        }
+
+        .data-row {
+            display: flex;
+            justify-content: space-between;
+            font-size: 12.5px;
+            color: var(--text-muted);
+        }
+
+        .val-mono {
+            font-family: "SF Mono", Menlo, Consolas, monospace;
+            font-weight: 600;
+            color: var(--text-main);
+        }
+
+        /* PROGRESSION */
+        .progress-wrapper {
+            margin-top: 8px;
+        }
+
+        .progress-bar-bg {
+            background-color: #0b0e14;
+            height: 6px;
+            border-radius: 3px;
+            overflow: hidden;
+            border: 1px solid rgba(255, 255, 255, 0.04);
+        }
+
+        .progress-bar-fill {
+            height: 100%;
+            width: 0%;
+            background: linear-gradient(90deg, #2962ff, #089981);
+            transition: width 0.3s ease;
+        }
+
+        .progress-meta {
+            display: flex;
+            justify-content: space-between;
+            font-size: 10.5px;
+            color: var(--text-muted);
+            margin-top: 4px;
+            font-family: "SF Mono", monospace;
+        }
+    </style>
+</head>
+<body>
+
+    <!-- NAVBAR HEADER -->
+    <header class="navbar">
+        <div class="brand-section">
+            <div class="logo-badge">ICT SMC</div>
+            <div class="title-group">
+                <h1>INSTITUTIONAL RADAR TERMINAL</h1>
+                <p>LuxAlgo Engine • Mean Threshold & FVG Sweeps • Timeframe 5M</p>
+            </div>
+        </div>
+        <div class="status-section">
+            <div class="system-pill">
+                <span class="live-dot"></span>
+                <span id="conn-text">FASTAPI ONLINE</span>
+            </div>
+            <div class="clock-display" id="clock">--:--:-- UTC</div>
+        </div>
+    </header>
+
+    <div class="container">
+
+        <!-- SECTION 1 : INDICES, FOREX & MATIERES PREMIERES -->
+        <div class="section-header">
+            <div class="section-tag tag-trad">
+                <span>🏛️ INDICES, MATIÈRES PREMIÈRES & FOREX</span>
+            </div>
+            <span class="count-pill">9 ACTIFS</span>
+        </div>
+
+        <div class="grid">
+            <!-- GOLD -->
+            <div class="card" id="card-GOLD">
+                <div class="card-top">
+                    <div class="sym-group"><span class="sym-name">GOLD</span><span class="sym-sub">XAU/USD • OR COMPTANT</span></div>
+                    <span class="badge-status" id="badge-GOLD">STANDBY</span>
+                </div>
+                <div class="metrics">
+                    <div class="data-row"><span>Entrée Setup</span><span class="val-mono" id="entry-GOLD">--</span></div>
+                    <div class="data-row"><span>Objectif TP</span><span class="val-mono" id="tp-GOLD">--</span></div>
+                    <div class="data-row"><span>Dernier Prix</span><span class="val-mono" id="price-GOLD">--</span></div>
+                </div>
+                <div class="progress-wrapper">
+                    <div class="progress-bar-bg"><div class="progress-bar-fill" id="bar-GOLD"></div></div>
+                    <div class="progress-meta"><span>Progression TP</span><span id="pct-GOLD">0%</span></div>
+                </div>
+            </div>
+
+            <!-- US100 -->
+            <div class="card" id="card-US100">
+                <div class="card-top">
+                    <div class="sym-group"><span class="sym-name">US100</span><span class="sym-sub">NASDAQ 100 INDEX</span></div>
+                    <span class="badge-status" id="badge-US100">STANDBY</span>
+                </div>
+                <div class="metrics">
+                    <div class="data-row"><span>Entrée Setup</span><span class="val-mono" id="entry-US100">--</span></div>
+                    <div class="data-row"><span>Objectif TP</span><span class="val-mono" id="tp-US100">--</span></div>
+                    <div class="data-row"><span>Dernier Prix</span><span class="val-mono" id="price-US100">--</span></div>
+                </div>
+                <div class="progress-wrapper">
+                    <div class="progress-bar-bg"><div class="progress-bar-fill" id="bar-US100"></div></div>
+                    <div class="progress-meta"><span>Progression TP</span><span id="pct-US100">0%</span></div>
+                </div>
+            </div>
+
+            <!-- SPX500 -->
+            <div class="card" id="card-SPX500">
+                <div class="card-top">
+                    <div class="sym-group"><span class="sym-name">SPX500</span><span class="sym-sub">S&P 500 INDEX</span></div>
+                    <span class="badge-status" id="badge-SPX500">STANDBY</span>
+                </div>
+                <div class="metrics">
+                    <div class="data-row"><span>Entrée Setup</span><span class="val-mono" id="entry-SPX500">--</span></div>
+                    <div class="data-row"><span>Objectif TP</span><span class="val-mono" id="tp-SPX500">--</span></div>
+                    <div class="data-row"><span>Dernier Prix</span><span class="val-mono" id="price-SPX500">--</span></div>
+                </div>
+                <div class="progress-wrapper">
+                    <div class="progress-bar-bg"><div class="progress-bar-fill" id="bar-SPX500"></div></div>
+                    <div class="progress-meta"><span>Progression TP</span><span id="pct-SPX500">0%</span></div>
+                </div>
+            </div>
+
+            <!-- GER40 -->
+            <div class="card" id="card-GER40">
+                <div class="card-top">
+                    <div class="sym-group"><span class="sym-name">GER40</span><span class="sym-sub">DAX 40 INDEX</span></div>
+                    <span class="badge-status" id="badge-GER40">STANDBY</span>
+                </div>
+                <div class="metrics">
+                    <div class="data-row"><span>Entrée Setup</span><span class="val-mono" id="entry-GER40">--</span></div>
+                    <div class="data-row"><span>Objectif TP</span><span class="val-mono" id="tp-GER40">--</span></div>
+                    <div class="data-row"><span>Dernier Prix</span><span class="val-mono" id="price-GER40">--</span></div>
+                </div>
+                <div class="progress-wrapper">
+                    <div class="progress-bar-bg"><div class="progress-bar-fill" id="bar-GER40"></div></div>
+                    <div class="progress-meta"><span>Progression TP</span><span id="pct-GER40">0%</span></div>
+                </div>
+            </div>
+
+            <!-- FR40 -->
+            <div class="card" id="card-FR40">
+                <div class="card-top">
+                    <div class="sym-group"><span class="sym-name">FR40</span><span class="sym-sub">CAC 40 INDEX</span></div>
+                    <span class="badge-status" id="badge-FR40">STANDBY</span>
+                </div>
+                <div class="metrics">
+                    <div class="data-row"><span>Entrée Setup</span><span class="val-mono" id="entry-FR40">--</span></div>
+                    <div class="data-row"><span>Objectif TP</span><span class="val-mono" id="tp-FR40">--</span></div>
+                    <div class="data-row"><span>Dernier Prix</span><span class="val-mono" id="price-FR40">--</span></div>
+                </div>
+                <div class="progress-wrapper">
+                    <div class="progress-bar-bg"><div class="progress-bar-fill" id="bar-FR40"></div></div>
+                    <div class="progress-meta"><span>Progression TP</span><span id="pct-FR40">0%</span></div>
+                </div>
+            </div>
+
+            <!-- USOIL -->
+            <div class="card" id="card-USOIL">
+                <div class="card-top">
+                    <div class="sym-group"><span class="sym-name">USOIL</span><span class="sym-sub">CRUDE OIL (WTI)</span></div>
+                    <span class="badge-status" id="badge-USOIL">STANDBY</span>
+                </div>
+                <div class="metrics">
+                    <div class="data-row"><span>Entrée Setup</span><span class="val-mono" id="entry-USOIL">--</span></div>
+                    <div class="data-row"><span>Objectif TP</span><span class="val-mono" id="tp-USOIL">--</span></div>
+                    <div class="data-row"><span>Dernier Prix</span><span class="val-mono" id="price-USOIL">--</span></div>
+                </div>
+                <div class="progress-wrapper">
+                    <div class="progress-bar-bg"><div class="progress-bar-fill" id="bar-USOIL"></div></div>
+                    <div class="progress-meta"><span>Progression TP</span><span id="pct-USOIL">0%</span></div>
+                </div>
+            </div>
+
+            <!-- NATGAS -->
+            <div class="card" id="card-NATGAS">
+                <div class="card-top">
+                    <div class="sym-group"><span class="sym-name">NATGAS</span><span class="sym-sub">GAZ NATUREL</span></div>
+                    <span class="badge-status" id="badge-NATGAS">STANDBY</span>
+                </div>
+                <div class="metrics">
+                    <div class="data-row"><span>Entrée Setup</span><span class="val-mono" id="entry-NATGAS">--</span></div>
+                    <div class="data-row"><span>Objectif TP</span><span class="val-mono" id="tp-NATGAS">--</span></div>
+                    <div class="data-row"><span>Dernier Prix</span><span class="val-mono" id="price-NATGAS">--</span></div>
+                </div>
+                <div class="progress-wrapper">
+                    <div class="progress-bar-bg"><div class="progress-bar-fill" id="bar-NATGAS"></div></div>
+                    <div class="progress-meta"><span>Progression TP</span><span id="pct-NATGAS">0%</span></div>
+                </div>
+            </div>
+
+            <!-- EURUSD -->
+            <div class="card" id="card-EURUSD">
+                <div class="card-top">
+                    <div class="sym-group"><span class="sym-name">EURUSD</span><span class="sym-sub">EURO / US DOLLAR</span></div>
+                    <span class="badge-status" id="badge-EURUSD">STANDBY</span>
+                </div>
+                <div class="metrics">
+                    <div class="data-row"><span>Entrée Setup</span><span class="val-mono" id="entry-EURUSD">--</span></div>
+                    <div class="data-row"><span>Objectif TP</span><span class="val-mono" id="tp-EURUSD">--</span></div>
+                    <div class="data-row"><span>Dernier Prix</span><span class="val-mono" id="price-EURUSD">--</span></div>
+                </div>
+                <div class="progress-wrapper">
+                    <div class="progress-bar-bg"><div class="progress-bar-fill" id="bar-EURUSD"></div></div>
+                    <div class="progress-meta"><span>Progression TP</span><span id="pct-EURUSD">0%</span></div>
+                </div>
+            </div>
+
+            <!-- USDJPY -->
+            <div class="card" id="card-USDJPY">
+                <div class="card-top">
+                    <div class="sym-group"><span class="sym-name">USDJPY</span><span class="sym-sub">US DOLLAR / YEN JAPONAIS</span></div>
+                    <span class="badge-status" id="badge-USDJPY">STANDBY</span>
+                </div>
+                <div class="metrics">
+                    <div class="data-row"><span>Entrée Setup</span><span class="val-mono" id="entry-USDJPY">--</span></div>
+                    <div class="data-row"><span>Objectif TP</span><span class="val-mono" id="tp-USDJPY">--</span></div>
+                    <div class="data-row"><span>Dernier Prix</span><span class="val-mono" id="price-USDJPY">--</span></div>
+                </div>
+                <div class="progress-wrapper">
+                    <div class="progress-bar-bg"><div class="progress-bar-fill" id="bar-USDJPY"></div></div>
+                    <div class="progress-meta"><span>Progression TP</span><span id="pct-USDJPY">0%</span></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- SECTION 2 : MARCHÉ CRYPTO -->
+        <div class="section-header" style="margin-top: 40px;">
+            <div class="section-tag tag-crypto">
+                <span>⚡ MARCHÉ CRYPTOMONNAIES (24/7)</span>
+            </div>
+            <span class="count-pill">5 ACTIFS</span>
+        </div>
+
+        <div class="grid">
+            <!-- BTCUSD -->
+            <div class="card" id="card-BTCUSD">
+                <div class="card-top">
+                    <div class="sym-group"><span class="sym-name">BTCUSD</span><span class="sym-sub">BITCOIN / USD</span></div>
+                    <span class="badge-status" id="badge-BTCUSD">STANDBY</span>
+                </div>
+                <div class="metrics">
+                    <div class="data-row"><span>Entrée Setup</span><span class="val-mono" id="entry-BTCUSD">--</span></div>
+                    <div class="data-row"><span>Objectif TP</span><span class="val-mono" id="tp-BTCUSD">--</span></div>
+                    <div class="data-row"><span>Dernier Prix</span><span class="val-mono" id="price-BTCUSD">--</span></div>
+                </div>
+                <div class="progress-wrapper">
+                    <div class="progress-bar-bg"><div class="progress-bar-fill" id="bar-BTCUSD"></div></div>
+                    <div class="progress-meta"><span>Progression TP</span><span id="pct-BTCUSD">0%</span></div>
+                </div>
+            </div>
+
+            <!-- ETHUSD -->
+            <div class="card" id="card-ETHUSD">
+                <div class="card-top">
+                    <div class="sym-group"><span class="sym-name">ETHUSD</span><span class="sym-sub">ETHEREUM / USD</span></div>
+                    <span class="badge-status" id="badge-ETHUSD">STANDBY</span>
+                </div>
+                <div class="metrics">
+                    <div class="data-row"><span>Entrée Setup</span><span class="val-mono" id="entry-ETHUSD">--</span></div>
+                    <div class="data-row"><span>Objectif TP</span><span class="val-mono" id="tp-ETHUSD">--</span></div>
+                    <div class="data-row"><span>Dernier Prix</span><span class="val-mono" id="price-ETHUSD">--</span></div>
+                </div>
+                <div class="progress-wrapper">
+                    <div class="progress-bar-bg"><div class="progress-bar-fill" id="bar-ETHUSD"></div></div>
+                    <div class="progress-meta"><span>Progression TP</span><span id="pct-ETHUSD">0%</span></div>
+                </div>
+            </div>
+
+            <!-- SOLUSD -->
+            <div class="card" id="card-SOLUSD">
+                <div class="card-top">
+                    <div class="sym-group"><span class="sym-name">SOLUSD</span><span class="sym-sub">SOLANA / USD</span></div>
+                    <span class="badge-status" id="badge-SOLUSD">STANDBY</span>
+                </div>
+                <div class="metrics">
+                    <div class="data-row"><span>Entrée Setup</span><span class="val-mono" id="entry-SOLUSD">--</span></div>
+                    <div class="data-row"><span>Objectif TP</span><span class="val-mono" id="tp-SOLUSD">--</span></div>
+                    <div class="data-row"><span>Dernier Prix</span><span class="val-mono" id="price-SOLUSD">--</span></div>
+                </div>
+                <div class="progress-wrapper">
+                    <div class="progress-bar-bg"><div class="progress-bar-fill" id="bar-SOLUSD"></div></div>
+                    <div class="progress-meta"><span>Progression TP</span><span id="pct-SOLUSD">0%</span></div>
+                </div>
+            </div>
+
+            <!-- ADAUSDT -->
+            <div class="card" id="card-ADAUSDT">
+                <div class="card-top">
+                    <div class="sym-group"><span class="sym-name">ADAUSDT</span><span class="sym-sub">CARDANO / USDT</span></div>
+                    <span class="badge-status" id="badge-ADAUSDT">STANDBY</span>
+                </div>
+                <div class="metrics">
+                    <div class="data-row"><span>Entrée Setup</span><span class="val-mono" id="entry-ADAUSDT">--</span></div>
+                    <div class="data-row"><span>Objectif TP</span><span class="val-mono" id="tp-ADAUSDT">--</span></div>
+                    <div class="data-row"><span>Dernier Prix</span><span class="val-mono" id="price-ADAUSDT">--</span></div>
+                </div>
+                <div class="progress-wrapper">
+                    <div class="progress-bar-bg"><div class="progress-bar-fill" id="bar-ADAUSDT"></div></div>
+                    <div class="progress-meta"><span>Progression TP</span><span id="pct-ADAUSDT">0%</span></div>
+                </div>
+            </div>
+
+            <!-- DOGEUSDT -->
+            <div class="card" id="card-DOGEUSDT">
+                <div class="card-top">
+                    <div class="sym-group"><span class="sym-name">DOGEUSDT</span><span class="sym-sub">DOGECOIN / USDT</span></div>
+                    <span class="badge-status" id="badge-DOGEUSDT">STANDBY</span>
+                </div>
+                <div class="metrics">
+                    <div class="data-row"><span>Entrée Setup</span><span class="val-mono" id="entry-DOGEUSDT">--</span></div>
+                    <div class="data-row"><span>Objectif TP</span><span class="val-mono" id="tp-DOGEUSDT">--</span></div>
+                    <div class="data-row"><span>Dernier Prix</span><span class="val-mono" id="price-DOGEUSDT">--</span></div>
+                </div>
+                <div class="progress-wrapper">
+                    <div class="progress-bar-bg"><div class="progress-bar-fill" id="bar-DOGEUSDT"></div></div>
+                    <div class="progress-meta"><span>Progression TP</span><span id="pct-DOGEUSDT">0%</span></div>
+                </div>
+            </div>
+        </div>
+
+    </div>
+
+    <script>
+        // Horloge temps réel
+        function updateClock() {
+            const now = new Date();
+            document.getElementById('clock').textContent = now.toUTCString().slice(17, 25) + ' UTC';
+        }
+        setInterval(updateClock, 1000);
+        updateClock();
+
+        // Connexion WebSocket
+        const ws = new WebSocket("ws://127.0.0.1:8000/ws");
+        const connText = document.getElementById("conn-text");
+
+        ws.onopen = function() {
+            connText.textContent = "TERMINAL SYNCHRONISÉ";
+        };
+
+        ws.onmessage = function(event) {
+            const data = JSON.parse(event.data);
+            const sym = data.symbol;
+            const card = document.getElementById("card-" + sym);
+            if (!card) return;
+
+            const badge = document.getElementById("badge-" + sym);
+            const entry = document.getElementById("entry-" + sym);
+            const tp = document.getElementById("tp-" + sym);
+            const price = document.getElementById("price-" + sym);
+            const bar = document.getElementById("bar-" + sym);
+            const pct = document.getElementById("pct-" + sym);
+
+            if (data.status === "ACTIVE") {
+                card.className = "card " + (data.direction === "BUY" ? "active-buy" : "active-sell");
+                badge.className = "badge-status " + data.direction;
+                badge.textContent = data.direction + " ACTIF";
+                entry.textContent = data.entry_price;
+                tp.textContent = data.tp_price;
+                price.textContent = data.current_price;
+
+                const ep = parseFloat(data.entry_price);
+                const tpP = parseFloat(data.tp_price);
+                const cp = parseFloat(data.current_price);
+                let progress = 0;
+                if (data.direction === "BUY" && tpP > ep) {
+                    progress = Math.max(0, Math.min(100, Math.round(((cp - ep) / (tpP - ep)) * 100)));
+                } else if (data.direction === "SELL" && ep > tpP) {
+                    progress = Math.max(0, Math.min(100, Math.round(((ep - cp) / (ep - tpP)) * 100)));
+                }
+                bar.style.width = progress + "%";
+                pct.textContent = progress + "%";
+            } else if (data.status === "RETEST_OB") {
+                card.className = "card retest-ob";
+                badge.className = "badge-status RETEST";
+                badge.textContent = "TEST OB " + data.direction;
+                price.textContent = data.current_price;
+            } else if (data.status === "RETEST_FVG") {
+                card.className = "card retest-fvg";
+                badge.className = "badge-status RETEST";
+                badge.textContent = "TEST FVG " + data.direction;
+                price.textContent = data.current_price;
+            }
+        };
+
+        ws.onclose = function() {
+            connText.textContent = "DÉCONNECTÉ (RECONNEXION...)";
+            setTimeout(() => location.reload(), 3000);
+        };
+    </script>
+</body>
+</html>
