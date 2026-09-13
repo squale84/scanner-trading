@@ -586,7 +586,8 @@
         updateClock();
 
         // Connexion WebSocket
-        const ws = new WebSocket("ws://127.0.0.1:8000/ws");
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const ws = new WebSocket(`${protocol}//${window.location.host}/ws`);
         const connText = document.getElementById("conn-text");
 
         ws.onopen = function() {
