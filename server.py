@@ -1,13 +1,14 @@
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 import json
 import os
+import asyncio
 from typing import List
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
-app = FastAPI()
+app = FastAPI(title="ICT Radar Engine Pro Backend")
 
 app.add_middleware(
     CORSMiddleware,
@@ -17,10 +18,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Sert index.html directement depuis la racine web
+# Sert le dashboard index.html à la racine
 @app.get("/")
 async def get_index():
     return FileResponse(os.path.join(os.path.dirname(__file__), "index.html"))
+
+# Route santé pour ping automatique anti-sommeil Render (UptimeRobot / Cron)
+@app.get("/health")
+async def health_check():
+    return {"status": "alive", "connections": len(manager.active_connections)}
 
 class ConnectionManager:
     def __init__(self):
@@ -62,7 +68,7 @@ async def reset_card(data: ResetRequest):
     }
     market_state[sym] = reset_data
     await manager.broadcast(json.dumps(reset_data))
-    print(f"🔄 [{sym}] Carte remise en STANDBY manuellement.")
+    print(f"🔄 [{sym}] Carte remise en STANDBY.")
     return {"status": "success", "symbol": sym}
 
 @app.post("/webhook")
@@ -70,28 +76,36 @@ async def receive_webhook(request: Request):
     try:
         data = await request.json()
     except Exception:
-        body = await request.body()
-        data = json.loads(body.decode("utf-8"))
-    
-    symbol = data.get("symbol", "UNKNOWN")
+        try:
+            body = await request.body()
+            body_str = body.decode("utf-8").strip()
+            data = json.loads(body_str)
+        except Exception as e:
+            print(f"❌ Erreur lecture payload webhook : {e}")
+            return JSONResponse(status_code=400, content={"error": "JSON invalide"})
+
+    symbol = data.get("symbol", "UNKNOWN").upper()
     status = data.get("status", "INFO")
-    
-    if "RETEST" in status:
-        print(f"⚠️ [{symbol}] {status} | Niveau: {data.get('level')} | Prix: {data.get('current_price')}")
-    else:
-        print(f"🚀 [{symbol}] {status} {data.get('direction')} | Entree: {data.get('entry_price')} | SL: {data.get('sl_price')} | TP: {data.get('tp_price')}")
+    direction = data.get("direction", "NONE")
+
+    print(f"⚡ [{symbol}] {status} | Dir: {direction} | Entree: {data.get('entry_price')} | SL: {data.get('sl_price')} | TP: {data.get('tp_price')}")
 
     market_state[symbol] = data
     await manager.broadcast(json.dumps(data))
-    return {"status": "success"}
+    return {"status": "success", "symbol": symbol}
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await manager.connect(websocket)
     try:
+        # Envoi initial de l'état actuel de tous les actifs connus
         for sym, item in market_state.items():
             await websocket.send_text(json.dumps(item))
+        
         while True:
-            await websocket.receive_text()
+            # Écoute sans bloquer avec keep-alive
+            data = await websocket.receive_text()
+            if data == "ping":
+                await websocket.send_text("pong")
     except (WebSocketDisconnect, Exception):
         manager.disconnect(websocket)
