@@ -4,9 +4,18 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 import json
 import os
+import sys
 import asyncio
 from typing import List
 from starlette.websockets import WebSocket, WebSocketDisconnect
+
+# Evite un crash (UnicodeEncodeError) sur la console Windows (cp1252) quand on
+# print() des emojis dans les logs du webhook.
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
+except AttributeError:
+    pass
 
 app = FastAPI(title="ICT Radar Engine Pro Backend")
 
@@ -101,7 +110,9 @@ async def websocket_endpoint(websocket: WebSocket):
         # Envoi initial de l'état actuel de tous les actifs connus
         for sym, item in market_state.items():
             await websocket.send_text(json.dumps(item))
-        
+        # Signal de fin de synchro : le front sait qu'il peut réactiver son (audio/popups/log)
+        await websocket.send_text(json.dumps({"type": "sync_complete"}))
+
         while True:
             # Écoute sans bloquer avec keep-alive
             data = await websocket.receive_text()
