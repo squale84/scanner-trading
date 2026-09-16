@@ -1,0 +1,495 @@
+//@version=5
+// NB Pine v5 : commission_value / slippage doivent être des constantes fixes
+// (impossible d'utiliser input.float ici). Modifie les 2 chiffres ci-dessous
+// directement si tu veux tester d'autres hypothèses de coûts.
+strategy("ICT 2022 Scanner Engine — BACKTEST [MTF H1-M5]", overlay=true,
+     initial_capital=10000,
+     default_qty_type=strategy.percent_of_equity,
+     default_qty_value=100,
+     commission_type=strategy.commission.percent,
+     commission_value=0.02,
+     slippage=2,
+     process_orders_on_close=true,
+     max_boxes_count=200, max_lines_count=200, max_labels_count=200, max_bars_back=1000)
+
+// ==========================================
+// VERSION BACKTEST — même logique de détection que scanner_mtf.pine,
+// mais les alert() sont remplacés par de vrais ordres strategy.entry/exit
+// pour pouvoir utiliser l'onglet "Strategy Tester" de TradingView.
+// Le fichier scanner_mtf.pine (production / webhooks) n'est pas modifié.
+// ==========================================
+
+// ==========================================
+// 1. CONFIGURATION GÉNÉRALE & PARAMÈTRES
+// ==========================================
+grp_radar     = "Configuration Terminal Radar"
+rr_ratio      = input.float(2.0, title="Ratio Risque / Récompense (TP)", minval=1.0, step=0.5, group=grp_radar)
+is_crypto_247 = input.bool(true, title="Mode Métaux / Continu (Ignore Killzones)", group=grp_radar)
+min_grade_in  = input.string("A", title="Grade Minimum pour Alerte", options=["B", "A", "A+"], group=grp_radar)
+ema_flat_thr  = input.float(0.08, title="Seuil Pente EMA H1 (x ATR)", step=0.01, group=grp_radar)
+atr_cap_mult  = input.float(2.5, title="Plafond Stop-Loss (x ATR M5)", minval=0.5, step=0.1, group=grp_radar)
+risk_pct_in   = input.float(1.0, title="Risque par trade (% équité)", minval=0.1, step=0.1, group=grp_radar)
+zone_window_in   = input.int(20, title="Fenêtre de validité contexte H1 (barres M5)", minval=5, maxval=50, group=grp_radar)
+cooldown_bars_in = input.int(10, title="Cooldown entre signaux (barres M5)", minval=1, maxval=50, group=grp_radar)
+
+grp_ui        = "Affichage Graphique ICT"
+show_fvg      = input.bool(true, title="Afficher FVG H1", group=grp_ui)
+show_fvg_m5   = input.bool(false, title="Afficher FVG M5", group=grp_ui)
+show_mss      = input.bool(true, title="Afficher CHoCH / BOS", group=grp_ui)
+show_ob       = input.bool(true, title="Afficher Order Blocks (M5)", group=grp_ui)
+show_eqh_eql  = input.bool(true, title="Afficher EQH / EQL (Liquidité)", group=grp_ui)
+show_levels   = input.bool(true, title="Afficher PDH / PDL / NY Midnight", group=grp_ui)
+
+grp_sessions  = "Sessions ICT (Heure New York UTC-4)"
+sess_london   = input.session("0200-0500:23456", title="London Open", group=grp_sessions)
+sess_ny       = input.session("0800-1130:23456", title="NY AM", group=grp_sessions)
+
+in_london    = not na(time(timeframe.period, sess_london, "America/New_York"))
+in_ny        = not na(time(timeframe.period, sess_ny, "America/New_York"))
+trade_window = is_crypto_247 or in_london or in_ny
+
+bgcolor(in_london ? color.new(#00bcd4, 96) : na, title="Bg Londres")
+bgcolor(in_ny ? color.new(#ff9800, 96) : na, title="Bg New York")
+
+// ==========================================
+// THÈME VISUEL
+// ==========================================
+color_lux_bull  = color.new(#00E676, 0)
+color_lux_bear  = color.new(#FF1744, 0)
+color_lux_liq   = color.new(#00E5FF, 0)
+color_lux_level = color.new(#B0BEC5, 30)
+
+// ==========================================
+// 2. EXTRACTION HTF H1 : FVG, BIAIS & BOS
+// ==========================================
+f_get_h1_data() =>
+    h1_atr      = ta.atr(14)
+    h1_ema      = ta.ema(close, 50)
+    h1_ph       = ta.pivothigh(high, 3, 3)
+    h1_pl       = ta.pivotlow(low, 3, 3)
+    [high[1], low[1], high[3], low[3], close[1], h1_ema[1], h1_ema[2], h1_atr[1], h1_ph[1], h1_pl[1]]
+
+[h1_high, h1_low, h1_high2, h1_low2, h1_close, h1_ema, h1_ema_prev, h1_atr, h1_ph, h1_pl] = request.security(syminfo.tickerid, "60", f_get_h1_data(), barmerge.gaps_off, barmerge.lookahead_off)
+
+h1_ema_flat  = math.abs(h1_ema - h1_ema_prev) < (h1_atr * ema_flat_thr)
+h1_bias_bull = (h1_close > h1_ema) and not h1_ema_flat
+h1_bias_bear = (h1_close < h1_ema) and not h1_ema_flat
+
+var float h1_last_ph = na
+var float h1_last_pl = na
+
+if ta.change(time("60"))
+    if not na(h1_ph)
+        h1_last_ph := h1_ph
+    if not na(h1_pl)
+        h1_last_pl := h1_pl
+
+h1_bos_bull = ta.change(time("60")) and not na(h1_last_ph) and h1_close > h1_last_ph
+h1_bos_bear = ta.change(time("60")) and not na(h1_last_pl) and h1_close < h1_last_pl
+
+if h1_bos_bull
+    h1_last_ph := na
+if h1_bos_bear
+    h1_last_pl := na
+
+h1_fvg_bull = (h1_low > h1_high2) and ((h1_low - h1_high2) > (0.5 * h1_atr))
+h1_fvg_bear = (h1_high < h1_low2) and ((h1_low2 - h1_high) > (0.5 * h1_atr))
+
+var float h1_bull_zone_top = na
+var float h1_bull_zone_bot = na
+var bool  h1_bull_consumed = false
+var box   h1_bull_box      = na
+
+var float h1_bear_zone_top = na
+var float h1_bear_zone_bot = na
+var bool  h1_bear_consumed = false
+var box   h1_bear_box      = na
+
+color_fvg_hl = color.new(#FFFF00, 80)
+color_fvg_bd = color.new(#FFFF00, 30)
+
+if ta.change(time("60"))
+    if h1_fvg_bull
+        is_new_fvg = na(h1_bull_zone_bot) or (h1_low != h1_bull_zone_top) or (h1_high2 != h1_bull_zone_bot)
+        if is_new_fvg
+            if not na(h1_bull_box)
+                box.set_extend(h1_bull_box, extend.none)
+                box.set_right(h1_bull_box, bar_index)
+
+            h1_bull_zone_top := h1_low
+            h1_bull_zone_bot := h1_high2
+            h1_bull_consumed := false
+            if show_fvg
+                h1_bull_box := box.new(bar_index, h1_bull_zone_top, bar_index + 1, h1_bull_zone_bot, border_color=color_fvg_bd, bgcolor=color_fvg_hl, extend=extend.right)
+
+    if h1_fvg_bear
+        is_new_fvg = na(h1_bear_zone_top) or (h1_low2 != h1_bear_zone_top) or (h1_high != h1_bear_zone_bot)
+        if is_new_fvg
+            if not na(h1_bear_box)
+                box.set_extend(h1_bear_box, extend.none)
+                box.set_right(h1_bear_box, bar_index)
+
+            h1_bear_zone_top := h1_low2
+            h1_bear_zone_bot := h1_high
+            h1_bear_consumed := false
+            if show_fvg
+                h1_bear_box := box.new(bar_index, h1_bear_zone_top, bar_index + 1, h1_bear_zone_bot, border_color=color_fvg_bd, bgcolor=color_fvg_hl, extend=extend.right)
+
+in_h1_bull_zone = not h1_bull_consumed and not na(h1_bull_zone_top) and (high >= h1_bull_zone_bot and low <= h1_bull_zone_top)
+in_h1_bear_zone = not h1_bear_consumed and not na(h1_bear_zone_top) and (high >= h1_bear_zone_bot and low <= h1_bear_zone_top)
+
+if not na(h1_bull_zone_bot) and close < h1_bull_zone_bot
+    h1_bull_consumed := true
+if not na(h1_bear_zone_top) and close > h1_bear_zone_top
+    h1_bear_consumed := true
+
+// ==========================================
+// 2.5 NIVEAUX MAJEURS (PDH, PDL, NY MIDNIGHT)
+// ==========================================
+var float pdh = na
+var float pdl = na
+var float current_dh = na
+var float current_dl = na
+
+if ta.change(time("D"))
+    pdh := current_dh
+    pdl := current_dl
+    current_dh := high
+    current_dl := low
+else
+    current_dh := math.max(current_dh, high)
+    current_dl := math.min(current_dl, low)
+
+var float midnight_open = na
+if ta.change(time("D", "America/New_York"))
+    midnight_open := open
+
+if ta.change(time("D")) and show_levels
+    if not na(pdh)
+        line.new(bar_index, pdh, bar_index + 288, pdh, color=color_lux_level, width=1, style=line.style_dotted)
+        label.new(bar_index + 5, pdh, "PDH", color=color.new(color.white, 100), textcolor=color_lux_level, style=label.style_none, size=size.small)
+    if not na(pdl)
+        line.new(bar_index, pdl, bar_index + 288, pdl, color=color_lux_level, width=1, style=line.style_dotted)
+        label.new(bar_index + 5, pdl, "PDL", color=color.new(color.white, 100), textcolor=color_lux_level, style=label.style_none, size=size.small)
+
+if ta.change(time("D", "America/New_York")) and show_levels
+    line.new(bar_index, open, bar_index + 288, open, color=color.new(#FFD600, 20), width=1, style=line.style_dashed)
+    label.new(bar_index + 5, open, "NY Open", color=color.new(color.white, 100), textcolor=color.new(#FFD600, 0), style=label.style_none, size=size.small)
+
+// ==========================================
+// 3. STRUCTURE M5 & CONFIRMATION DE REJET
+// ==========================================
+atr_val       = ta.atr(14)
+bar_confirmed = barstate.isconfirmed
+
+ph = ta.pivothigh(high, 5, 5)
+pl = ta.pivotlow(low, 5, 5)
+
+var float last_ph     = na
+var int   last_ph_bar = na
+var float prev_ph     = na
+var int   prev_ph_bar = na
+var float lowest_since_ph = na
+var float ob_bull_top = na
+var float ob_bull_bot = na
+var int   ob_bull_bar = na
+
+if not na(ph)
+    prev_ph := last_ph
+    prev_ph_bar := last_ph_bar
+    last_ph := ph
+    last_ph_bar := bar_index - 5
+    ob_bull_bot := low
+    ob_bull_top := high
+    ob_bull_bar := bar_index
+    lowest_since_ph := low
+
+    if show_eqh_eql and not na(prev_ph) and math.abs(last_ph - prev_ph) <= (syminfo.mintick * 15)
+        line.new(prev_ph_bar, prev_ph, bar_index, prev_ph, color=color_lux_liq, width=1)
+        label.new(math.round((prev_ph_bar + bar_index)/2), prev_ph, "EQH 💧", color=color.new(color.white, 100), textcolor=color_lux_liq, style=label.style_none, size=size.small)
+else if not na(ob_bull_bot)
+    if low <= ob_bull_bot
+        ob_bull_bot := low
+        ob_bull_top := high
+        ob_bull_bar := bar_index
+        lowest_since_ph := low
+
+var float last_pl     = na
+var int   last_pl_bar = na
+var float prev_pl     = na
+var int   prev_pl_bar = na
+var float highest_since_pl = na
+var float ob_bear_top = na
+var float ob_bear_bot = na
+var int   ob_bear_bar = na
+var int   last_struct_dir = 0
+
+if not na(pl)
+    prev_pl := last_pl
+    prev_pl_bar := last_pl_bar
+    last_pl := pl
+    last_pl_bar := bar_index - 5
+    ob_bear_top := high
+    ob_bear_bot := low
+    ob_bear_bar := bar_index
+    highest_since_pl := high
+
+    if show_eqh_eql and not na(prev_pl) and math.abs(last_pl - prev_pl) <= (syminfo.mintick * 15)
+        line.new(prev_pl_bar, prev_pl, bar_index, prev_pl, color=color_lux_liq, width=1)
+        label.new(math.round((prev_pl_bar + bar_index)/2), prev_pl, "EQL 💧", color=color.new(color.white, 100), textcolor=color_lux_liq, style=label.style_none, size=size.small)
+else if not na(ob_bear_top)
+    if high >= ob_bear_top
+        ob_bear_top := high
+        ob_bear_bot := low
+        ob_bear_bar := bar_index
+        highest_since_pl := high
+
+c_range = high - low
+c_body  = math.abs(close - open)
+is_disp = c_range > 0 and ((c_body / c_range) >= 0.50)
+
+wick_top = high - math.max(open, close)
+wick_bot = math.min(open, close) - low
+rej_buy  = c_range > 0 and (wick_bot / c_range) >= 0.35 and close > open
+rej_sell = c_range > 0 and (wick_top / c_range) >= 0.35 and close < open
+
+sweep_l = not na(last_pl) and low < last_pl and close > last_pl and rej_buy
+sweep_h = not na(last_ph) and high > last_ph and close < last_ph and rej_sell
+
+bars_in_h1_bull = ta.barssince(in_h1_bull_zone)
+bars_in_h1_bear = ta.barssince(in_h1_bear_zone)
+tested_h1_bull  = not na(bars_in_h1_bull) and bars_in_h1_bull <= zone_window_in
+tested_h1_bear  = not na(bars_in_h1_bear) and bars_in_h1_bear <= zone_window_in
+
+valid_ctx_bull = tested_h1_bull or (h1_bias_bull and not na(ta.barssince(sweep_l)) and ta.barssince(sweep_l) <= zone_window_in)
+valid_ctx_bear = tested_h1_bear or (h1_bias_bear and not na(ta.barssince(sweep_h)) and ta.barssince(sweep_h) <= zone_window_in)
+
+var bool  is_ob_bull_active = false
+var float current_ob_bull_top = na
+var int   current_ob_bull_start = na
+var box   current_ob_bull = na
+
+var bool  is_ob_bear_active = false
+var float current_ob_bear_bot = na
+var int   current_ob_bear_start = na
+var box   current_ob_bear = na
+
+var bool  is_fvg_bull_active = false
+var float current_fvg_bull_m5_top = na
+var int   current_fvg_bull_m5_start = na
+var box   current_fvg_bull_m5 = na
+
+var bool  is_fvg_bear_active = false
+var float current_fvg_bear_m5_bot = na
+var int   current_fvg_bear_m5_start = na
+var box   current_fvg_bear_m5 = na
+
+mss_bull = not na(last_ph) and bar_confirmed and ta.crossover(close, last_ph) and is_disp
+if mss_bull
+    if tested_h1_bull
+        if show_mss
+            is_choch = (last_struct_dir != 1)
+            lbl_text = is_choch ? "CHoCH" : "BOS"
+            line.new(last_ph_bar, last_ph, bar_index, last_ph, color=color_lux_bull, width=1, style=line.style_dashed)
+            label.new(math.round((last_ph_bar + bar_index)/2), last_ph, lbl_text, color=color.new(color.white, 100), textcolor=color_lux_bull, style=label.style_none, size=size.small)
+
+        if not na(ob_bull_bot)
+            is_ob_bull_active := true
+            current_ob_bull_top := ob_bull_top
+            current_ob_bull_start := bar_index
+            if show_ob
+                if not na(current_ob_bull)
+                    box.set_extend(current_ob_bull, extend.none)
+                    box.set_right(current_ob_bull, bar_index)
+                current_ob_bull := box.new(ob_bull_bar, ob_bull_top, bar_index, ob_bull_bot, border_color=color_lux_bull, bgcolor=color.new(color_lux_bull, 85), extend=extend.right)
+    last_ph := na
+    last_struct_dir := 1
+
+mss_bear = not na(last_pl) and bar_confirmed and ta.crossunder(close, last_pl) and is_disp
+if mss_bear
+    if tested_h1_bear
+        if show_mss
+            is_choch = (last_struct_dir != -1)
+            lbl_text = is_choch ? "CHoCH" : "BOS"
+            line.new(last_pl_bar, last_pl, bar_index, last_pl, color=color_lux_bear, width=1, style=line.style_dashed)
+            label.new(math.round((last_pl_bar + bar_index)/2), last_pl, lbl_text, color=color.new(color.white, 100), textcolor=color_lux_bear, style=label.style_none, size=size.small)
+
+        if not na(ob_bear_top)
+            is_ob_bear_active := true
+            current_ob_bear_bot := ob_bear_bot
+            current_ob_bear_start := bar_index
+            if show_ob
+                if not na(current_ob_bear)
+                    box.set_extend(current_ob_bear, extend.none)
+                    box.set_right(current_ob_bear, bar_index)
+                current_ob_bear := box.new(ob_bear_bar, ob_bear_top, bar_index, ob_bear_bot, border_color=color_lux_bear, bgcolor=color.new(color_lux_bear, 85), extend=extend.right)
+    last_pl := na
+    last_struct_dir := -1
+
+fvg_bull_m5 = (low > high[2]) and (low - high[2] >= atr_val * 0.15)
+if fvg_bull_m5 and valid_ctx_bull
+    is_fvg_bull_active := true
+    current_fvg_bull_m5_top := high[2]
+    current_fvg_bull_m5_start := bar_index
+    if show_fvg_m5
+        if not na(current_fvg_bull_m5)
+            box.set_extend(current_fvg_bull_m5, extend.none)
+            box.set_right(current_fvg_bull_m5, bar_index)
+        current_fvg_bull_m5 := box.new(bar_index - 2, low, bar_index, high[2], border_color=na, bgcolor=color.new(color_lux_bull, 85), extend=extend.right)
+
+fvg_bear_m5 = (high < low[2]) and (low[2] - high >= atr_val * 0.15)
+if fvg_bear_m5 and valid_ctx_bear
+    is_fvg_bear_active := true
+    current_fvg_bear_m5_bot := low[2]
+    current_fvg_bear_m5_start := bar_index
+    if show_fvg_m5
+        if not na(current_fvg_bear_m5)
+            box.set_extend(current_fvg_bear_m5, extend.none)
+            box.set_right(current_fvg_bear_m5, bar_index)
+        current_fvg_bear_m5 := box.new(bar_index - 2, low[2], bar_index, high, border_color=na, bgcolor=color.new(color_lux_bear, 85), extend=extend.right)
+
+mitigated_ob_bull = false
+mitigated_ob_bear = false
+mitigated_fvg_bull = false
+mitigated_fvg_bear = false
+
+if is_ob_bull_active and bar_index > current_ob_bull_start and low <= current_ob_bull_top
+    is_ob_bull_active := false
+    mitigated_ob_bull := true
+    if not na(current_ob_bull)
+        box.set_extend(current_ob_bull, extend.none)
+        box.set_right(current_ob_bull, bar_index)
+        current_ob_bull := na
+
+if is_ob_bear_active and bar_index > current_ob_bear_start and high >= current_ob_bear_bot
+    is_ob_bear_active := false
+    mitigated_ob_bear := true
+    if not na(current_ob_bear)
+        box.set_extend(current_ob_bear, extend.none)
+        box.set_right(current_ob_bear, bar_index)
+        current_ob_bear := na
+
+if is_fvg_bull_active and bar_index > current_fvg_bull_m5_start and low <= current_fvg_bull_m5_top
+    is_fvg_bull_active := false
+    mitigated_fvg_bull := true
+    if not na(current_fvg_bull_m5)
+        box.set_extend(current_fvg_bull_m5, extend.none)
+        box.set_right(current_fvg_bull_m5, bar_index)
+        current_fvg_bull_m5 := na
+
+if is_fvg_bear_active and bar_index > current_fvg_bear_m5_start and high >= current_fvg_bear_m5_bot
+    is_fvg_bear_active := false
+    mitigated_fvg_bear := true
+    if not na(current_fvg_bear_m5)
+        box.set_extend(current_fvg_bear_m5, extend.none)
+        box.set_right(current_fvg_bear_m5, bar_index)
+        current_fvg_bear_m5 := na
+
+// ==========================================
+// 4. LOGIQUE D'ENTRÉE & CONSOMMATION DES ZONES
+// ==========================================
+var bool   in_pos       = false
+var float  pos_entry    = 0.0
+var float  pos_sl       = 0.0
+var float  pos_tp       = 0.0
+var string pos_dir      = "NONE"
+var int    last_sig_bar = 0
+
+cooldown_ok = na(last_sig_bar) or (bar_index - last_sig_bar > cooldown_bars_in)
+
+setup_mtf_buy  = tested_h1_bull and (mitigated_fvg_bull or mitigated_ob_bull)
+setup_mtf_sell = tested_h1_bear and (mitigated_fvg_bear or mitigated_ob_bear)
+
+setup_ict_buy  = h1_bias_bull and not na(ta.barssince(sweep_l)) and ta.barssince(sweep_l) <= zone_window_in and (mitigated_fvg_bull or mitigated_ob_bull)
+setup_ict_sell = h1_bias_bear and not na(ta.barssince(sweep_h)) and ta.barssince(sweep_h) <= zone_window_in and (mitigated_fvg_bear or mitigated_ob_bear)
+
+raw_buy  = trade_window and not in_pos and cooldown_ok and bar_confirmed and (setup_mtf_buy or setup_ict_buy)
+raw_sell = trade_window and not in_pos and cooldown_ok and bar_confirmed and (setup_mtf_sell or setup_ict_sell)
+
+calc_score(is_mtf) =>
+    score = is_mtf ? 3 : 2
+    grade_str = score == 3 ? "A+" : "A"
+    stars_str = score == 3 ? "★★★★★" : "★★★★☆"
+    [score, grade_str, stars_str]
+
+// ---- ENTREE LONG (remplace l'alert() par un vrai ordre pour le backtest) ----
+if raw_buy
+    [score, grade_txt, stars_txt] = calc_score(setup_mtf_buy)
+    grade_ok = (min_grade_in == "B") or (min_grade_in == "A" and score >= 2) or (min_grade_in == "A+" and score == 3)
+
+    if grade_ok
+        setup_name   = setup_mtf_buy ? "MTF FVG BUY" : "ICT 2022 BUY"
+        pos_entry    := close
+        // SL plafonné par l'ATR M5 pour éviter un risque démesuré si le plus bas
+        // des 15 dernières bougies a été étiré par un spike de volatilité.
+        raw_sl       = ta.lowest(low, 15) - syminfo.mintick * 10
+        raw_risk     = pos_entry - raw_sl
+        risk         = math.min(raw_risk, atr_val * atr_cap_mult)
+        pos_sl       := pos_entry - risk
+        pos_tp       := pos_entry + (risk * rr_ratio)
+        pos_dir      := "BUY"
+        in_pos       := true
+        last_sig_bar := bar_index
+
+        h1_bull_consumed := true
+
+        lbl_text = stars_txt + " " + setup_name
+        label.new(bar_index, low - (syminfo.mintick * 5), lbl_text, color=color.new(color_lux_bull, 80), textcolor=color.black, style=label.style_label_up, size=size.tiny)
+
+        // Sizing par risque fixe : qty calculée pour risquer risk_pct_in% de l'équité
+        qty = (strategy.equity * (risk_pct_in / 100)) / risk
+        strategy.entry("Long", strategy.long, qty=qty, comment=setup_name)
+        strategy.exit("Exit Long", "Long", stop=pos_sl, limit=pos_tp)
+
+// ---- ENTREE SHORT (remplace l'alert() par un vrai ordre pour le backtest) ----
+if raw_sell
+    [score, grade_txt, stars_txt] = calc_score(setup_mtf_sell)
+    grade_ok = (min_grade_in == "B") or (min_grade_in == "A" and score >= 2) or (min_grade_in == "A+" and score == 3)
+
+    if grade_ok
+        setup_name   = setup_mtf_sell ? "MTF FVG SELL" : "ICT 2022 SELL"
+        pos_entry    := close
+        // SL plafonné par l'ATR M5 pour éviter un risque démesuré si le plus haut
+        // des 15 dernières bougies a été étiré par un spike de volatilité.
+        raw_sl       = ta.highest(high, 15) + syminfo.mintick * 10
+        raw_risk     = raw_sl - pos_entry
+        risk         = math.min(raw_risk, atr_val * atr_cap_mult)
+        pos_sl       := pos_entry + risk
+        pos_tp       := pos_entry - (risk * rr_ratio)
+        pos_dir      := "SELL"
+        in_pos       := true
+        last_sig_bar := bar_index
+
+        h1_bear_consumed := true
+
+        lbl_text = stars_txt + " " + setup_name
+        label.new(bar_index, high + (syminfo.mintick * 5), lbl_text, color=color.new(color_lux_bear, 80), textcolor=color.black, style=label.style_label_down, size=size.tiny)
+
+        // Sizing par risque fixe : qty calculée pour risquer risk_pct_in% de l'équité
+        qty = (strategy.equity * (risk_pct_in / 100)) / risk
+        strategy.entry("Short", strategy.short, qty=qty, comment=setup_name)
+        strategy.exit("Exit Short", "Short", stop=pos_sl, limit=pos_tp)
+
+// ==========================================
+// 5. SORTIES : timeout 30 barres + resynchro de in_pos avec le broker
+// ==========================================
+if in_pos
+    pos_expired = (bar_index - last_sig_bar) >= 30
+    if pos_expired
+        strategy.close(pos_dir == "BUY" ? "Long" : "Short", comment="EXPIRED")
+
+// Resynchronise notre état interne (in_pos) avec le vrai état du broker emulator
+// (que la sortie vienne du TP, du SL ou du timeout ci-dessus)
+if in_pos and strategy.opentrades == 0
+    in_pos  := false
+    pos_dir := "NONE"
+
+if h1_bull_consumed and not na(h1_bull_box)
+    box.set_extend(h1_bull_box, extend.none)
+    box.set_right(h1_bull_box, bar_index)
+    h1_bull_box := na
+
+if h1_bear_consumed and not na(h1_bear_box)
+    box.set_extend(h1_bear_box, extend.none)
+    box.set_right(h1_bear_box, bar_index)
+    h1_bear_box := na

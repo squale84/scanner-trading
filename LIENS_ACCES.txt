@@ -1,0 +1,13 @@
+=== LIENS SCANNER TRADING ===
+
+1. DASHBOARD EN DIRECT (RENDER) :
+https://scanner-trading-g7r7.onrender.com
+
+2. URL WEBHOOK (POUR TRADINGVIEW) :
+https://scanner-trading-g7r7.onrender.com/webhook
+
+3. CONSOLE DE GESTION RENDER :
+https://dashboard.render.com
+
+4. GITHUB :
+https://github.com
