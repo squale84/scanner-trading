@@ -24,7 +24,7 @@ show_ob       = input.bool(true, title="Afficher Order Blocks (M5)", group=grp_u
 show_eqh_eql  = input.bool(true, title="Afficher EQH / EQL (Liquidité)", group=grp_ui)
 show_levels   = input.bool(true, title="Afficher PDH / PDL / NY Midnight", group=grp_ui)
 show_risk_zone = input.bool(true, title="Afficher zone SL/TP du trade actif", group=grp_ui)
-ob_filter_dp  = input.bool(true, title="N'afficher que les OB en discount/premium", group=grp_ui)
+ob_filter_dp  = input.bool(false, title="N'afficher que les OB en discount/premium", group=grp_ui)
 show_ote      = input.bool(true, title="Afficher zone OTE (Fibo 61.8%-79%)", group=grp_ui)
 range_lookback = input.int(100, title="Range Discount/Premium (barres M5)", minval=20, maxval=500, group=grp_ui)
 
@@ -106,7 +106,8 @@ var float h1_bear_zone_bot = na
 var bool  h1_bear_consumed = false
 var box   h1_bear_box      = na
 
-color_fvg_hl = color.new(#FFC73C, 78) // Or pastel, sans bordure — zone large façon LuxAlgo SMC
+color_fvg_hl = color.new(#FFFF00, 55) // Jaune fluo, bien visible et distinct de l'OTE
+color_ote    = color.new(#A78BFA, 88) // Violet clair — distinct de la FVG pour ne pas se confondre
 
 if ta.change(time("60"))
     // Bull Zone
@@ -197,7 +198,7 @@ if ta.change(time("D", "America/New_York")) and not na(ote_box)
     ote_box := na
 if show_ote and not na(ote_top) and not na(ote_bot)
     if na(ote_box)
-        ote_box := box.new(bar_index, ote_top, bar_index + 1, ote_bot, border_color=na, bgcolor=color.new(color_lux_gold, 90), extend=extend.right)
+        ote_box := box.new(bar_index, ote_top, bar_index + 1, ote_bot, border_color=na, bgcolor=color_ote, extend=extend.right)
     else
         box.set_top(ote_box, ote_top)
         box.set_bottom(ote_box, ote_bot)
