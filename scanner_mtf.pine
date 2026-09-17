@@ -485,7 +485,7 @@ if raw_buy
         h1_bull_consumed := true
 
         // Label d'entrée en 2 niveaux, bien décalé du prix pour rester lisible au milieu des FVG/OB/CHoCH
-        label.new(bar_index, low - (atr_val * 0.8), "🟢 " + stars_txt + " " + setup_name, color=color.new(color_lux_bull, 15), textcolor=color.black, style=label.style_label_up, size=size.small)
+        label.new(bar_index, low - (atr_val * 0.8), "🟢 " + grade_txt + " " + setup_name, color=color.new(color_lux_bull, 15), textcolor=color.black, style=label.style_label_up, size=size.small)
 
         // Zone visuelle Risque/Récompense (comme les indicateurs LuxAlgo) : vert vers le TP, rouge vers le SL
         if show_risk_zone
@@ -523,7 +523,7 @@ if raw_sell
         h1_bear_consumed := true
 
         // Label d'entrée en 2 niveaux, bien décalé du prix pour rester lisible au milieu des FVG/OB/CHoCH
-        label.new(bar_index, high + (atr_val * 0.8), "🔴 " + stars_txt + " " + setup_name, color=color.new(color_lux_bear, 15), textcolor=color.white, style=label.style_label_down, size=size.small)
+        label.new(bar_index, high + (atr_val * 0.8), "🔴 " + grade_txt + " " + setup_name, color=color.new(color_lux_bear, 15), textcolor=color.white, style=label.style_label_down, size=size.small)
 
         // Zone visuelle Risque/Récompense (comme les indicateurs LuxAlgo) : vert vers le TP, rouge vers le SL
         if show_risk_zone
