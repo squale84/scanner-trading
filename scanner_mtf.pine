@@ -51,6 +51,8 @@ color_lux_gold  = color.new(#FFC73C, 0)  // Or — identique --accent-gold (NY O
 color_lux_level = color.new(#8B96A5, 30) // Gris — identique --text-muted (PDH/PDL)
 color_panel_bg  = color.new(#0D1117, 8)  // Fond panneau — identique --bg-elevated
 color_panel_bd  = color.new(#1C2430, 0)  // Bordure panneau — identique --border-color
+color_ob_bull   = color.new(#2F6BFF, 0)  // Bleu — Order Block acheteur
+color_ob_bear   = color.new(#FF6EC7, 0)  // Rose — Order Block vendeur
 
 // ==========================================
 // 2. EXTRACTION HTF H1 : FVG, BIAIS & BOS
@@ -111,11 +113,11 @@ if ta.change(time("60"))
         // Réarmer dès qu'une NOUVELLE FVG H1 valide (bornes différentes) se produit
         is_new_fvg = na(h1_bull_zone_bot) or (h1_low != h1_bull_zone_top) or (h1_high2 != h1_bull_zone_bot)
         if is_new_fvg
-            // Couper proprement l'ancienne boîte pour éviter de saturer l'écran
+            // Supprime l'ancienne boîte (au lieu de la geler) pour ne pas saturer l'écran de zones obsolètes
             if not na(h1_bull_box)
-                box.set_extend(h1_bull_box, extend.none)
-                box.set_right(h1_bull_box, bar_index)
-                
+                box.delete(h1_bull_box)
+                h1_bull_box := na
+
             h1_bull_zone_top := h1_low
             h1_bull_zone_bot := h1_high2
             h1_bull_consumed := false
@@ -127,10 +129,10 @@ if ta.change(time("60"))
         // Réarmer dès qu'une NOUVELLE FVG H1 valide (bornes différentes) se produit
         is_new_fvg = na(h1_bear_zone_top) or (h1_low2 != h1_bear_zone_top) or (h1_high != h1_bear_zone_bot)
         if is_new_fvg
-            // Couper proprement l'ancienne boîte
+            // Supprime l'ancienne boîte (au lieu de la geler)
             if not na(h1_bear_box)
-                box.set_extend(h1_bear_box, extend.none)
-                box.set_right(h1_bear_box, bar_index)
+                box.delete(h1_bear_box)
+                h1_bear_box := na
 
             h1_bear_zone_top := h1_low2
             h1_bear_zone_bot := h1_high
@@ -181,10 +183,10 @@ var float midnight_open = na
 if ta.change(time("D", "America/New_York"))
     midnight_open := open
 
-// --- Discount / Premium & zone OTE (sur le range du jour en cours) ---
-eq_level = not na(current_dh) and not na(current_dl) ? (current_dh + current_dl) / 2 : na
-ote_top  = not na(current_dh) and not na(current_dl) ? current_dl + (current_dh - current_dl) * 0.382 : na
-ote_bot  = not na(current_dh) and not na(current_dl) ? current_dl + (current_dh - current_dl) * 0.21 : na
+// --- Discount / Premium & zone OTE (sur le range PDH-PDL, plus stable que le range du jour en cours) ---
+eq_level = not na(pdh) and not na(pdl) ? (pdh + pdl) / 2 : na
+ote_top  = not na(pdh) and not na(pdl) ? pdl + (pdh - pdl) * 0.382 : na
+ote_bot  = not na(pdh) and not na(pdl) ? pdl + (pdh - pdl) * 0.21 : na
 
 var box ote_box = na
 if ta.change(time("D", "America/New_York")) and not na(ote_box)
@@ -343,9 +345,8 @@ if mss_bull
             ob_bull_relevant = not ob_filter_dp or na(eq_level) or (ob_bull_top <= eq_level)
             if show_ob and ob_bull_relevant
                 if not na(current_ob_bull)
-                    box.set_extend(current_ob_bull, extend.none)
-                    box.set_right(current_ob_bull, bar_index)
-                current_ob_bull := box.new(ob_bull_bar, ob_bull_top, bar_index, ob_bull_bot, border_color=na, bgcolor=color.new(color_lux_bull, 78), extend=extend.right)
+                    box.delete(current_ob_bull)
+                current_ob_bull := box.new(ob_bull_bar, ob_bull_top, bar_index, ob_bull_bot, border_color=na, bgcolor=color.new(color_ob_bull, 72), extend=extend.right)
     last_ph := na
     last_struct_dir := 1
 
@@ -366,9 +367,8 @@ if mss_bear
             ob_bear_relevant = not ob_filter_dp or na(eq_level) or (ob_bear_bot >= eq_level)
             if show_ob and ob_bear_relevant
                 if not na(current_ob_bear)
-                    box.set_extend(current_ob_bear, extend.none)
-                    box.set_right(current_ob_bear, bar_index)
-                current_ob_bear := box.new(ob_bear_bar, ob_bear_top, bar_index, ob_bear_bot, border_color=na, bgcolor=color.new(color_lux_bear, 78), extend=extend.right)
+                    box.delete(current_ob_bear)
+                current_ob_bear := box.new(ob_bear_bar, ob_bear_top, bar_index, ob_bear_bot, border_color=na, bgcolor=color.new(color_ob_bear, 72), extend=extend.right)
     last_pl := na
     last_struct_dir := -1
 
@@ -380,9 +380,8 @@ if fvg_bull_m5 and valid_ctx_bull
     current_fvg_bull_m5_start := bar_index
     if show_fvg_m5
         if not na(current_fvg_bull_m5)
-            box.set_extend(current_fvg_bull_m5, extend.none)
-            box.set_right(current_fvg_bull_m5, bar_index)
-        current_fvg_bull_m5 := box.new(bar_index - 2, low, bar_index, high[2], border_color=na, bgcolor=color.new(color_lux_bull, 78), extend=extend.right)
+            box.delete(current_fvg_bull_m5)
+        current_fvg_bull_m5 := box.new(bar_index - 2, low, bar_index, high[2], border_color=na, bgcolor=color_fvg_hl, extend=extend.right)
 
 fvg_bear_m5 = (high < low[2]) and (low[2] - high >= atr_val * 0.15)
 if fvg_bear_m5 and valid_ctx_bear
@@ -391,9 +390,8 @@ if fvg_bear_m5 and valid_ctx_bear
     current_fvg_bear_m5_start := bar_index
     if show_fvg_m5
         if not na(current_fvg_bear_m5)
-            box.set_extend(current_fvg_bear_m5, extend.none)
-            box.set_right(current_fvg_bear_m5, bar_index)
-        current_fvg_bear_m5 := box.new(bar_index - 2, low[2], bar_index, high, border_color=na, bgcolor=color.new(color_lux_bear, 78), extend=extend.right)
+            box.delete(current_fvg_bear_m5)
+        current_fvg_bear_m5 := box.new(bar_index - 2, low[2], bar_index, high, border_color=na, bgcolor=color_fvg_hl, extend=extend.right)
 
 // Logique de Mitigation (Coupure automatique et déclenchement d'entrée)
 mitigated_ob_bull = false
@@ -405,32 +403,28 @@ if is_ob_bull_active and bar_index > current_ob_bull_start and low <= current_ob
     is_ob_bull_active := false
     mitigated_ob_bull := true
     if not na(current_ob_bull)
-        box.set_extend(current_ob_bull, extend.none)
-        box.set_right(current_ob_bull, bar_index)
+        box.delete(current_ob_bull)
         current_ob_bull := na
 
 if is_ob_bear_active and bar_index > current_ob_bear_start and high >= current_ob_bear_bot
     is_ob_bear_active := false
     mitigated_ob_bear := true
     if not na(current_ob_bear)
-        box.set_extend(current_ob_bear, extend.none)
-        box.set_right(current_ob_bear, bar_index)
+        box.delete(current_ob_bear)
         current_ob_bear := na
 
 if is_fvg_bull_active and bar_index > current_fvg_bull_m5_start and low <= current_fvg_bull_m5_top
     is_fvg_bull_active := false
     mitigated_fvg_bull := true
     if not na(current_fvg_bull_m5)
-        box.set_extend(current_fvg_bull_m5, extend.none)
-        box.set_right(current_fvg_bull_m5, bar_index)
+        box.delete(current_fvg_bull_m5)
         current_fvg_bull_m5 := na
 
 if is_fvg_bear_active and bar_index > current_fvg_bear_m5_start and high >= current_fvg_bear_m5_bot
     is_fvg_bear_active := false
     mitigated_fvg_bear := true
     if not na(current_fvg_bear_m5)
-        box.set_extend(current_fvg_bear_m5, extend.none)
-        box.set_right(current_fvg_bear_m5, bar_index)
+        box.delete(current_fvg_bear_m5)
         current_fvg_bear_m5 := na
 
 // ==========================================
@@ -469,7 +463,7 @@ if raw_buy
     grade_ok = (min_grade_in == "B") or (min_grade_in == "A" and score >= 2) or (min_grade_in == "A+" and score == 3)
 
     if grade_ok
-        setup_name   = setup_mtf_buy ? "MTF FVG BUY" : "ICT 2022 BUY"
+        setup_name   = setup_mtf_buy ? "RETEST" : "SSL SWEEP"
         pos_entry    := close
         
         // SL Structurel (Plus bas récent incluant le sweep), plafonné par l'ATR M5
@@ -488,7 +482,7 @@ if raw_buy
         h1_bull_consumed := true
 
         // Label d'entrée en 2 niveaux, bien décalé du prix pour rester lisible au milieu des FVG/OB/CHoCH
-        label.new(bar_index, low - (atr_val * 0.8), "🟢 BUY  " + stars_txt + " " + setup_name, color=color.new(color_lux_bull, 15), textcolor=color.black, style=label.style_label_up, size=size.small)
+        label.new(bar_index, low - (atr_val * 0.8), "🟢 " + stars_txt + " " + setup_name, color=color.new(color_lux_bull, 15), textcolor=color.black, style=label.style_label_up, size=size.small)
 
         // Zone visuelle Risque/Récompense (comme les indicateurs LuxAlgo) : vert vers le TP, rouge vers le SL
         if show_risk_zone
@@ -507,7 +501,7 @@ if raw_sell
     grade_ok = (min_grade_in == "B") or (min_grade_in == "A" and score >= 2) or (min_grade_in == "A+" and score == 3)
 
     if grade_ok
-        setup_name   = setup_mtf_sell ? "MTF FVG SELL" : "ICT 2022 SELL"
+        setup_name   = setup_mtf_sell ? "RETEST" : "BSL SWEEP"
         pos_entry    := close
         
         // SL Structurel (Plus haut récent incluant le sweep), plafonné par l'ATR M5
@@ -526,7 +520,7 @@ if raw_sell
         h1_bear_consumed := true
 
         // Label d'entrée en 2 niveaux, bien décalé du prix pour rester lisible au milieu des FVG/OB/CHoCH
-        label.new(bar_index, high + (atr_val * 0.8), "🔴 SELL  " + stars_txt + " " + setup_name, color=color.new(color_lux_bear, 15), textcolor=color.white, style=label.style_label_down, size=size.small)
+        label.new(bar_index, high + (atr_val * 0.8), "🔴 " + stars_txt + " " + setup_name, color=color.new(color_lux_bear, 15), textcolor=color.white, style=label.style_label_down, size=size.small)
 
         // Zone visuelle Risque/Récompense (comme les indicateurs LuxAlgo) : vert vers le TP, rouge vers le SL
         if show_risk_zone
@@ -561,15 +555,13 @@ if in_pos
         if not na(sl_zone_box)
             box.set_right(sl_zone_box, bar_index)
 
-// Arrêt de l'extension des boîtes H1 lorsqu'elles sont consommées
+// Suppression des boîtes H1 lorsqu'elles sont consommées (au lieu de les geler à l'écran)
 if h1_bull_consumed and not na(h1_bull_box)
-    box.set_extend(h1_bull_box, extend.none)
-    box.set_right(h1_bull_box, bar_index)
+    box.delete(h1_bull_box)
     h1_bull_box := na
 
 if h1_bear_consumed and not na(h1_bear_box)
-    box.set_extend(h1_bear_box, extend.none)
-    box.set_right(h1_bear_box, bar_index)
+    box.delete(h1_bear_box)
     h1_bear_box := na
 
 // ==========================================
