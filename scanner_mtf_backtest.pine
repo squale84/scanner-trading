@@ -148,28 +148,40 @@ if not na(h1_bear_zone_top) and close > h1_bear_zone_top
 // ==========================================
 var float pdh = na
 var float pdl = na
+var int   pdh_bar = na
+var int   pdl_bar = na
 var float current_dh = na
 var float current_dl = na
+var int   current_dh_bar = na
+var int   current_dl_bar = na
 
-if ta.change(time("D"))
+if ta.change(time("D", "America/New_York"))
     pdh := current_dh
     pdl := current_dl
+    pdh_bar := current_dh_bar
+    pdl_bar := current_dl_bar
     current_dh := high
     current_dl := low
+    current_dh_bar := bar_index
+    current_dl_bar := bar_index
 else
-    current_dh := math.max(current_dh, high)
-    current_dl := math.min(current_dl, low)
+    if high > current_dh
+        current_dh := high
+        current_dh_bar := bar_index
+    if low < current_dl
+        current_dl := low
+        current_dl_bar := bar_index
 
 var float midnight_open = na
 if ta.change(time("D", "America/New_York"))
     midnight_open := open
 
-if ta.change(time("D")) and show_levels
+if ta.change(time("D", "America/New_York")) and show_levels
     if not na(pdh)
-        line.new(bar_index, pdh, bar_index + 288, pdh, color=color_lux_level, width=1, style=line.style_dotted)
+        line.new(pdh_bar, pdh, bar_index + 288, pdh, color=color_lux_level, width=1, style=line.style_dotted)
         label.new(bar_index + 5, pdh, "PDH", color=color.new(color.white, 100), textcolor=color_lux_level, style=label.style_none, size=size.small)
     if not na(pdl)
-        line.new(bar_index, pdl, bar_index + 288, pdl, color=color_lux_level, width=1, style=line.style_dotted)
+        line.new(pdl_bar, pdl, bar_index + 288, pdl, color=color_lux_level, width=1, style=line.style_dotted)
         label.new(bar_index + 5, pdl, "PDL", color=color.new(color.white, 100), textcolor=color_lux_level, style=label.style_none, size=size.small)
 
 if ta.change(time("D", "America/New_York")) and show_levels
