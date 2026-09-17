@@ -27,6 +27,8 @@ show_risk_zone = input.bool(true, title="Afficher zone SL/TP du trade actif", gr
 ob_filter_dp  = input.bool(false, title="N'afficher que les OB en discount/premium", group=grp_ui)
 show_ote      = input.bool(true, title="Afficher zone OTE (Fibo 61.8%-79%)", group=grp_ui)
 range_lookback = input.int(100, title="Range Discount/Premium (barres M5)", minval=20, maxval=500, group=grp_ui)
+fvg_mitigation_mode = input.string("Mèche", title="Mode de mitigation FVG/OB", options=["Mèche", "Corps", "Clôture"], group=grp_ui)
+max_zones_in  = input.int(10, title="Nombre max de zones OB/FVG affichées", minval=3, maxval=30, group=grp_ui)
 
 grp_dash      = "Tableau de Bord"
 show_dashboard = input.bool(true, title="Afficher le tableau de bord", group=grp_dash)
@@ -222,6 +224,60 @@ if ta.change(time("D", "America/New_York")) and show_levels
 atr_val       = ta.atr(14)
 bar_confirmed = barstate.isconfirmed
 
+// --- Sonde de mitigation (Mèche/Corps/Clôture) — porté du moteur V48 (Projet_ECC_Test) ---
+mit_probe_bull = fvg_mitigation_mode == "Mèche" ? low : fvg_mitigation_mode == "Corps" ? math.min(open, close) : close
+mit_probe_bear = fvg_mitigation_mode == "Mèche" ? high : fvg_mitigation_mode == "Corps" ? math.max(open, close) : close
+
+// --- Gestion des zones "extra" en tableau plafonné (affichage multi-zones, sans effet sur les entrées) ---
+f_push_zone(box_arr, top_arr, bot_arr, mit_arr, new_box, new_top, new_bot, maxN) =>
+    array.push(box_arr, new_box)
+    array.push(top_arr, new_top)
+    array.push(bot_arr, new_bot)
+    array.push(mit_arr, false)
+    if array.size(box_arr) > maxN
+        old_box = array.shift(box_arr)
+        array.shift(top_arr)
+        array.shift(bot_arr)
+        array.shift(mit_arr)
+        if not na(old_box)
+            box.delete(old_box)
+
+f_update_bull_zones(box_arr, top_arr, bot_arr, mit_arr, probe, grey_not_delete, grey_color) =>
+    i = array.size(box_arr) - 1
+    while i >= 0
+        if not array.get(mit_arr, i)
+            top = array.get(top_arr, i)
+            if probe <= top
+                array.set(mit_arr, i, true)
+                bx = array.get(box_arr, i)
+                if not na(bx)
+                    if grey_not_delete
+                        box.set_bgcolor(bx, grey_color)
+                        box.set_extend(bx, extend.none)
+                        box.set_right(bx, bar_index)
+                    else
+                        box.delete(bx)
+                        array.set(box_arr, i, na)
+        i -= 1
+
+f_update_bear_zones(box_arr, top_arr, bot_arr, mit_arr, probe, grey_not_delete, grey_color) =>
+    i = array.size(box_arr) - 1
+    while i >= 0
+        if not array.get(mit_arr, i)
+            bot = array.get(bot_arr, i)
+            if probe >= bot
+                array.set(mit_arr, i, true)
+                bx = array.get(box_arr, i)
+                if not na(bx)
+                    if grey_not_delete
+                        box.set_bgcolor(bx, grey_color)
+                        box.set_extend(bx, extend.none)
+                        box.set_right(bx, bar_index)
+                    else
+                        box.delete(bx)
+                        array.set(box_arr, i, na)
+        i -= 1
+
 // Pivots M5
 ph = ta.pivothigh(high, 5, 5)
 pl = ta.pivotlow(low, 5, 5)
@@ -331,16 +387,26 @@ var float current_fvg_bear_m5_bot = na
 var int   current_fvg_bear_m5_start = na
 var box   current_fvg_bear_m5 = na
 
-// Boîtes OB "affichage uniquement" — mêmes conditions larges que les FVG M5, sans influencer les entrées
-var box   display_ob_bull = na
-var bool  display_ob_bull_active = false
-var float display_ob_bull_top   = na
-var int   display_ob_bull_start = na
+// Zones "extra" en tableau plafonné (affichage multi-zones simultanées, sans influencer les entrées)
+var box[]   ext_ob_bull_box = array.new_box()
+var float[] ext_ob_bull_top = array.new_float()
+var float[] ext_ob_bull_bot = array.new_float()
+var bool[]  ext_ob_bull_mit = array.new_bool()
 
-var box   display_ob_bear = na
-var bool  display_ob_bear_active = false
-var float display_ob_bear_bot   = na
-var int   display_ob_bear_start = na
+var box[]   ext_ob_bear_box = array.new_box()
+var float[] ext_ob_bear_top = array.new_float()
+var float[] ext_ob_bear_bot = array.new_float()
+var bool[]  ext_ob_bear_mit = array.new_bool()
+
+var box[]   ext_fvg_bull_box = array.new_box()
+var float[] ext_fvg_bull_top = array.new_float()
+var float[] ext_fvg_bull_bot = array.new_float()
+var bool[]  ext_fvg_bull_mit = array.new_bool()
+
+var box[]   ext_fvg_bear_box = array.new_box()
+var float[] ext_fvg_bear_top = array.new_float()
+var float[] ext_fvg_bear_bot = array.new_float()
+var bool[]  ext_fvg_bear_mit = array.new_bool()
 
 // MSS / CHoCH en M5
 mss_bull = not na(last_ph) and bar_confirmed and ta.crossover(close, last_ph) and is_disp
@@ -366,12 +432,8 @@ if mss_bull
     if not tested_h1_bull and valid_ctx_bull and not na(ob_bull_bot)
         ob_bull_relevant2 = not ob_filter_dp or na(eq_level) or (ob_bull_top <= eq_level)
         if show_ob and ob_bull_relevant2
-            if not na(display_ob_bull)
-                box.delete(display_ob_bull)
-            display_ob_bull := box.new(ob_bull_bar, ob_bull_top, bar_index, ob_bull_bot, border_color=na, bgcolor=color.new(color_ob_bull, 72), extend=extend.right)
-            display_ob_bull_active := true
-            display_ob_bull_top    := ob_bull_top
-            display_ob_bull_start  := bar_index
+            new_ob_bull_box = box.new(ob_bull_bar, ob_bull_top, bar_index, ob_bull_bot, border_color=na, bgcolor=color.new(color_ob_bull, 72), extend=extend.right)
+            f_push_zone(ext_ob_bull_box, ext_ob_bull_top, ext_ob_bull_bot, ext_ob_bull_mit, new_ob_bull_box, ob_bull_top, ob_bull_bot, max_zones_in)
     last_ph := na
     last_struct_dir := 1
 
@@ -398,35 +460,40 @@ if mss_bear
     if not tested_h1_bear and valid_ctx_bear and not na(ob_bear_top)
         ob_bear_relevant2 = not ob_filter_dp or na(eq_level) or (ob_bear_bot >= eq_level)
         if show_ob and ob_bear_relevant2
-            if not na(display_ob_bear)
-                box.delete(display_ob_bear)
-            display_ob_bear := box.new(ob_bear_bar, ob_bear_top, bar_index, ob_bear_bot, border_color=na, bgcolor=color.new(color_ob_bear, 72), extend=extend.right)
-            display_ob_bear_active := true
-            display_ob_bear_bot    := ob_bear_bot
-            display_ob_bear_start  := bar_index
+            new_ob_bear_box = box.new(ob_bear_bar, ob_bear_top, bar_index, ob_bear_bot, border_color=na, bgcolor=color.new(color_ob_bear, 72), extend=extend.right)
+            f_push_zone(ext_ob_bear_box, ext_ob_bear_top, ext_ob_bear_bot, ext_ob_bear_mit, new_ob_bear_box, ob_bear_top, ob_bear_bot, max_zones_in)
     last_pl := na
     last_struct_dir := -1
 
 // FVG en M5 (Rendu graphique conditionnel)
 fvg_bull_m5 = (low > high[2]) and (low - high[2] >= atr_val * 0.15)
 if fvg_bull_m5 and valid_ctx_bull
-    is_fvg_bull_active := true
-    current_fvg_bull_m5_top := high[2]
-    current_fvg_bull_m5_start := bar_index
-    if show_fvg_m5
-        if not na(current_fvg_bull_m5)
-            box.delete(current_fvg_bull_m5)
-        current_fvg_bull_m5 := box.new(bar_index - 2, low, bar_index, high[2], border_color=na, bgcolor=color_fvg_hl, extend=extend.right)
+    if is_fvg_bull_active and show_fvg_m5
+        // Slot officiel déjà occupé : cette nouvelle FVG part dans le tableau "extra" au lieu d'écraser l'ancienne
+        new_fvg_bull_box = box.new(bar_index - 2, low, bar_index, high[2], border_color=na, bgcolor=color_fvg_hl, extend=extend.right)
+        f_push_zone(ext_fvg_bull_box, ext_fvg_bull_top, ext_fvg_bull_bot, ext_fvg_bull_mit, new_fvg_bull_box, high[2], low, max_zones_in)
+    else
+        is_fvg_bull_active := true
+        current_fvg_bull_m5_top := high[2]
+        current_fvg_bull_m5_start := bar_index
+        if show_fvg_m5
+            if not na(current_fvg_bull_m5)
+                box.delete(current_fvg_bull_m5)
+            current_fvg_bull_m5 := box.new(bar_index - 2, low, bar_index, high[2], border_color=na, bgcolor=color_fvg_hl, extend=extend.right)
 
 fvg_bear_m5 = (high < low[2]) and (low[2] - high >= atr_val * 0.15)
 if fvg_bear_m5 and valid_ctx_bear
-    is_fvg_bear_active := true
-    current_fvg_bear_m5_bot := low[2]
-    current_fvg_bear_m5_start := bar_index
-    if show_fvg_m5
-        if not na(current_fvg_bear_m5)
-            box.delete(current_fvg_bear_m5)
-        current_fvg_bear_m5 := box.new(bar_index - 2, low[2], bar_index, high, border_color=na, bgcolor=color_fvg_hl, extend=extend.right)
+    if is_fvg_bear_active and show_fvg_m5
+        new_fvg_bear_box = box.new(bar_index - 2, low[2], bar_index, high, border_color=na, bgcolor=color_fvg_hl, extend=extend.right)
+        f_push_zone(ext_fvg_bear_box, ext_fvg_bear_top, ext_fvg_bear_bot, ext_fvg_bear_mit, new_fvg_bear_box, high, low[2], max_zones_in)
+    else
+        is_fvg_bear_active := true
+        current_fvg_bear_m5_bot := low[2]
+        current_fvg_bear_m5_start := bar_index
+        if show_fvg_m5
+            if not na(current_fvg_bear_m5)
+                box.delete(current_fvg_bear_m5)
+            current_fvg_bear_m5 := box.new(bar_index - 2, low[2], bar_index, high, border_color=na, bgcolor=color_fvg_hl, extend=extend.right)
 
 // Logique de Mitigation (Coupure automatique et déclenchement d'entrée)
 mitigated_ob_bull = false
@@ -434,35 +501,21 @@ mitigated_ob_bear = false
 mitigated_fvg_bull = false
 mitigated_fvg_bear = false
 
-if is_ob_bull_active and bar_index > current_ob_bull_start and low <= current_ob_bull_top
+if is_ob_bull_active and bar_index > current_ob_bull_start and mit_probe_bull <= current_ob_bull_top
     is_ob_bull_active := false
     mitigated_ob_bull := true
     if not na(current_ob_bull)
         box.delete(current_ob_bull)
         current_ob_bull := na
 
-// Mitigation de la boîte OB "affichage uniquement" (même mécanisme, indépendant de la logique d'entrée)
-if display_ob_bull_active and bar_index > display_ob_bull_start and low <= display_ob_bull_top
-    display_ob_bull_active := false
-    if not na(display_ob_bull)
-        box.delete(display_ob_bull)
-        display_ob_bull := na
-
-if is_ob_bear_active and bar_index > current_ob_bear_start and high >= current_ob_bear_bot
+if is_ob_bear_active and bar_index > current_ob_bear_start and mit_probe_bear >= current_ob_bear_bot
     is_ob_bear_active := false
     mitigated_ob_bear := true
     if not na(current_ob_bear)
         box.delete(current_ob_bear)
         current_ob_bear := na
 
-// Mitigation de la boîte OB "affichage uniquement" (même mécanisme, indépendant de la logique d'entrée)
-if display_ob_bear_active and bar_index > display_ob_bear_start and high >= display_ob_bear_bot
-    display_ob_bear_active := false
-    if not na(display_ob_bear)
-        box.delete(display_ob_bear)
-        display_ob_bear := na
-
-if is_fvg_bull_active and bar_index > current_fvg_bull_m5_start and low <= current_fvg_bull_m5_top
+if is_fvg_bull_active and bar_index > current_fvg_bull_m5_start and mit_probe_bull <= current_fvg_bull_m5_top
     is_fvg_bull_active := false
     mitigated_fvg_bull := true
     if not na(current_fvg_bull_m5)
@@ -471,7 +524,7 @@ if is_fvg_bull_active and bar_index > current_fvg_bull_m5_start and low <= curre
         box.set_right(current_fvg_bull_m5, bar_index)
         current_fvg_bull_m5 := na
 
-if is_fvg_bear_active and bar_index > current_fvg_bear_m5_start and high >= current_fvg_bear_m5_bot
+if is_fvg_bear_active and bar_index > current_fvg_bear_m5_start and mit_probe_bear >= current_fvg_bear_m5_bot
     is_fvg_bear_active := false
     mitigated_fvg_bear := true
     if not na(current_fvg_bear_m5)
@@ -479,6 +532,12 @@ if is_fvg_bear_active and bar_index > current_fvg_bear_m5_start and high >= curr
         box.set_extend(current_fvg_bear_m5, extend.none)
         box.set_right(current_fvg_bear_m5, bar_index)
         current_fvg_bear_m5 := na
+
+// Mise à jour des zones "extra" en tableau : OB disparaît (comme demandé), FVG passe en gris clair
+f_update_bull_zones(ext_ob_bull_box, ext_ob_bull_top, ext_ob_bull_bot, ext_ob_bull_mit, mit_probe_bull, false, na)
+f_update_bear_zones(ext_ob_bear_box, ext_ob_bear_top, ext_ob_bear_bot, ext_ob_bear_mit, mit_probe_bear, false, na)
+f_update_bull_zones(ext_fvg_bull_box, ext_fvg_bull_top, ext_fvg_bull_bot, ext_fvg_bull_mit, mit_probe_bull, true, color.new(color_lux_level, 85))
+f_update_bear_zones(ext_fvg_bear_box, ext_fvg_bear_top, ext_fvg_bear_bot, ext_fvg_bear_mit, mit_probe_bear, true, color.new(color_lux_level, 85))
 
 // ==========================================
 // 4. LOGIQUE D'ENTRÉE & CONSOMMATION DES ZONES
