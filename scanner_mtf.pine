@@ -421,14 +421,18 @@ if is_fvg_bull_active and bar_index > current_fvg_bull_m5_start and low <= curre
     is_fvg_bull_active := false
     mitigated_fvg_bull := true
     if not na(current_fvg_bull_m5)
-        box.delete(current_fvg_bull_m5)
+        box.set_bgcolor(current_fvg_bull_m5, color.new(color_lux_level, 85))
+        box.set_extend(current_fvg_bull_m5, extend.none)
+        box.set_right(current_fvg_bull_m5, bar_index)
         current_fvg_bull_m5 := na
 
 if is_fvg_bear_active and bar_index > current_fvg_bear_m5_start and high >= current_fvg_bear_m5_bot
     is_fvg_bear_active := false
     mitigated_fvg_bear := true
     if not na(current_fvg_bear_m5)
-        box.delete(current_fvg_bear_m5)
+        box.set_bgcolor(current_fvg_bear_m5, color.new(color_lux_level, 85))
+        box.set_extend(current_fvg_bear_m5, extend.none)
+        box.set_right(current_fvg_bear_m5, bar_index)
         current_fvg_bear_m5 := na
 
 // ==========================================
@@ -559,13 +563,17 @@ if in_pos
         if not na(sl_zone_box)
             box.set_right(sl_zone_box, bar_index)
 
-// Suppression des boîtes H1 lorsqu'elles sont consommées (au lieu de les geler à l'écran)
+// Passage en gris clair + arrêt d'extension des boîtes H1 lorsqu'elles sont mitigées (preuve visuelle explicite)
 if h1_bull_consumed and not na(h1_bull_box)
-    box.delete(h1_bull_box)
+    box.set_bgcolor(h1_bull_box, color.new(color_lux_level, 85))
+    box.set_extend(h1_bull_box, extend.none)
+    box.set_right(h1_bull_box, bar_index)
     h1_bull_box := na
 
 if h1_bear_consumed and not na(h1_bear_box)
-    box.delete(h1_bear_box)
+    box.set_bgcolor(h1_bear_box, color.new(color_lux_level, 85))
+    box.set_extend(h1_bear_box, extend.none)
+    box.set_right(h1_bear_box, bar_index)
     h1_bear_box := na
 
 // ==========================================
