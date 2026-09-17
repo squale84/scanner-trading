@@ -28,6 +28,7 @@ is_crypto_247 = input.bool(true, title="Mode Métaux / Continu (Ignore Killzones
 min_grade_in  = input.string("A", title="Grade Minimum pour Alerte", options=["B", "A", "A+"], group=grp_radar)
 ema_flat_thr  = input.float(0.08, title="Seuil Pente EMA H1 (x ATR)", step=0.01, group=grp_radar)
 atr_cap_mult  = input.float(2.5, title="Plafond Stop-Loss (x ATR M5)", minval=0.5, step=0.1, group=grp_radar)
+atr_floor_mult = input.float(0.5, title="Plancher Stop-Loss (x ATR M5)", minval=0.1, step=0.1, group=grp_radar)
 risk_pct_in   = input.float(1.0, title="Risque par trade (% équité)", minval=0.1, step=0.1, group=grp_radar)
 zone_window_in   = input.int(20, title="Fenêtre de validité contexte H1 (barres M5)", minval=5, maxval=50, group=grp_radar)
 cooldown_bars_in = input.int(10, title="Cooldown entre signaux (barres M5)", minval=1, maxval=50, group=grp_radar)
@@ -436,7 +437,7 @@ if raw_buy
         // des 15 dernières bougies a été étiré par un spike de volatilité.
         raw_sl       = ta.lowest(low, 15) - syminfo.mintick * 10
         raw_risk     = pos_entry - raw_sl
-        risk         = math.min(raw_risk, atr_val * atr_cap_mult)
+        risk         = math.max(math.min(raw_risk, atr_val * atr_cap_mult), atr_val * atr_floor_mult)
         pos_sl       := pos_entry - risk
         pos_tp       := pos_entry + (risk * rr_ratio)
         pos_dir      := "BUY"
@@ -465,7 +466,7 @@ if raw_sell
         // des 15 dernières bougies a été étiré par un spike de volatilité.
         raw_sl       = ta.highest(high, 15) + syminfo.mintick * 10
         raw_risk     = raw_sl - pos_entry
-        risk         = math.min(raw_risk, atr_val * atr_cap_mult)
+        risk         = math.max(math.min(raw_risk, atr_val * atr_cap_mult), atr_val * atr_floor_mult)
         pos_sl       := pos_entry + risk
         pos_tp       := pos_entry - (risk * rr_ratio)
         pos_dir      := "SELL"
