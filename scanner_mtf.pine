@@ -201,14 +201,14 @@ if show_ote and not na(ote_top) and not na(ote_bot)
 if ta.change(time("D", "America/New_York")) and show_levels
     if not na(pdh)
         line.new(pdh_bar, pdh, bar_index + 288, pdh, color=color_lux_level, width=1, style=line.style_dotted)
-        label.new(bar_index + 5, pdh, "PDH", color=color_panel_bg, textcolor=color_lux_level, style=label.style_label_left, size=size.normal)
+        label.new(bar_index + 5, pdh, "PDH", color=color.new(color.white, 100), textcolor=color_lux_level, style=label.style_none, size=size.normal)
     if not na(pdl)
         line.new(pdl_bar, pdl, bar_index + 288, pdl, color=color_lux_level, width=1, style=line.style_dotted)
-        label.new(bar_index + 5, pdl, "PDL", color=color_panel_bg, textcolor=color_lux_level, style=label.style_label_left, size=size.normal)
+        label.new(bar_index + 5, pdl, "PDL", color=color.new(color.white, 100), textcolor=color_lux_level, style=label.style_none, size=size.normal)
 
 if ta.change(time("D", "America/New_York")) and show_levels
     line.new(bar_index, open, bar_index + 288, open, color=color.new(#FFC73C, 20), width=1, style=line.style_dashed) // Midnight Open en Or discret
-    label.new(bar_index + 5, open, "NY Open", color=color_panel_bg, textcolor=color_lux_gold, style=label.style_label_left, size=size.normal)
+    label.new(bar_index + 5, open, "NY Open", color=color.new(color.white, 100), textcolor=color_lux_gold, style=label.style_none, size=size.normal)
 
 // ==========================================
 // 3. STRUCTURE M5 & CONFIRMATION DE REJET
