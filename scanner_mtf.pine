@@ -333,7 +333,14 @@ var box   current_fvg_bear_m5 = na
 
 // Boîtes OB "affichage uniquement" — mêmes conditions larges que les FVG M5, sans influencer les entrées
 var box   display_ob_bull = na
+var bool  display_ob_bull_active = false
+var float display_ob_bull_top   = na
+var int   display_ob_bull_start = na
+
 var box   display_ob_bear = na
+var bool  display_ob_bear_active = false
+var float display_ob_bear_bot   = na
+var int   display_ob_bear_start = na
 
 // MSS / CHoCH en M5
 mss_bull = not na(last_ph) and bar_confirmed and ta.crossover(close, last_ph) and is_disp
@@ -362,6 +369,9 @@ if mss_bull
             if not na(display_ob_bull)
                 box.delete(display_ob_bull)
             display_ob_bull := box.new(ob_bull_bar, ob_bull_top, bar_index, ob_bull_bot, border_color=na, bgcolor=color.new(color_ob_bull, 72), extend=extend.right)
+            display_ob_bull_active := true
+            display_ob_bull_top    := ob_bull_top
+            display_ob_bull_start  := bar_index
     last_ph := na
     last_struct_dir := 1
 
@@ -391,6 +401,9 @@ if mss_bear
             if not na(display_ob_bear)
                 box.delete(display_ob_bear)
             display_ob_bear := box.new(ob_bear_bar, ob_bear_top, bar_index, ob_bear_bot, border_color=na, bgcolor=color.new(color_ob_bear, 72), extend=extend.right)
+            display_ob_bear_active := true
+            display_ob_bear_bot    := ob_bear_bot
+            display_ob_bear_start  := bar_index
     last_pl := na
     last_struct_dir := -1
 
@@ -428,12 +441,26 @@ if is_ob_bull_active and bar_index > current_ob_bull_start and low <= current_ob
         box.delete(current_ob_bull)
         current_ob_bull := na
 
+// Mitigation de la boîte OB "affichage uniquement" (même mécanisme, indépendant de la logique d'entrée)
+if display_ob_bull_active and bar_index > display_ob_bull_start and low <= display_ob_bull_top
+    display_ob_bull_active := false
+    if not na(display_ob_bull)
+        box.delete(display_ob_bull)
+        display_ob_bull := na
+
 if is_ob_bear_active and bar_index > current_ob_bear_start and high >= current_ob_bear_bot
     is_ob_bear_active := false
     mitigated_ob_bear := true
     if not na(current_ob_bear)
         box.delete(current_ob_bear)
         current_ob_bear := na
+
+// Mitigation de la boîte OB "affichage uniquement" (même mécanisme, indépendant de la logique d'entrée)
+if display_ob_bear_active and bar_index > display_ob_bear_start and high >= display_ob_bear_bot
+    display_ob_bear_active := false
+    if not na(display_ob_bear)
+        box.delete(display_ob_bear)
+        display_ob_bear := na
 
 if is_fvg_bull_active and bar_index > current_fvg_bull_m5_start and low <= current_fvg_bull_m5_top
     is_fvg_bull_active := false
