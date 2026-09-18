@@ -32,6 +32,7 @@ atr_floor_mult = input.float(0.5, title="Plancher Stop-Loss (x ATR M5)", minval=
 risk_pct_in   = input.float(1.0, title="Risque par trade (% équité)", minval=0.1, step=0.1, group=grp_radar)
 zone_window_in   = input.int(20, title="Fenêtre de validité contexte H1 (barres M5)", minval=5, maxval=50, group=grp_radar)
 cooldown_bars_in = input.int(10, title="Cooldown entre signaux (barres M5)", minval=1, maxval=50, group=grp_radar)
+fvg_mitigation_mode = input.string("Mèche", title="Mode de mitigation FVG/OB", options=["Mèche", "Corps", "Clôture"], group=grp_radar)
 
 grp_ui        = "Affichage Graphique ICT"
 show_fvg      = input.bool(true, title="Afficher FVG H1", group=grp_ui)
@@ -139,9 +140,10 @@ if ta.change(time("60"))
 in_h1_bull_zone = not h1_bull_consumed and not na(h1_bull_zone_top) and (high >= h1_bull_zone_bot and low <= h1_bull_zone_top)
 in_h1_bear_zone = not h1_bear_consumed and not na(h1_bear_zone_top) and (high >= h1_bear_zone_bot and low <= h1_bear_zone_top)
 
-if not na(h1_bull_zone_bot) and close < h1_bull_zone_bot
+// Invalidation dès que le prix retourne dans la zone (mitigation), cohérent avec la logique OB/FVG M5
+if in_h1_bull_zone
     h1_bull_consumed := true
-if not na(h1_bear_zone_top) and close > h1_bear_zone_top
+if in_h1_bear_zone
     h1_bear_consumed := true
 
 // ==========================================
@@ -194,6 +196,10 @@ if ta.change(time("D", "America/New_York")) and show_levels
 // ==========================================
 atr_val       = ta.atr(14)
 bar_confirmed = barstate.isconfirmed
+
+// --- Sonde de mitigation (Mèche/Corps/Clôture) — doit rester identique à scanner_mtf.pine pour que les deux scripts restent synchronisés ---
+mit_probe_bull = fvg_mitigation_mode == "Mèche" ? low : fvg_mitigation_mode == "Corps" ? math.min(open, close) : close
+mit_probe_bear = fvg_mitigation_mode == "Mèche" ? high : fvg_mitigation_mode == "Corps" ? math.max(open, close) : close
 
 ph = ta.pivothigh(high, 5, 5)
 pl = ta.pivotlow(low, 5, 5)
@@ -366,7 +372,7 @@ mitigated_ob_bear = false
 mitigated_fvg_bull = false
 mitigated_fvg_bear = false
 
-if is_ob_bull_active and bar_index > current_ob_bull_start and low <= current_ob_bull_top
+if is_ob_bull_active and bar_index > current_ob_bull_start and mit_probe_bull <= current_ob_bull_top
     is_ob_bull_active := false
     mitigated_ob_bull := true
     if not na(current_ob_bull)
@@ -374,7 +380,7 @@ if is_ob_bull_active and bar_index > current_ob_bull_start and low <= current_ob
         box.set_right(current_ob_bull, bar_index)
         current_ob_bull := na
 
-if is_ob_bear_active and bar_index > current_ob_bear_start and high >= current_ob_bear_bot
+if is_ob_bear_active and bar_index > current_ob_bear_start and mit_probe_bear >= current_ob_bear_bot
     is_ob_bear_active := false
     mitigated_ob_bear := true
     if not na(current_ob_bear)
@@ -382,7 +388,7 @@ if is_ob_bear_active and bar_index > current_ob_bear_start and high >= current_o
         box.set_right(current_ob_bear, bar_index)
         current_ob_bear := na
 
-if is_fvg_bull_active and bar_index > current_fvg_bull_m5_start and low <= current_fvg_bull_m5_top
+if is_fvg_bull_active and bar_index > current_fvg_bull_m5_start and mit_probe_bull <= current_fvg_bull_m5_top
     is_fvg_bull_active := false
     mitigated_fvg_bull := true
     if not na(current_fvg_bull_m5)
@@ -390,7 +396,7 @@ if is_fvg_bull_active and bar_index > current_fvg_bull_m5_start and low <= curre
         box.set_right(current_fvg_bull_m5, bar_index)
         current_fvg_bull_m5 := na
 
-if is_fvg_bear_active and bar_index > current_fvg_bear_m5_start and high >= current_fvg_bear_m5_bot
+if is_fvg_bear_active and bar_index > current_fvg_bear_m5_start and mit_probe_bear >= current_fvg_bear_m5_bot
     is_fvg_bear_active := false
     mitigated_fvg_bear := true
     if not na(current_fvg_bear_m5)
