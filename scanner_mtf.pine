@@ -534,8 +534,8 @@ if is_fvg_bear_active and bar_index > current_fvg_bear_m5_start and mit_probe_be
         current_fvg_bear_m5 := na
 
 // Mise à jour des zones "extra" en tableau : OB disparaît (comme demandé), FVG passe en gris clair
-f_update_bull_zones(ext_ob_bull_box, ext_ob_bull_top, ext_ob_bull_bot, ext_ob_bull_mit, mit_probe_bull, false, na)
-f_update_bear_zones(ext_ob_bear_box, ext_ob_bear_top, ext_ob_bear_bot, ext_ob_bear_mit, mit_probe_bear, false, na)
+f_update_bull_zones(ext_ob_bull_box, ext_ob_bull_top, ext_ob_bull_bot, ext_ob_bull_mit, mit_probe_bull, false, color(na))
+f_update_bear_zones(ext_ob_bear_box, ext_ob_bear_top, ext_ob_bear_bot, ext_ob_bear_mit, mit_probe_bear, false, color(na))
 f_update_bull_zones(ext_fvg_bull_box, ext_fvg_bull_top, ext_fvg_bull_bot, ext_fvg_bull_mit, mit_probe_bull, true, color.new(color_lux_level, 85))
 f_update_bear_zones(ext_fvg_bear_box, ext_fvg_bear_top, ext_fvg_bear_bot, ext_fvg_bear_mit, mit_probe_bear, true, color.new(color_lux_level, 85))
 
