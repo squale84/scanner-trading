@@ -1429,6 +1429,73 @@
         updateJournalStats();
     }
 
+    // Reconstruit une ligne du journal à partir d'un enregistrement persisté côté serveur
+    // (/api/journal). Ne touche pas au chemin temps réel (appendToLog) : hydratation au
+    // chargement de page uniquement, jamais mêlée aux événements WebSocket live.
+    function renderHistoricalLogRow(row) {
+        const logBody = document.getElementById("log-body");
+        const emptyRow = document.getElementById("log-empty");
+        if (!hasLogRows) { emptyRow.style.display = 'none'; hasLogRows = true; }
+
+        const isExit = row.kind === 'exit';
+        const dir = row.direction;
+        const dirColor = dir === "BUY" ? "var(--accent-green)" : (dir === "SELL" ? "var(--accent-red)" : "var(--text-muted)");
+        const qClass = qualityClass(row.quality);
+        const rowTime = row.time ? new Date(row.time + 'Z').toLocaleTimeString('fr-FR') : '--';
+        const patternStatus = isExit ? (row.entry_status || row.status) : row.status;
+
+        let resultCell = '--';
+        if (isExit && row.r_multiple !== null && row.r_multiple !== undefined) {
+            const r = row.r_multiple;
+            const rColor = r > 0 ? "var(--accent-green)" : (r < 0 ? "var(--accent-red)" : "var(--text-muted)");
+            resultCell = `<span style="color:${rColor}; font-weight:700;">${r >= 0 ? '+' : ''}${r.toFixed(2)}R</span>`;
+        }
+
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+            <td style="color: var(--text-muted);">${rowTime}</td>
+            <td style="font-weight: 700; color: #fff;">${row.symbol}</td>
+            <td style="color: ${dirColor}; font-weight: 700;">${dir || '--'}</td>
+            <td style="color: #cbd5e1;">${setupIctLabel(patternStatus)}</td>
+            <td style="color: var(--text-muted); font-size:10.5px;">${(isExit ? row.session_at_entry : row.session) || '--'}</td>
+            <td>${row.quality && row.quality !== '--' ? `<span class="tag-chip ${qClass}">${row.quality}</span>` : '--'}</td>
+            <td>${row.rr && row.rr !== '0.0' ? row.rr + ':1' : '--'}</td>
+            <td style="color: #fff;">${formatDisplay(row.entry_price)}</td>
+            <td>${resultCell}</td>
+            <td><span class="badge-status ${row.status}">${row.status}</span></td>
+        `;
+        logBody.insertBefore(tr, logBody.firstChild);
+        totalAlerts++;
+    }
+
+    // Hydrate le journal depuis l'historique persisté côté serveur, une seule fois au chargement
+    // de page — avant connectWebSocket(). Les reconnexions WebSocket rejouent market_state en
+    // mode silencieux (voir processData/isSyncing) et ne repassent jamais par ici : pas de doublon.
+    async function hydrateJournalFromServer() {
+        try {
+            const res = await fetch('/api/journal');
+            if (!res.ok) return;
+            const rows = await res.json();
+            if (!Array.isArray(rows) || rows.length === 0) return;
+
+            rows.forEach(row => {
+                renderHistoricalLogRow(row);
+                if (row.kind === 'exit' && row.r_multiple !== null && row.r_multiple !== undefined) {
+                    journalR += row.r_multiple;
+                    journalClosed++;
+                    if (row.r_multiple > 0) journalWins++; else if (row.r_multiple < 0) journalLosses++;
+                    journalTrades.push({ rMultiple: row.r_multiple });
+                }
+            });
+
+            document.getElementById("kpi-total").textContent = totalAlerts;
+            updateJournalStats();
+            recomputePerformancePanel();
+        } catch (e) {
+            console.error('Erreur hydratation journal:', e);
+        }
+    }
+
     /* ===================== TOASTS ===================== */
     function pushToast(sym, data, kind) {
         const stack = document.getElementById('toast-stack');
@@ -2042,7 +2109,7 @@
     loadCalendar();
     setInterval(loadCalendar, 15 * 60 * 1000);
     setInterval(checkUpcomingEvents, 60 * 1000);
-    connectWebSocket();
+    hydrateJournalFromServer().finally(connectWebSocket);
 </script>
 </body>
 </html>

@@ -6,3 +6,5 @@ __pycache__/
 build/
 app/build/
 local.properties
+calendar_cache.json
+journal_history.json

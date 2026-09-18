@@ -8,6 +8,8 @@ import sys
 import asyncio
 import time
 import httpx
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from typing import List
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
@@ -101,6 +103,114 @@ async def get_calendar():
             return _calendar_cache["data"]
         return JSONResponse(status_code=502, content={"error": "Calendrier indisponible"})
 
+# --- Journal de trading (historique persistant, survit au F5 ET aux redéploiements Render) ---
+# La table HTML du journal est reconstruite au chargement de la page à partir de cet historique
+# serveur (voir /api/journal), en plus des mises à jour temps réel par WebSocket. Les deux
+# chemins ne se recoupent jamais : l'hydratation REST n'a lieu qu'une fois au chargement, et le
+# rejeu WebSocket à la reconnexion est déjà "silencieux" côté front (ne touche pas le journal) —
+# donc aucun doublon possible.
+JOURNAL_FILE = os.path.join(os.path.dirname(__file__), "journal_history.json")
+JOURNAL_MAX_ENTRIES = 500
+journal_log: List[dict] = []
+last_entry_by_symbol = {}
+
+def _load_journal_from_disk():
+    global journal_log
+    try:
+        with open(JOURNAL_FILE, "r", encoding="utf-8") as f:
+            journal_log = json.load(f)
+    except Exception:
+        journal_log = []  # pas d'historique disponible (premier démarrage) — normal, pas une erreur
+
+def _save_journal_to_disk():
+    try:
+        with open(JOURNAL_FILE, "w", encoding="utf-8") as f:
+            json.dump(journal_log, f)
+    except Exception as e:
+        print(f"⚠️ Impossible d'écrire le journal sur disque : {e}")
+
+_load_journal_from_disk()
+
+def _session_label_now():
+    ny_hour = datetime.now(ZoneInfo("America/New_York")).hour
+    if 2 <= ny_hour < 5:
+        return "🇬🇧 Londres"
+    if 8 <= ny_hour < 12:
+        return "🇺🇸 NY AM"
+    return "⏱ Hors killzone"
+
+def _parse_num(v):
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+# Miroir exact de computeRMultiple() côté JS (index.html) : la sortie ne contient que le prix
+# courant, pas entry/sl/tp, donc on a besoin de l'entrée mémorisée pour calculer le résultat.
+def _compute_r_multiple(entry, exit_data):
+    if not entry:
+        return None
+    status = exit_data.get("status")
+    if status == "TP_HIT":
+        return _parse_num(entry.get("rr")) or 2
+    if status == "SL_HIT":
+        return -1
+    if status == "EXPIRED":
+        ep = _parse_num(entry.get("entry_price"))
+        slp = _parse_num(entry.get("sl_price"))
+        xp = _parse_num(exit_data.get("current_price"))
+        if ep is None or slp is None or xp is None:
+            return None
+        risk = abs(ep - slp)
+        if risk == 0:
+            return None
+        return (xp - ep) / risk if entry.get("direction") == "BUY" else (ep - xp) / risk
+    return None
+
+def _record_journal_event(symbol, status, direction, data):
+    if status in ("PRICE_UPDATE", "STANDBY", "INFO"):
+        return
+    if direction in ("BUY", "SELL"):
+        entry_record = dict(data)
+        entry_record["session"] = _session_label_now()
+        last_entry_by_symbol[symbol] = entry_record
+        journal_log.append({
+            "kind": "entry",
+            "time": datetime.utcnow().isoformat(),
+            "symbol": symbol,
+            "direction": direction,
+            "status": status,
+            "session": entry_record["session"],
+            "quality": data.get("quality", "--"),
+            "grade": data.get("grade", "--"),
+            "rr": data.get("rr", "0.0"),
+            "entry_price": data.get("entry_price", "--"),
+        })
+    elif status in ("TP_HIT", "SL_HIT", "EXPIRED"):
+        entry = last_entry_by_symbol.get(symbol)
+        journal_log.append({
+            "kind": "exit",
+            "time": datetime.utcnow().isoformat(),
+            "symbol": symbol,
+            "direction": entry.get("direction") if entry else data.get("direction"),
+            "status": status,
+            "entry_status": entry.get("status") if entry else None,
+            "session_at_entry": entry.get("session") if entry else None,
+            "quality": entry.get("quality") if entry else "--",
+            "grade": entry.get("grade") if entry else "--",
+            "rr": entry.get("rr") if entry else "0.0",
+            "entry_price": entry.get("entry_price") if entry else "--",
+            "r_multiple": _compute_r_multiple(entry, data),
+        })
+    else:
+        return
+    del journal_log[: max(0, len(journal_log) - JOURNAL_MAX_ENTRIES)]
+    _save_journal_to_disk()
+
+@app.get("/api/journal")
+async def get_journal():
+    return journal_log
+
 class ConnectionManager:
     def __init__(self):
         self.active_connections: List[WebSocket] = []
@@ -163,6 +273,7 @@ async def receive_webhook(request: Request):
 
     print(f"⚡ [{symbol}] {status} | Dir: {direction} | Entree: {data.get('entry_price')} | SL: {data.get('sl_price')} | TP: {data.get('tp_price')}")
 
+    _record_journal_event(symbol, status, direction, data)
     market_state[symbol] = data
     await manager.broadcast(json.dumps(data))
     return {"status": "success", "symbol": symbol}
