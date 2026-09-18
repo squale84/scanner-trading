@@ -35,7 +35,11 @@ app.add_middleware(
 async def get_index():
     return FileResponse(
         os.path.join(os.path.dirname(__file__), "index.html"),
-        headers={"Cache-Control": "no-cache, no-store, must-revalidate"}
+        headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache",
+            "Expires": "0",
+        }
     )
 
 # Route santé pour ping automatique anti-sommeil Render (UptimeRobot / Cron)
