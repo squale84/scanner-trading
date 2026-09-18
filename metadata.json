@@ -1,0 +1,6 @@
+{
+  "name": "ICT Radar Pro",
+  "description": "Terminal de scan institutionnel ICT / Smart Money Concepts — signaux temps réel, gestion du risque et graphiques.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
