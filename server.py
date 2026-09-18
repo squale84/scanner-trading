@@ -28,9 +28,13 @@ app.add_middleware(
 )
 
 # Sert le dashboard index.html à la racine
+# headers anti-cache : évite qu'un navigateur/proxy serve une version périmée après un déploiement
 @app.get("/")
 async def get_index():
-    return FileResponse(os.path.join(os.path.dirname(__file__), "index.html"))
+    return FileResponse(
+        os.path.join(os.path.dirname(__file__), "index.html"),
+        headers={"Cache-Control": "no-cache, no-store, must-revalidate"}
+    )
 
 # Route santé pour ping automatique anti-sommeil Render (UptimeRobot / Cron)
 @app.get("/health")
