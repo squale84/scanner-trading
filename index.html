@@ -859,12 +859,18 @@
                 <span class="log-title" id="calendar-title">📅 Calendrier économique (semaine en cours, ton fuseau horaire)</span>
                 <span id="calendar-count" style="font-family: var(--font-mono); font-size: 11px; color: var(--text-muted);">Chargement…</span>
             </div>
-            <div style="padding: 10px 18px; display:flex; align-items:center; gap: 10px; border-bottom: 1px solid var(--border-soft); flex-wrap: wrap;">
-                <span style="font-size: 11px; color: var(--text-muted); font-weight: 700;">FILTRER :</span>
-                <button class="filter-btn" id="cal-filter-all" onclick="setCalendarFilter('ALL', this)">TOUS</button>
-                <button class="filter-btn active" id="cal-filter-today" onclick="setCalendarFilter('TODAY', this)">🎯 AUJOURD'HUI</button>
-                <button class="filter-btn" id="cal-filter-high" onclick="setCalendarFilter('High', this)">HIGH</button>
-                <button class="filter-btn" id="cal-filter-medium" onclick="setCalendarFilter('Medium', this)">MEDIUM</button>
+            <div style="padding: 10px 18px; display:flex; align-items:center; gap: 16px; border-bottom: 1px solid var(--border-soft); flex-wrap: wrap;">
+                <div style="display:flex; align-items:center; gap: 8px;">
+                    <span style="font-size: 11px; color: var(--text-muted); font-weight: 700;">PÉRIODE :</span>
+                    <button class="filter-btn" id="cal-day-all" onclick="setCalendarDayFilter('ALL', this)">SEMAINE</button>
+                    <button class="filter-btn active" id="cal-day-today" onclick="setCalendarDayFilter('TODAY', this)">🎯 AUJOURD'HUI</button>
+                </div>
+                <div style="display:flex; align-items:center; gap: 8px;">
+                    <span style="font-size: 11px; color: var(--text-muted); font-weight: 700;">IMPACT :</span>
+                    <button class="filter-btn active" id="cal-impact-all" onclick="setCalendarImpactFilter('ALL', this)">TOUS</button>
+                    <button class="filter-btn" id="cal-impact-high" onclick="setCalendarImpactFilter('High', this)">HIGH</button>
+                    <button class="filter-btn" id="cal-impact-medium" onclick="setCalendarImpactFilter('Medium', this)">MEDIUM</button>
+                </div>
             </div>
             <div style="overflow-x: auto;">
                 <table class="log-table">
@@ -1028,7 +1034,8 @@
     let lastSignalData = {};
     let lastSignalSession = {};
     let calendarData = [];
-    let calendarFilter = 'TODAY';
+    let calendarDayFilter = 'TODAY';
+    let calendarImpactFilter = 'ALL';
     let calendarAlerted = new Set();
     let currentModalSymbol = null;
     let chartAutoOpen = true;
@@ -1811,10 +1818,18 @@
         }
     }
 
-    function setCalendarFilter(impact, btn) {
-        calendarFilter = impact;
-        document.querySelectorAll('#view-calendar .filter-btn').forEach(b => b.classList.remove('active'));
-        btn.classList.add('active');
+    function setCalendarDayFilter(val, btn) {
+        calendarDayFilter = val;
+        document.getElementById('cal-day-all').classList.toggle('active', val === 'ALL');
+        document.getElementById('cal-day-today').classList.toggle('active', val === 'TODAY');
+        renderCalendarTable();
+    }
+
+    function setCalendarImpactFilter(val, btn) {
+        calendarImpactFilter = val;
+        document.getElementById('cal-impact-all').classList.toggle('active', val === 'ALL');
+        document.getElementById('cal-impact-high').classList.toggle('active', val === 'High');
+        document.getElementById('cal-impact-medium').classList.toggle('active', val === 'Medium');
         renderCalendarTable();
     }
 
@@ -1832,9 +1847,9 @@
         const body = document.getElementById('calendar-body');
         const empty = document.getElementById('calendar-empty');
         const filtered = calendarData.filter(ev => {
-            if (calendarFilter === 'ALL') return true;
-            if (calendarFilter === 'TODAY') return isToday(ev.date);
-            return ev.impact === calendarFilter;
+            if (calendarDayFilter === 'TODAY' && !isToday(ev.date)) return false;
+            if (calendarImpactFilter !== 'ALL' && ev.impact !== calendarImpactFilter) return false;
+            return true;
         });
 
         document.getElementById('calendar-count').textContent = `${filtered.length} événement(s)`;
