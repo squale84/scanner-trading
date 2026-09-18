@@ -25,7 +25,7 @@ show_eqh_eql  = input.bool(true, title="Afficher EQH / EQL (Liquidité)", group=
 show_levels   = input.bool(true, title="Afficher PDH / PDL / NY Midnight", group=grp_ui)
 show_risk_zone = input.bool(true, title="Afficher zone SL/TP du trade actif", group=grp_ui)
 ob_filter_dp  = input.bool(false, title="N'afficher que les OB en discount/premium", group=grp_ui)
-show_ote      = input.bool(true, title="Afficher zone OTE (Fibo 61.8%-79%)", group=grp_ui)
+show_ote      = input.bool(false, title="Afficher zone OTE (Fibo 61.8%-79%)", group=grp_ui)
 range_lookback = input.int(100, title="Range Discount/Premium (barres M5)", minval=20, maxval=500, group=grp_ui)
 fvg_mitigation_mode = input.string("Mèche", title="Mode de mitigation FVG/OB", options=["Mèche", "Corps", "Clôture"], group=grp_ui)
 max_zones_in  = input.int(10, title="Nombre max de zones OB/FVG affichées", minval=3, maxval=30, group=grp_ui)
