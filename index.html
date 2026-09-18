@@ -1492,6 +1492,75 @@
         const card = document.getElementById("card-" + sym);
         if (!card) return;
 
+        // 0. MISE À JOUR DE PRIX EN POSITION ACTIVE (PRICE_UPDATE)
+        if (data.status === "PRICE_UPDATE") {
+            const price = document.getElementById("price-" + sym);
+            const bar = document.getElementById("bar-" + sym);
+            const pct = document.getElementById("pct-" + sym);
+
+            if (price && data.current_price !== undefined) {
+                price.textContent = formatDisplay(data.current_price);
+            }
+
+            // Conserver l'entrée, SL, TP, direction et qualité existants
+            const base = lastSignalData[sym] || data;
+            const ep = parseNum(base.entry_price);
+            const tpP = parseNum(base.tp_price);
+            const cp = parseNum(data.current_price);
+            const dir = base.direction || data.direction;
+
+            let progress = 0;
+            if (ep !== null && tpP !== null && cp !== null && dir) {
+                if (dir === "BUY" && tpP > ep) {
+                    progress = Math.max(0, Math.min(100, Math.round(((cp - ep) / (tpP - ep)) * 100)));
+                } else if (dir === "SELL" && ep > tpP) {
+                    progress = Math.max(0, Math.min(100, Math.round(((ep - cp) / (ep - tpP)) * 100)));
+                }
+            }
+            if (bar) bar.style.width = progress + "%";
+            if (pct) pct.textContent = progress + "%";
+
+            // Si rafraîchissement en cours de position, restaurer les repères visuels sans alerte ni journal
+            if (!lastSignalData[sym] && (dir === "BUY" || dir === "SELL")) {
+                card.className = "card " + (dir === "BUY" ? "active-buy" : "active-sell");
+                const badge = document.getElementById("badge-" + sym);
+                if (badge) {
+                    badge.className = "badge-status " + dir;
+                    badge.textContent = dir + " ACTIF";
+                }
+                const resetBtn = document.getElementById("reset-" + sym);
+                if (resetBtn) resetBtn.style.display = "inline-block";
+                const entry = document.getElementById("entry-" + sym);
+                const sl = document.getElementById("sl-" + sym);
+                const tp = document.getElementById("tp-" + sym);
+                const tags = document.getElementById("tags-" + sym);
+                if (entry && data.entry_price !== undefined) entry.textContent = formatDisplay(data.entry_price);
+                if (sl && data.sl_price !== undefined) sl.textContent = formatDisplay(data.sl_price);
+                if (tp && data.tp_price !== undefined) tp.textContent = formatDisplay(data.tp_price);
+                if (tags) {
+                    let html = "";
+                    if (data.quality && data.quality !== "--") html += `<span class="tag-chip ${qualityClass(data.quality)}">GRADE ${data.quality}</span>`;
+                    if (data.grade && data.grade !== "--") html += `<span class="tag-chip stars">${data.grade}</span>`;
+                    if (data.rr && data.rr !== "0.0") html += `<span class="tag-chip">R:R ${data.rr}:1</span>`;
+                    tags.innerHTML = html;
+                }
+                renderPositionSize(sym, data);
+                activePositions.add(sym);
+                updateActiveKpi();
+                lastSignalData[sym] = data;
+            } else if (lastSignalData[sym]) {
+                lastSignalData[sym].current_price = data.current_price;
+            }
+
+            marketCache[sym] = data;
+
+            // Mettre à jour la fenêtre graphique si elle est ouverte
+            if (currentModalSymbol === sym) {
+                updateModalSidePanel(sym);
+            }
+            return;
+        }
+
         marketCache[sym] = data;
 
         // 1. STANDBY
@@ -1664,13 +1733,18 @@
         }
 
         const isExit = data.status === 'TP_HIT' || data.status === 'SL_HIT' || data.status === 'EXPIRED';
+        const isPriceUpdate = data.status === 'PRICE_UPDATE';
         // Le payload de sortie renvoie entry/sl/tp à "0.0" : on réutilise le dernier signal d'entrée connu pour l'affichage.
-        const ref = isExit && lastSignalData[sym] ? lastSignalData[sym] : data;
+        const ref = (isExit || isPriceUpdate) && lastSignalData[sym] ? lastSignalData[sym] : data;
 
-        badge.className = 'badge-status ' + (isExit ? data.status : (data.direction || ''));
-        badge.textContent = isExit ? (data.status === 'TP_HIT' ? 'TP TOUCHÉ' : (data.status === 'SL_HIT' ? 'SL TOUCHÉ' : 'EXPIRÉ')) : (data.status || data.direction || '--');
+        const displayStatus = isPriceUpdate
+            ? (ref.status && ref.status !== 'PRICE_UPDATE' ? ref.status : (ref.direction ? ref.direction + ' ACTIF' : '--'))
+            : (isExit ? (data.status === 'TP_HIT' ? 'TP TOUCHÉ' : (data.status === 'SL_HIT' ? 'SL TOUCHÉ' : 'EXPIRÉ')) : (data.status || data.direction || '--'));
 
-        document.getElementById('ms-status').textContent = data.status || '--';
+        badge.className = 'badge-status ' + (isExit ? data.status : (ref.direction || data.direction || ''));
+        badge.textContent = displayStatus;
+
+        document.getElementById('ms-status').textContent = displayStatus;
         document.getElementById('ms-quality').textContent = ref.quality && ref.quality !== '--' ? `${ref.quality} ${ref.grade || ''}` : '--';
         document.getElementById('ms-rr').textContent = ref.rr && ref.rr !== '0.0' ? ref.rr + ':1' : '--';
         document.getElementById('ms-entry').textContent = formatDisplay(ref.entry_price);
