@@ -48,9 +48,32 @@ async def health_check():
     return {"status": "alive", "connections": len(manager.active_connections)}
 
 # --- Calendrier économique (source gratuite, sans clé API : flux FairEconomy/ForexFactory) ---
+# Cache persisté sur disque (en plus de la mémoire) : un redéploiement Render (déclenché par
+# n'importe quel push, même sans rapport) efface la mémoire du process. Sans persistance sur
+# disque, un redémarrage pile au moment où la source bloque/rate-limite Render laisse le
+# calendrier vide côté site, sans aucun secours.
 CALENDAR_URL = "https://nfs.faireconomy.media/ff_calendar_thisweek.json"
 CALENDAR_CACHE_TTL = 900  # 15 minutes : on évite de solliciter la source gratuite à chaque requête
+CALENDAR_CACHE_FILE = os.path.join(os.path.dirname(__file__), "calendar_cache.json")
 _calendar_cache = {"data": None, "fetched_at": 0.0}
+
+def _load_calendar_cache_from_disk():
+    try:
+        with open(CALENDAR_CACHE_FILE, "r", encoding="utf-8") as f:
+            saved = json.load(f)
+        _calendar_cache["data"] = saved.get("data")
+        _calendar_cache["fetched_at"] = saved.get("fetched_at", 0.0)
+    except Exception:
+        pass  # pas de cache disque disponible (premier démarrage) — normal, pas une erreur
+
+def _save_calendar_cache_to_disk():
+    try:
+        with open(CALENDAR_CACHE_FILE, "w", encoding="utf-8") as f:
+            json.dump(_calendar_cache, f)
+    except Exception as e:
+        print(f"⚠️ Impossible d'écrire le cache calendrier sur disque : {e}")
+
+_load_calendar_cache_from_disk()
 
 @app.get("/api/calendar")
 async def get_calendar():
@@ -68,10 +91,13 @@ async def get_calendar():
             data = resp.json()
             _calendar_cache["data"] = data
             _calendar_cache["fetched_at"] = now
+            _save_calendar_cache_to_disk()
             return data
     except Exception as e:
         print(f"⚠️ Erreur récupération calendrier économique : {e}")
         if _calendar_cache["data"] is not None:
+            # On sert le cache existant même périmé (mieux qu'une page vide), qu'il vienne
+            # de cette session ou qu'il ait été rechargé depuis le disque au démarrage.
             return _calendar_cache["data"]
         return JSONResponse(status_code=502, content={"error": "Calendrier indisponible"})
 
