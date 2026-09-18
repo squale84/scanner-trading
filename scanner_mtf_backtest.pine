@@ -405,176 +405,8 @@ if is_fvg_bear_active and bar_index > current_fvg_bear_m5_start and mit_probe_be
         current_fvg_bear_m5 := na
 
 // ==========================================
-// 4. LOGIQUE CAUSALE ICT 2022 (MACHINE D'ETATS) & ENTREE
+// 4. LOGIQUE D'ENTRÉE & CONSOMMATION DES ZONES
 // ==========================================
-// États de la séquence ICT 2022 :
-// IDLE -> SWEEP_ARMED -> MSS_CONFIRMED -> CAUSAL_FVG_CONFIRMED -> WAIT_RETEST -> READY -> RESET
-int STATE_IDLE                = 0
-int STATE_SWEEP_ARMED         = 1
-int STATE_MSS_CONFIRMED       = 2
-int STATE_CAUSAL_FVG_CONFIRMED = 3
-int STATE_WAIT_RETEST         = 4
-int STATE_READY               = 5
-
-// --- Machine d'état BUY (Long) ---
-var int   buy_state            = STATE_IDLE
-var int   buy_sweep_bar        = na
-var float buy_sweep_low        = na
-var float buy_mss_level        = na
-var int   buy_displacement_bar = na
-var float buy_fvg_top          = na
-var float buy_fvg_bottom       = na
-var int   buy_fvg_bar          = na
-
-// --- Machine d'état SELL (Short) ---
-var int   sell_state            = STATE_IDLE
-var int   sell_sweep_bar        = na
-var float sell_sweep_high       = na
-var float sell_mss_level        = na
-var int   sell_displacement_bar = na
-var float sell_fvg_top          = na
-var float sell_fvg_bottom       = na
-var int   sell_fvg_bar          = na
-
-// Définition quantitative du Displacement (M5)
-// Référence ATR : atr_val[1]
-disp_body_ratio = c_range > 0 ? (c_body / c_range) : 0.0
-is_disp_quant   = (disp_body_ratio >= 0.65) and (c_body >= 1.25 * atr_val[1])
-
-// Timeouts maximaux (en barres M5)
-MAX_BARS_SWEEP_TO_MSS = 12
-MAX_BARS_FVG_TO_RETEST = 20
-
-// -------------------------------------------------------------
-// ÉVOLUTION MACHINE D'ÉTATS : BUY
-// -------------------------------------------------------------
-// 1. Resets / Invalidations BUY
-if buy_state != STATE_IDLE
-    // Invalidation par nouveau plus bas sous le low du sweep
-    if not na(buy_sweep_low) and low < buy_sweep_low
-        buy_state := STATE_IDLE
-    // Invalidation si sweep opposé (BSL) plus récent
-    else if sweep_h
-        buy_state := STATE_IDLE
-    // Timeout Sweep -> MSS (max 12 barres)
-    else if buy_state == STATE_SWEEP_ARMED and (bar_index - buy_sweep_bar > MAX_BARS_SWEEP_TO_MSS)
-        buy_state := STATE_IDLE
-    // Violation FVG causale (clôture sous le bas de la FVG causale avant exécution)
-    else if (buy_state == STATE_CAUSAL_FVG_CONFIRMED or buy_state == STATE_WAIT_RETEST) and close < buy_fvg_bottom
-        buy_state := STATE_IDLE
-    // Timeout FVG -> Retest (max 20 barres)
-    else if buy_state == STATE_WAIT_RETEST and (bar_index - buy_fvg_bar > MAX_BARS_FVG_TO_RETEST)
-        buy_state := STATE_IDLE
-
-// 2. Transitions BUY
-if buy_state == STATE_IDLE
-    // Condition de départ : Sweep de Sell-Side Liquidity (SSL)
-    if sweep_l
-        buy_state            := STATE_SWEEP_ARMED
-        buy_sweep_bar        := bar_index
-        buy_sweep_low        := low
-        buy_mss_level        := last_ph
-        buy_displacement_bar := na
-        buy_fvg_top          := na
-        buy_fvg_bottom       := na
-        buy_fvg_bar          := na
-else if buy_state == STATE_SWEEP_ARMED
-    // Si un nouveau sweep de même direction survient avant MSS : réarmer avec le sweep le plus récent
-    if sweep_l
-        buy_sweep_bar := bar_index
-        buy_sweep_low := low
-        buy_mss_level := last_ph
-    // Recherche du Displacement + MSS haussier cassant buy_mss_level
-    else if bar_confirmed and not na(buy_mss_level) and close > buy_mss_level and close > open and is_disp_quant
-        buy_state            := STATE_MSS_CONFIRMED
-        buy_displacement_bar := bar_index
-else if buy_state == STATE_MSS_CONFIRMED
-    // La FVG causale 3 bougies a la bougie de displacement comme bougie centrale (bar_index - 1)
-    // À bar_index (bougie 3 fermée), la condition FVG haussière 3 bougies est: low > high[2]
-    if bar_index == buy_displacement_bar + 1 and bar_confirmed
-        has_causal_fvg = (low > high[2]) and ((low - high[2]) >= atr_val[1] * 0.15)
-        if has_causal_fvg
-            buy_fvg_top    := low
-            buy_fvg_bottom := high[2]
-            buy_fvg_bar    := bar_index
-            buy_state      := STATE_CAUSAL_FVG_CONFIRMED
-        else
-            buy_state := STATE_IDLE // Pas de FVG causale créée par le displacement -> Reset
-    else if bar_index > buy_displacement_bar + 1
-        buy_state := STATE_IDLE
-else if buy_state == STATE_CAUSAL_FVG_CONFIRMED
-    // Passage formel dans l'attente du retest
-    buy_state := STATE_WAIT_RETEST
-else if buy_state == STATE_WAIT_RETEST
-    // Retest causal : le prix pénètre la FVG causale sans clôturer en dessous
-    if mit_probe_bull <= buy_fvg_top and close >= buy_fvg_bottom
-        buy_state := STATE_READY
-
-// -------------------------------------------------------------
-// ÉVOLUTION MACHINE D'ÉTATS : SELL
-// -------------------------------------------------------------
-// 1. Resets / Invalidations SELL
-if sell_state != STATE_IDLE
-    // Invalidation par nouveau plus haut au-dessus du high du sweep
-    if not na(sell_sweep_high) and high > sell_sweep_high
-        sell_state := STATE_IDLE
-    // Invalidation si sweep opposé (SSL) plus récent
-    else if sweep_l
-        sell_state := STATE_IDLE
-    // Timeout Sweep -> MSS (max 12 barres)
-    else if sell_state == STATE_SWEEP_ARMED and (bar_index - sell_sweep_bar > MAX_BARS_SWEEP_TO_MSS)
-        sell_state := STATE_IDLE
-    // Violation FVG causale (clôture au-dessus du haut de la FVG causale avant exécution)
-    else if (sell_state == STATE_CAUSAL_FVG_CONFIRMED or sell_state == STATE_WAIT_RETEST) and close > sell_fvg_top
-        sell_state := STATE_IDLE
-    // Timeout FVG -> Retest (max 20 barres)
-    else if sell_state == STATE_WAIT_RETEST and (bar_index - sell_fvg_bar > MAX_BARS_FVG_TO_RETEST)
-        sell_state := STATE_IDLE
-
-// 2. Transitions SELL
-if sell_state == STATE_IDLE
-    // Condition de départ : Sweep de Buy-Side Liquidity (BSL)
-    if sweep_h
-        sell_state            := STATE_SWEEP_ARMED
-        sell_sweep_bar        := bar_index
-        sell_sweep_high       := high
-        sell_mss_level        := last_pl
-        sell_displacement_bar := na
-        sell_fvg_top          := na
-        sell_fvg_bottom       := na
-        sell_fvg_bar          := na
-else if sell_state == STATE_SWEEP_ARMED
-    // Si un nouveau sweep de même direction survient avant MSS : réarmer avec le sweep le plus récent
-    if sweep_h
-        sell_sweep_bar := bar_index
-        sell_sweep_high := high
-        sell_mss_level := last_pl
-    // Recherche du Displacement + MSS baissier cassant sell_mss_level
-    else if bar_confirmed and not na(sell_mss_level) and close < sell_mss_level and close < open and is_disp_quant
-        sell_state            := STATE_MSS_CONFIRMED
-        sell_displacement_bar := bar_index
-else if sell_state == STATE_MSS_CONFIRMED
-    // La FVG causale 3 bougies a la bougie de displacement comme bougie centrale (bar_index - 1)
-    // À bar_index (bougie 3 fermée), la condition FVG baissière 3 bougies est: high < low[2]
-    if bar_index == sell_displacement_bar + 1 and bar_confirmed
-        has_causal_fvg = (high < low[2]) and ((low[2] - high) >= atr_val[1] * 0.15)
-        if has_causal_fvg
-            sell_fvg_top    := low[2]
-            sell_fvg_bottom := high
-            sell_fvg_bar    := bar_index
-            sell_state      := STATE_CAUSAL_FVG_CONFIRMED
-        else
-            sell_state := STATE_IDLE // Pas de FVG causale créée par le displacement -> Reset
-    else if bar_index > sell_displacement_bar + 1
-        sell_state := STATE_IDLE
-else if sell_state == STATE_CAUSAL_FVG_CONFIRMED
-    // Passage formel dans l'attente du retest
-    sell_state := STATE_WAIT_RETEST
-else if sell_state == STATE_WAIT_RETEST
-    // Retest causal : le prix pénètre la FVG causale sans clôturer au-dessus
-    if mit_probe_bear >= sell_fvg_bottom and close <= sell_fvg_top
-        sell_state := STATE_READY
-
 var bool   in_pos       = false
 var float  pos_entry    = 0.0
 var float  pos_sl       = 0.0
@@ -584,13 +416,14 @@ var int    last_sig_bar = 0
 
 cooldown_ok = na(last_sig_bar) or (bar_index - last_sig_bar > cooldown_bars_in)
 
-// Déclencheurs de signal alimentés STRICTEMENT par la séquence causale ICT 2022
-// BUY/SELL mutuellement exclusifs à l'exécution
-cand_buy  = trade_window and not in_pos and cooldown_ok and bar_confirmed and (buy_state == STATE_READY)
-cand_sell = trade_window and not in_pos and cooldown_ok and bar_confirmed and (sell_state == STATE_READY)
+setup_mtf_buy  = tested_h1_bull and (mitigated_fvg_bull or mitigated_ob_bull)
+setup_mtf_sell = tested_h1_bear and (mitigated_fvg_bear or mitigated_ob_bear)
 
-raw_buy  = cand_buy and not cand_sell
-raw_sell = cand_sell and not cand_buy
+setup_ict_buy  = h1_bias_bull and not na(ta.barssince(sweep_l)) and ta.barssince(sweep_l) <= zone_window_in and (mitigated_fvg_bull or mitigated_ob_bull)
+setup_ict_sell = h1_bias_bear and not na(ta.barssince(sweep_h)) and ta.barssince(sweep_h) <= zone_window_in and (mitigated_fvg_bear or mitigated_ob_bear)
+
+raw_buy  = trade_window and not in_pos and cooldown_ok and bar_confirmed and (setup_mtf_buy or setup_ict_buy)
+raw_sell = trade_window and not in_pos and cooldown_ok and bar_confirmed and (setup_mtf_sell or setup_ict_sell)
 
 calc_score(is_mtf) =>
     score = is_mtf ? 3 : 2
@@ -600,15 +433,15 @@ calc_score(is_mtf) =>
 
 // ---- ENTREE LONG (remplace l'alert() par un vrai ordre pour le backtest) ----
 if raw_buy
-    [score, grade_txt, stars_txt] = calc_score(tested_h1_bull)
+    [score, grade_txt, stars_txt] = calc_score(setup_mtf_buy)
     grade_ok = (min_grade_in == "B") or (min_grade_in == "A" and score >= 2) or (min_grade_in == "A+" and score == 3)
 
     if grade_ok
-        setup_name   = tested_h1_bull ? "MTF FVG BUY" : "ICT 2022 BUY"
+        setup_name   = setup_mtf_buy ? "MTF FVG BUY" : "ICT 2022 BUY"
         pos_entry    := close
-        
-        // SL Structurel ancré sur le bas du sweep d'origine, plafonné/planché par ATR M5
-        raw_sl       = not na(buy_sweep_low) ? (buy_sweep_low - syminfo.mintick * 10) : (ta.lowest(low, 15) - syminfo.mintick * 10)
+        // SL plafonné par l'ATR M5 pour éviter un risque démesuré si le plus bas
+        // des 15 dernières bougies a été étiré par un spike de volatilité.
+        raw_sl       = ta.lowest(low, 15) - syminfo.mintick * 10
         raw_risk     = pos_entry - raw_sl
         risk         = math.max(math.min(raw_risk, atr_val * atr_cap_mult), atr_val * atr_floor_mult)
         pos_sl       := pos_entry - risk
@@ -616,9 +449,6 @@ if raw_buy
         pos_dir      := "BUY"
         in_pos       := true
         last_sig_bar := bar_index
-
-        // Reset de la machine d'état après entrée exécutée
-        buy_state := STATE_IDLE
 
         h1_bull_consumed := true
 
@@ -632,15 +462,15 @@ if raw_buy
 
 // ---- ENTREE SHORT (remplace l'alert() par un vrai ordre pour le backtest) ----
 if raw_sell
-    [score, grade_txt, stars_txt] = calc_score(tested_h1_bear)
+    [score, grade_txt, stars_txt] = calc_score(setup_mtf_sell)
     grade_ok = (min_grade_in == "B") or (min_grade_in == "A" and score >= 2) or (min_grade_in == "A+" and score == 3)
 
     if grade_ok
-        setup_name   = tested_h1_bear ? "MTF FVG SELL" : "ICT 2022 SELL"
+        setup_name   = setup_mtf_sell ? "MTF FVG SELL" : "ICT 2022 SELL"
         pos_entry    := close
-        
-        // SL Structurel ancré sur le haut du sweep d'origine, plafonné/planché par ATR M5
-        raw_sl       = not na(sell_sweep_high) ? (sell_sweep_high + syminfo.mintick * 10) : (ta.highest(high, 15) + syminfo.mintick * 10)
+        // SL plafonné par l'ATR M5 pour éviter un risque démesuré si le plus haut
+        // des 15 dernières bougies a été étiré par un spike de volatilité.
+        raw_sl       = ta.highest(high, 15) + syminfo.mintick * 10
         raw_risk     = raw_sl - pos_entry
         risk         = math.max(math.min(raw_risk, atr_val * atr_cap_mult), atr_val * atr_floor_mult)
         pos_sl       := pos_entry + risk
@@ -648,9 +478,6 @@ if raw_sell
         pos_dir      := "SELL"
         in_pos       := true
         last_sig_bar := bar_index
-
-        // Reset de la machine d'état après entrée exécutée
-        sell_state := STATE_IDLE
 
         h1_bear_consumed := true
 

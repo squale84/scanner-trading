@@ -1034,6 +1034,7 @@
     let lastSignalData = {};
     let lastSignalSession = {};
     let calendarData = [];
+    let isCalendarCached = false;
     let calendarDayFilter = 'TODAY';
     let calendarImpactFilter = 'ALL';
     let calendarAlerted = new Set();
@@ -1802,19 +1803,62 @@
     }
 
     /* ===================== CALENDRIER ÉCONOMIQUE ===================== */
+    function initCalendarCache() {
+        try {
+            const raw = localStorage.getItem('ictRadarCalendarCache');
+            if (raw) {
+                const parsed = JSON.parse(raw);
+                if (Array.isArray(parsed) && parsed.length > 0) {
+                    calendarData = parsed;
+                    calendarData.sort((a, b) => new Date(a.date) - new Date(b.date));
+                    isCalendarCached = true;
+                    renderCalendarTable();
+                    checkUpcomingEvents();
+                }
+            }
+        } catch (e) {
+            console.warn('Erreur lecture cache local calendrier:', e);
+        }
+    }
+
     async function loadCalendar() {
         try {
             const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'ton fuseau';
-            document.getElementById('calendar-title').textContent = `📅 Calendrier économique (semaine en cours, ${tz})`;
+            const titleEl = document.getElementById('calendar-title');
+            if (titleEl) titleEl.textContent = `📅 Calendrier économique (semaine en cours, ${tz})`;
+
             const res = await fetch('/api/calendar');
+            if (!res.ok) {
+                throw new Error(`HTTP ${res.status}`);
+            }
             const data = await res.json();
-            calendarData = Array.isArray(data) ? data : [];
+            if (!Array.isArray(data)) {
+                throw new Error(data && data.error ? data.error : 'Format calendrier invalide');
+            }
+
+            calendarData = data;
             calendarData.sort((a, b) => new Date(a.date) - new Date(b.date));
+            isCalendarCached = false;
+            try {
+                localStorage.setItem('ictRadarCalendarCache', JSON.stringify(calendarData));
+            } catch (e) {}
+
             renderCalendarTable();
             checkUpcomingEvents();
         } catch (e) {
-            document.getElementById('calendar-count').textContent = 'Erreur de chargement';
             console.error('Erreur calendrier:', e);
+            if (calendarData && calendarData.length > 0) {
+                isCalendarCached = true;
+                renderCalendarTable();
+            } else {
+                const countEl = document.getElementById('calendar-count');
+                if (countEl) countEl.textContent = 'Erreur de chargement';
+                const emptyEl = document.getElementById('calendar-empty');
+                if (emptyEl) {
+                    emptyEl.style.display = 'block';
+                    emptyEl.textContent = 'Impossible de charger le calendrier.';
+                }
+            }
         }
     }
 
@@ -1846,18 +1890,20 @@
     function renderCalendarTable() {
         const body = document.getElementById('calendar-body');
         const empty = document.getElementById('calendar-empty');
+        const countEl = document.getElementById('calendar-count');
         const filtered = calendarData.filter(ev => {
             if (calendarDayFilter === 'TODAY' && !isToday(ev.date)) return false;
             if (calendarImpactFilter !== 'ALL' && ev.impact !== calendarImpactFilter) return false;
             return true;
         });
 
-        document.getElementById('calendar-count').textContent = `${filtered.length} événement(s)`;
+        const cacheTag = isCalendarCached ? ' · Données en cache' : '';
+        if (countEl) countEl.textContent = `${filtered.length} événement(s)${cacheTag}`;
 
         if (filtered.length === 0) {
             body.innerHTML = '';
             empty.style.display = 'block';
-            empty.textContent = 'Aucun événement pour ce filtre.';
+            empty.textContent = isCalendarCached ? 'Aucun événement pour ce filtre (données en cache).' : 'Aucun événement pour ce filtre.';
             return;
         }
         empty.style.display = 'none';
@@ -1914,6 +1960,7 @@
 
     loadPortfolioVal();
     recomputePerformancePanel();
+    initCalendarCache();
     try {
         const savedView = localStorage.getItem('ictRadarView');
         if (savedView === 'journal' || savedView === 'calendar') switchView(savedView);
