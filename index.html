@@ -734,6 +734,55 @@
         <div class="grid" id="grid-crypto"></div>
     </div>
 
+    <!-- SECTION 2.5 : PERFORMANCE -->
+    <div class="section-container" style="margin-top: 8px;">
+        <div class="section-header">
+            <div class="section-tag" style="background: var(--accent-purple-soft); color: var(--accent-purple); border:1px solid rgba(169,123,255,0.25);"><span>📊 PERFORMANCE DU JOURNAL</span></div>
+        </div>
+        <div class="analytics-bar" style="margin-bottom: 10px;">
+            <div class="metric-tile">
+                <div><div class="metric-label">Trades gagnants</div><div class="metric-val" id="perf-wins" style="color:var(--accent-green);">0</div></div>
+                <div class="metric-icon">✅</div>
+            </div>
+            <div class="metric-tile">
+                <div><div class="metric-label">Trades perdants</div><div class="metric-val" id="perf-losses" style="color:var(--accent-red);">0</div></div>
+                <div class="metric-icon">❌</div>
+            </div>
+            <div class="metric-tile">
+                <div><div class="metric-label">Win Rate</div><div class="metric-val" id="perf-winrate">--</div></div>
+                <div class="metric-icon">🎯</div>
+            </div>
+            <div class="metric-tile">
+                <div><div class="metric-label">Profit Factor</div><div class="metric-val" id="perf-pf">--</div></div>
+                <div class="metric-icon">⚖️</div>
+            </div>
+            <div class="metric-tile">
+                <div><div class="metric-label">R Total</div><div class="metric-val" id="perf-rtotal">0.00R</div></div>
+                <div class="metric-icon">📈</div>
+            </div>
+        </div>
+        <div class="analytics-bar">
+            <div class="metric-tile">
+                <div>
+                    <div class="metric-label">Taille portefeuille</div>
+                    <div style="display:flex; align-items:center; gap:4px; margin-top:3px;">
+                        <input type="number" id="portfolio-val" value="10000" step="100" min="0" oninput="onPortfolioChange()" style="width:90px; background:var(--bg-inset); border:1px solid var(--border-color); border-radius:6px; color:#fff; font-family:var(--font-mono); font-size:15px; padding:3px 6px;">
+                        <span style="font-size:13px;color:var(--text-muted);">€</span>
+                    </div>
+                </div>
+                <div class="metric-icon">💼</div>
+            </div>
+            <div class="metric-tile">
+                <div><div class="metric-label">P&amp;L cumulé</div><div class="metric-val" id="perf-pnl-eur">0.00 €</div></div>
+                <div class="metric-icon">💶</div>
+            </div>
+            <div class="metric-tile">
+                <div><div class="metric-label">Solde actuel</div><div class="metric-val" id="perf-balance" style="color:var(--accent-gold);">10 000.00 €</div></div>
+                <div class="metric-icon">🏦</div>
+            </div>
+        </div>
+    </div>
+
     <!-- SECTION 3 : LOG -->
     <div class="log-section">
         <div class="log-header">
@@ -909,6 +958,53 @@
     let journalWins = 0;
     let journalLosses = 0;
     let journalClosed = 0;
+    let journalTrades = []; // { rMultiple } par trade clôturé, pour recalculer le PF/€ si le risque change
+
+    /* ===================== PANNEAU PERFORMANCE (Gains/Pertes, Profit Factor, Portefeuille) ===================== */
+    function loadPortfolioVal() {
+        try {
+            const saved = localStorage.getItem('ictRadarPortfolioVal');
+            if (saved !== null) document.getElementById('portfolio-val').value = saved;
+        } catch (e) { /* localStorage indisponible (mode privé, etc.) — on garde la valeur par défaut */ }
+    }
+
+    function onPortfolioChange() {
+        try { localStorage.setItem('ictRadarPortfolioVal', document.getElementById('portfolio-val').value); } catch (e) {}
+        recomputePerformancePanel();
+    }
+
+    function recomputePerformancePanel() {
+        const riskVal = parseNum(document.getElementById('risk-val').value) || 0;
+        const portfolioVal = parseNum(document.getElementById('portfolio-val').value) || 0;
+
+        let grossWinR = 0, grossLossR = 0;
+        journalTrades.forEach(t => {
+            if (t.rMultiple > 0) grossWinR += t.rMultiple;
+            else if (t.rMultiple < 0) grossLossR += Math.abs(t.rMultiple);
+        });
+
+        document.getElementById('perf-wins').textContent = journalWins;
+        document.getElementById('perf-losses').textContent = journalLosses;
+        document.getElementById('perf-winrate').textContent = journalClosed === 0 ? '--' : Math.round((journalWins / journalClosed) * 100) + '%';
+
+        let pfTxt = '--';
+        if (grossLossR > 0) pfTxt = (grossWinR / grossLossR).toFixed(2);
+        else if (grossWinR > 0) pfTxt = '∞';
+        document.getElementById('perf-pf').textContent = pfTxt;
+
+        const rTxt = (journalR >= 0 ? '+' : '') + journalR.toFixed(2) + 'R';
+        document.getElementById('perf-rtotal').textContent = rTxt;
+        document.getElementById('perf-rtotal').style.color = journalR > 0 ? 'var(--accent-green)' : (journalR < 0 ? 'var(--accent-red)' : '#fff');
+
+        const pnlEur = journalR * riskVal;
+        const pnlTxt = (pnlEur >= 0 ? '+' : '') + pnlEur.toLocaleString('fr-FR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' €';
+        const pnlEl = document.getElementById('perf-pnl-eur');
+        pnlEl.textContent = pnlTxt;
+        pnlEl.style.color = pnlEur > 0 ? 'var(--accent-green)' : (pnlEur < 0 ? 'var(--accent-red)' : '#fff');
+
+        const balance = portfolioVal + pnlEur;
+        document.getElementById('perf-balance').textContent = balance.toLocaleString('fr-FR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' €';
+    }
 
     /* ===================== JOURNAL DE TRADING ===================== */
     // Traduit le nom de setup envoyé par le script Pine en vocabulaire ICT lisible.
@@ -1118,6 +1214,7 @@
             if (data) renderPositionSize(sym, data);
         });
         if (currentModalSymbol) updateModalSidePanel(currentModalSymbol);
+        recomputePerformancePanel();
     }
 
     function renderPositionSize(sym, data) {
@@ -1259,6 +1356,8 @@
                     journalR += rMultiple;
                     journalClosed++;
                     if (rMultiple > 0) journalWins++; else if (rMultiple < 0) journalLosses++;
+                    journalTrades.push({ rMultiple });
+                    recomputePerformancePanel();
                 }
             }
             appendToLog(data, logOpts);
@@ -1501,6 +1600,7 @@
     }
 
     /* ===================== TEST SIGNAL ===================== */
+    // Simule un cycle complet entrée + sortie (pour tester le journal et le panneau performance en un clic)
     function simulateSignal() {
         const list = ["GOLD", "US100", "BTCUSD", "ETHUSD"];
         const sym = list[Math.floor(Math.random() * list.length)];
@@ -1511,10 +1611,11 @@
         const sl = isBuy ? base - 10 : base + 10;
         const tp = isBuy ? base + 20 : base - 20;
         const grade = Math.random() > 0.5 ? "A+" : "A";
+        const setupType = Math.random() > 0.5 ? "SSL SWEEP" : (Math.random() > 0.5 ? "BSL SWEEP" : "RETEST");
 
         processData({
             symbol: sym,
-            status: isBuy ? "TURTLE SOUP BUY" : "2022 MODEL SELL",
+            status: setupType,
             direction: dir,
             quality: grade,
             grade: grade === "A+" ? "★★★★★" : "★★★★☆",
@@ -1522,10 +1623,29 @@
             entry_price: entry,
             sl_price: sl,
             tp_price: tp,
-            current_price: isBuy ? entry + 6 : entry - 6
+            current_price: entry
         });
+
+        // Sortie simulée (aléatoire TP/SL) après quelques secondes, pour voir le journal + le panneau performance se mettre à jour
+        setTimeout(() => {
+            const isWin = Math.random() > 0.45;
+            processData({
+                symbol: sym,
+                status: isWin ? "TP_HIT" : "SL_HIT",
+                direction: "NONE",
+                quality: "--",
+                grade: "--",
+                entry_price: "0.0",
+                sl_price: "0.0",
+                tp_price: "0.0",
+                current_price: isWin ? tp : sl,
+                rr: "0.0"
+            });
+        }, 4000);
     }
 
+    loadPortfolioVal();
+    recomputePerformancePanel();
     connectWebSocket();
 </script>
 </body>
