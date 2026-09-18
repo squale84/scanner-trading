@@ -54,7 +54,11 @@ async def get_calendar():
     if _calendar_cache["data"] is not None and (now - _calendar_cache["fetched_at"]) < CALENDAR_CACHE_TTL:
         return _calendar_cache["data"]
     try:
-        async with httpx.AsyncClient(timeout=10) as client:
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+            "Accept": "application/json, text/plain, */*",
+        }
+        async with httpx.AsyncClient(timeout=20, headers=headers, follow_redirects=True) as client:
             resp = await client.get(CALENDAR_URL)
             resp.raise_for_status()
             data = resp.json()
