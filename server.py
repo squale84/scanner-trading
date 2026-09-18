@@ -6,6 +6,8 @@ import json
 import os
 import sys
 import asyncio
+import time
+import httpx
 from typing import List
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
@@ -40,6 +42,30 @@ async def get_index():
 @app.get("/health")
 async def health_check():
     return {"status": "alive", "connections": len(manager.active_connections)}
+
+# --- Calendrier économique (source gratuite, sans clé API : flux FairEconomy/ForexFactory) ---
+CALENDAR_URL = "https://nfs.faireconomy.media/ff_calendar_thisweek.json"
+CALENDAR_CACHE_TTL = 900  # 15 minutes : on évite de solliciter la source gratuite à chaque requête
+_calendar_cache = {"data": None, "fetched_at": 0.0}
+
+@app.get("/api/calendar")
+async def get_calendar():
+    now = time.time()
+    if _calendar_cache["data"] is not None and (now - _calendar_cache["fetched_at"]) < CALENDAR_CACHE_TTL:
+        return _calendar_cache["data"]
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(CALENDAR_URL)
+            resp.raise_for_status()
+            data = resp.json()
+            _calendar_cache["data"] = data
+            _calendar_cache["fetched_at"] = now
+            return data
+    except Exception as e:
+        print(f"⚠️ Erreur récupération calendrier économique : {e}")
+        if _calendar_cache["data"] is not None:
+            return _calendar_cache["data"]
+        return JSONResponse(status_code=502, content={"error": "Calendrier indisponible"})
 
 class ConnectionManager:
     def __init__(self):

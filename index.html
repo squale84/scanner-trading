@@ -141,6 +141,16 @@
     .view-tab:hover { color: var(--text-main); }
     .view-tab.active { color: var(--accent-blue); border-bottom-color: var(--accent-blue); }
 
+    .impact-badge {
+        display: inline-block; padding: 3px 9px; border-radius: 6px;
+        font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px;
+    }
+    .impact-High { background: var(--accent-red-soft); color: var(--accent-red); }
+    .impact-Medium { background: var(--accent-gold-soft); color: var(--accent-gold); }
+    .impact-Low { background: var(--bg-inset); color: var(--text-faint); }
+    .calendar-row-soon { background: rgba(255, 199, 60, 0.06); }
+    .calendar-row-now { background: rgba(255, 69, 105, 0.1); }
+
     .system-pill {
         display: flex;
         align-items: center;
@@ -668,6 +678,7 @@
 <nav class="view-tabs">
     <button class="view-tab active" id="tab-scanner" onclick="switchView('scanner')">🖥️ Scanner</button>
     <button class="view-tab" id="tab-journal" onclick="switchView('journal')">📔 Journal de Trading</button>
+    <button class="view-tab" id="tab-calendar" onclick="switchView('calendar')">📅 Calendrier Éco</button>
 </nav>
 
 <div class="container">
@@ -841,6 +852,32 @@
     </div>
     </div><!-- /view-journal -->
 
+    <div id="view-calendar" style="display:none;">
+        <div class="log-section">
+            <div class="log-header">
+                <span class="log-title">📅 Calendrier économique (semaine en cours, heure New York)</span>
+                <span id="calendar-count" style="font-family: var(--font-mono); font-size: 11px; color: var(--text-muted);">Chargement…</span>
+            </div>
+            <div style="padding: 10px 18px; display:flex; align-items:center; gap: 10px; border-bottom: 1px solid var(--border-soft);">
+                <span style="font-size: 11px; color: var(--text-muted); font-weight: 700;">FILTRER IMPACT :</span>
+                <button class="filter-btn active" id="cal-filter-all" onclick="setCalendarFilter('ALL', this)">TOUS</button>
+                <button class="filter-btn" id="cal-filter-high" onclick="setCalendarFilter('High', this)">HIGH</button>
+                <button class="filter-btn" id="cal-filter-medium" onclick="setCalendarFilter('Medium', this)">MEDIUM</button>
+            </div>
+            <div style="overflow-x: auto;">
+                <table class="log-table">
+                    <thead>
+                        <tr>
+                            <th>Heure (NY)</th><th>Devise</th><th>Impact</th><th>Événement</th><th>Prévision</th><th>Précédent</th>
+                        </tr>
+                    </thead>
+                    <tbody id="calendar-body"></tbody>
+                </table>
+                <div class="log-empty" id="calendar-empty">Chargement du calendrier…</div>
+            </div>
+        </div>
+    </div><!-- /view-calendar -->
+
 </div>
 
 <!-- TOASTS -->
@@ -988,6 +1025,9 @@
     let marketCache = {};
     let lastSignalData = {};
     let lastSignalSession = {};
+    let calendarData = [];
+    let calendarFilter = 'ALL';
+    let calendarAlerted = new Set();
     let currentModalSymbol = null;
     let chartAutoOpen = true;
     let isSyncing = true;
@@ -1186,10 +1226,13 @@
     function switchView(view) {
         document.getElementById('view-scanner').style.display = view === 'scanner' ? '' : 'none';
         document.getElementById('view-journal').style.display = view === 'journal' ? '' : 'none';
+        document.getElementById('view-calendar').style.display = view === 'calendar' ? '' : 'none';
         document.getElementById('tab-scanner').classList.toggle('active', view === 'scanner');
         document.getElementById('tab-journal').classList.toggle('active', view === 'journal');
+        document.getElementById('tab-calendar').classList.toggle('active', view === 'calendar');
         try { localStorage.setItem('ictRadarView', view); } catch (e) {}
         if (view === 'journal') { drawEquityCurve(); drawWinRateGauge(); }
+        if (view === 'calendar' && calendarData.length === 0) loadCalendar();
     }
 
     /* ===================== QR MOBILE ===================== */
@@ -1749,12 +1792,103 @@
         }, 4000);
     }
 
+    /* ===================== CALENDRIER ÉCONOMIQUE ===================== */
+    async function loadCalendar() {
+        try {
+            const res = await fetch('/api/calendar');
+            const data = await res.json();
+            calendarData = Array.isArray(data) ? data : [];
+            renderCalendarTable();
+            checkUpcomingEvents();
+        } catch (e) {
+            document.getElementById('calendar-count').textContent = 'Erreur de chargement';
+            console.error('Erreur calendrier:', e);
+        }
+    }
+
+    function setCalendarFilter(impact, btn) {
+        calendarFilter = impact;
+        document.querySelectorAll('#view-calendar .filter-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        renderCalendarTable();
+    }
+
+    function minutesUntil(dateStr) {
+        return (new Date(dateStr).getTime() - Date.now()) / 60000;
+    }
+
+    function renderCalendarTable() {
+        const body = document.getElementById('calendar-body');
+        const empty = document.getElementById('calendar-empty');
+        const filtered = calendarData.filter(ev => calendarFilter === 'ALL' || ev.impact === calendarFilter);
+
+        document.getElementById('calendar-count').textContent = `${filtered.length} événement(s)`;
+
+        if (filtered.length === 0) {
+            body.innerHTML = '';
+            empty.style.display = 'block';
+            empty.textContent = 'Aucun événement pour ce filtre.';
+            return;
+        }
+        empty.style.display = 'none';
+
+        body.innerHTML = filtered.map(ev => {
+            const mins = minutesUntil(ev.date);
+            const nyTime = new Intl.DateTimeFormat('fr-FR', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit', timeZone: 'America/New_York' }).format(new Date(ev.date));
+            let rowClass = '';
+            if (mins >= -15 && mins <= 15) rowClass = 'calendar-row-now';
+            else if (mins > 15 && mins <= 60) rowClass = 'calendar-row-soon';
+            return `
+                <tr class="${rowClass}">
+                    <td style="color: var(--text-muted); white-space:nowrap;">${nyTime}</td>
+                    <td style="font-weight:700; color:#fff;">${ev.country || '--'}</td>
+                    <td><span class="impact-badge impact-${ev.impact}">${ev.impact || '--'}</span></td>
+                    <td style="color:#cbd5e1;">${ev.title || '--'}</td>
+                    <td style="color:#fff;">${ev.forecast || '--'}</td>
+                    <td style="color: var(--text-muted);">${ev.previous || '--'}</td>
+                </tr>
+            `;
+        }).join('');
+    }
+
+    function pushCalendarToast(ev, minsLeft) {
+        const stack = document.getElementById('toast-stack');
+        const toast = document.createElement('div');
+        toast.className = 'toast sl'; // style ambre/alerte réutilisé pour l'avertissement
+        toast.innerHTML = `
+            <div class="toast-top"><span class="toast-sym">📅 ${ev.country}</span><span class="toast-time">dans ${Math.round(minsLeft)} min</span></div>
+            <div class="toast-msg">${ev.title} (${ev.impact})</div>
+            <div class="toast-hint">Prévision : ${ev.forecast || '--'} · Précédent : ${ev.previous || '--'}</div>
+        `;
+        stack.appendChild(toast);
+        setTimeout(() => { toast.classList.add('closing'); setTimeout(() => toast.remove(), 250); }, 9000);
+    }
+
+    // Alerte 30 min avant tout événement à impact Medium/High (une seule fois par événement)
+    function checkUpcomingEvents() {
+        calendarData.forEach(ev => {
+            if (ev.impact !== 'High' && ev.impact !== 'Medium') return;
+            const key = ev.title + '|' + ev.date;
+            if (calendarAlerted.has(key)) return;
+            const mins = minutesUntil(ev.date);
+            if (mins > 0 && mins <= 30) {
+                calendarAlerted.add(key);
+                pushCalendarToast(ev, mins);
+                triggerNotification(ev.country, null, `Annonce économique dans ${Math.round(mins)} minutes : ${ev.title}`);
+            }
+        });
+        renderCalendarTable(); // rafraîchit la mise en évidence "imminent"
+    }
+
     loadPortfolioVal();
     recomputePerformancePanel();
     try {
         const savedView = localStorage.getItem('ictRadarView');
-        if (savedView === 'journal') switchView('journal');
+        if (savedView === 'journal' || savedView === 'calendar') switchView(savedView);
     } catch (e) {}
+    loadCalendar();
+    setInterval(loadCalendar, 15 * 60 * 1000);
+    setInterval(checkUpcomingEvents, 60 * 1000);
     connectWebSocket();
 </script>
 </body>
