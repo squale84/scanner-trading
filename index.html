@@ -126,6 +126,21 @@
     .btn-nav:hover { border-color: #37455a; background-color: var(--bg-card-hover); }
     .btn-nav.is-off { color: var(--text-faint); }
 
+    .view-tabs {
+        display: flex; gap: 4px;
+        background-color: rgba(10, 13, 19, 0.88);
+        border-bottom: 1px solid var(--border-color);
+        padding: 0 26px;
+    }
+    .view-tab {
+        background: none; border: none; cursor: pointer;
+        padding: 12px 18px; font-size: 12.5px; font-weight: 700;
+        color: var(--text-muted); font-family: var(--font-ui);
+        border-bottom: 2px solid transparent; transition: all 0.15s;
+    }
+    .view-tab:hover { color: var(--text-main); }
+    .view-tab.active { color: var(--accent-blue); border-bottom-color: var(--accent-blue); }
+
     .system-pill {
         display: flex;
         align-items: center;
@@ -650,7 +665,13 @@
     </div>
 </header>
 
+<nav class="view-tabs">
+    <button class="view-tab active" id="tab-scanner" onclick="switchView('scanner')">🖥️ Scanner</button>
+    <button class="view-tab" id="tab-journal" onclick="switchView('journal')">📔 Journal de Trading</button>
+</nav>
+
 <div class="container">
+<div id="view-scanner">
 
     <!-- KPI BAR -->
     <div class="analytics-bar">
@@ -734,6 +755,8 @@
         <div class="grid" id="grid-crypto"></div>
     </div>
 
+    </div><!-- /view-scanner -->
+    <div id="view-journal" style="display:none;">
     <!-- SECTION 2.5 : PERFORMANCE -->
     <div class="section-container" style="margin-top: 8px;">
         <div class="section-header">
@@ -783,6 +806,20 @@
         </div>
     </div>
 
+    <!-- SECTION 2.6 : VISUELS (jauge + courbe d'équité) -->
+    <div class="section-container" style="margin-top: 8px;">
+        <div class="analytics-bar" style="grid-template-columns: minmax(260px, 1fr) 2fr;">
+            <div class="metric-tile" style="flex-direction: column; align-items: center; gap: 4px; padding: 16px;">
+                <div class="metric-label" style="margin-bottom: 4px;">Win Rate</div>
+                <svg id="gauge-svg" viewBox="0 0 200 110" style="width: 100%; max-width: 220px;"></svg>
+            </div>
+            <div class="metric-tile" style="flex-direction: column; align-items: stretch; gap: 4px; padding: 16px;">
+                <div class="metric-label" style="margin-bottom: 4px;">Courbe d'équité (solde du portefeuille)</div>
+                <svg id="equity-svg" viewBox="0 0 600 160" style="width: 100%; height: 160px;"></svg>
+            </div>
+        </div>
+    </div>
+
     <!-- SECTION 3 : LOG -->
     <div class="log-section">
         <div class="log-header">
@@ -802,6 +839,7 @@
             <div class="log-empty" id="log-empty">En attente du premier signal…</div>
         </div>
     </div>
+    </div><!-- /view-journal -->
 
 </div>
 
@@ -1004,6 +1042,63 @@
 
         const balance = portfolioVal + pnlEur;
         document.getElementById('perf-balance').textContent = balance.toLocaleString('fr-FR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' €';
+
+        drawWinRateGauge();
+        drawEquityCurve();
+    }
+
+    function drawWinRateGauge() {
+        const svg = document.getElementById('gauge-svg');
+        if (!svg) return;
+        const pct = journalClosed === 0 ? 0 : Math.round((journalWins / journalClosed) * 100);
+        const r = 80, cy = 100;
+        const circumference = Math.PI * r;
+        const offset = circumference * (1 - pct / 100);
+        const color = pct >= 60 ? '#00e08a' : (pct >= 40 ? '#ffc73c' : '#ff4569');
+        svg.innerHTML = `
+            <path d="M20,${cy} A${r},${r} 0 0 1 180,${cy}" fill="none" stroke="#1c2430" stroke-width="16" stroke-linecap="round"/>
+            <path d="M20,${cy} A${r},${r} 0 0 1 180,${cy}" fill="none" stroke="${color}" stroke-width="16" stroke-linecap="round"
+                  stroke-dasharray="${circumference}" stroke-dashoffset="${offset}"/>
+            <text x="100" y="90" text-anchor="middle" font-size="30" font-weight="800" fill="#f2f5f8" font-family="'JetBrains Mono', monospace">${journalClosed === 0 ? '--' : pct + '%'}</text>
+            <text x="100" y="106" text-anchor="middle" font-size="10" fill="#8b96a5">${journalClosed} trade(s)</text>
+        `;
+    }
+
+    function drawEquityCurve() {
+        const svg = document.getElementById('equity-svg');
+        if (!svg) return;
+        const riskVal = parseNum(document.getElementById('risk-val').value) || 0;
+        const portfolioVal = parseNum(document.getElementById('portfolio-val').value) || 0;
+        const W = 600, H = 160, pad = 10;
+
+        if (journalTrades.length === 0) {
+            svg.innerHTML = `<text x="${W / 2}" y="${H / 2}" text-anchor="middle" font-size="12" fill="#5b6674">Pas encore de trade clôturé</text>`;
+            return;
+        }
+
+        let running = portfolioVal;
+        const points = [running];
+        journalTrades.forEach(t => { running += t.rMultiple * riskVal; points.push(running); });
+
+        const minV = Math.min(...points), maxV = Math.max(...points);
+        const range = (maxV - minV) || 1;
+        const stepX = points.length > 1 ? (W - pad * 2) / (points.length - 1) : 0;
+        const toXY = (i, v) => [pad + i * stepX, H - pad - ((v - minV) / range) * (H - pad * 2)];
+
+        const pathD = points.map((v, i) => { const [x, y] = toXY(i, v); return (i === 0 ? 'M' : 'L') + x.toFixed(1) + ',' + y.toFixed(1); }).join(' ');
+        const areaD = pathD + ` L${(pad + (points.length - 1) * stepX).toFixed(1)},${H - pad} L${pad},${H - pad} Z`;
+        const finalColor = points[points.length - 1] >= portfolioVal ? '#00e08a' : '#ff4569';
+
+        svg.innerHTML = `
+            <defs>
+                <linearGradient id="eqGrad" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stop-color="${finalColor}" stop-opacity="0.35"/>
+                    <stop offset="100%" stop-color="${finalColor}" stop-opacity="0"/>
+                </linearGradient>
+            </defs>
+            <path d="${areaD}" fill="url(#eqGrad)"/>
+            <path d="${pathD}" fill="none" stroke="${finalColor}" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>
+        `;
     }
 
     /* ===================== JOURNAL DE TRADING ===================== */
@@ -1085,6 +1180,16 @@
 
     function onAutoChartToggle() {
         chartAutoOpen = document.getElementById('auto-chart-toggle').checked;
+    }
+
+    /* ===================== ONGLETS (Scanner / Journal) ===================== */
+    function switchView(view) {
+        document.getElementById('view-scanner').style.display = view === 'scanner' ? '' : 'none';
+        document.getElementById('view-journal').style.display = view === 'journal' ? '' : 'none';
+        document.getElementById('tab-scanner').classList.toggle('active', view === 'scanner');
+        document.getElementById('tab-journal').classList.toggle('active', view === 'journal');
+        try { localStorage.setItem('ictRadarView', view); } catch (e) {}
+        if (view === 'journal') { drawEquityCurve(); drawWinRateGauge(); }
     }
 
     /* ===================== QR MOBILE ===================== */
@@ -1646,6 +1751,10 @@
 
     loadPortfolioVal();
     recomputePerformancePanel();
+    try {
+        const savedView = localStorage.getItem('ictRadarView');
+        if (savedView === 'journal') switchView('journal');
+    } catch (e) {}
     connectWebSocket();
 </script>
 </body>
