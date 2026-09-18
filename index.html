@@ -148,6 +148,7 @@
     .impact-High { background: var(--accent-red-soft); color: var(--accent-red); }
     .impact-Medium { background: var(--accent-gold-soft); color: var(--accent-gold); }
     .impact-Low { background: var(--bg-inset); color: var(--text-faint); }
+    .calendar-row-today { background: rgba(47, 107, 255, 0.05); }
     .calendar-row-soon { background: rgba(255, 199, 60, 0.06); }
     .calendar-row-now { background: rgba(255, 69, 105, 0.1); }
 
@@ -855,12 +856,13 @@
     <div id="view-calendar" style="display:none;">
         <div class="log-section">
             <div class="log-header">
-                <span class="log-title">📅 Calendrier économique (semaine en cours, heure New York)</span>
+                <span class="log-title" id="calendar-title">📅 Calendrier économique (semaine en cours, ton fuseau horaire)</span>
                 <span id="calendar-count" style="font-family: var(--font-mono); font-size: 11px; color: var(--text-muted);">Chargement…</span>
             </div>
-            <div style="padding: 10px 18px; display:flex; align-items:center; gap: 10px; border-bottom: 1px solid var(--border-soft);">
-                <span style="font-size: 11px; color: var(--text-muted); font-weight: 700;">FILTRER IMPACT :</span>
-                <button class="filter-btn active" id="cal-filter-all" onclick="setCalendarFilter('ALL', this)">TOUS</button>
+            <div style="padding: 10px 18px; display:flex; align-items:center; gap: 10px; border-bottom: 1px solid var(--border-soft); flex-wrap: wrap;">
+                <span style="font-size: 11px; color: var(--text-muted); font-weight: 700;">FILTRER :</span>
+                <button class="filter-btn" id="cal-filter-all" onclick="setCalendarFilter('ALL', this)">TOUS</button>
+                <button class="filter-btn active" id="cal-filter-today" onclick="setCalendarFilter('TODAY', this)">🎯 AUJOURD'HUI</button>
                 <button class="filter-btn" id="cal-filter-high" onclick="setCalendarFilter('High', this)">HIGH</button>
                 <button class="filter-btn" id="cal-filter-medium" onclick="setCalendarFilter('Medium', this)">MEDIUM</button>
             </div>
@@ -868,7 +870,7 @@
                 <table class="log-table">
                     <thead>
                         <tr>
-                            <th>Heure (NY)</th><th>Devise</th><th>Impact</th><th>Événement</th><th>Prévision</th><th>Précédent</th>
+                            <th>Date / Heure (locale)</th><th>Devise</th><th>Impact</th><th>Événement</th><th>Prévision</th><th>Précédent</th>
                         </tr>
                     </thead>
                     <tbody id="calendar-body"></tbody>
@@ -1026,7 +1028,7 @@
     let lastSignalData = {};
     let lastSignalSession = {};
     let calendarData = [];
-    let calendarFilter = 'ALL';
+    let calendarFilter = 'TODAY';
     let calendarAlerted = new Set();
     let currentModalSymbol = null;
     let chartAutoOpen = true;
@@ -1795,9 +1797,12 @@
     /* ===================== CALENDRIER ÉCONOMIQUE ===================== */
     async function loadCalendar() {
         try {
+            const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'ton fuseau';
+            document.getElementById('calendar-title').textContent = `📅 Calendrier économique (semaine en cours, ${tz})`;
             const res = await fetch('/api/calendar');
             const data = await res.json();
             calendarData = Array.isArray(data) ? data : [];
+            calendarData.sort((a, b) => new Date(a.date) - new Date(b.date));
             renderCalendarTable();
             checkUpcomingEvents();
         } catch (e) {
@@ -1817,10 +1822,20 @@
         return (new Date(dateStr).getTime() - Date.now()) / 60000;
     }
 
+    function isToday(dateStr) {
+        const d = new Date(dateStr);
+        const now = new Date();
+        return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate();
+    }
+
     function renderCalendarTable() {
         const body = document.getElementById('calendar-body');
         const empty = document.getElementById('calendar-empty');
-        const filtered = calendarData.filter(ev => calendarFilter === 'ALL' || ev.impact === calendarFilter);
+        const filtered = calendarData.filter(ev => {
+            if (calendarFilter === 'ALL') return true;
+            if (calendarFilter === 'TODAY') return isToday(ev.date);
+            return ev.impact === calendarFilter;
+        });
 
         document.getElementById('calendar-count').textContent = `${filtered.length} événement(s)`;
 
@@ -1834,13 +1849,15 @@
 
         body.innerHTML = filtered.map(ev => {
             const mins = minutesUntil(ev.date);
-            const nyTime = new Intl.DateTimeFormat('fr-FR', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit', timeZone: 'America/New_York' }).format(new Date(ev.date));
+            // Heure locale du navigateur (pas de timeZone forcée = fuseau de l'utilisateur)
+            const localTime = new Intl.DateTimeFormat('fr-FR', { weekday: 'short', hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit' }).format(new Date(ev.date));
             let rowClass = '';
+            if (isToday(ev.date)) rowClass = 'calendar-row-today';
             if (mins >= -15 && mins <= 15) rowClass = 'calendar-row-now';
             else if (mins > 15 && mins <= 60) rowClass = 'calendar-row-soon';
             return `
                 <tr class="${rowClass}">
-                    <td style="color: var(--text-muted); white-space:nowrap;">${nyTime}</td>
+                    <td style="color: var(--text-muted); white-space:nowrap;">${localTime}</td>
                     <td style="font-weight:700; color:#fff;">${ev.country || '--'}</td>
                     <td><span class="impact-badge impact-${ev.impact}">${ev.impact || '--'}</span></td>
                     <td style="color:#cbd5e1;">${ev.title || '--'}</td>
