@@ -507,6 +507,7 @@
         border: 1px solid var(--border-soft);
     }
     .gauge-fill { position: absolute; top: 27px; height: 4px; border-radius: 2px; }
+    .gauge-best { position: absolute; top: 25px; height: 8px; border-radius: 3px; background: var(--accent-green-soft); border: 1px dashed rgba(0, 224, 138, 0.55); }
     .gauge-tick { position: absolute; top: 20px; width: 1px; height: 18px; background: var(--text-faint); }
     .gauge-tick.sl { background: var(--accent-red); }
     .gauge-tick.entry { background: #fff; }
@@ -527,10 +528,39 @@
     }
     .gauge-marker.out { background: var(--accent-purple); }
     .pos-levels { display: none; }
+    .pos-levels.show { display: block; margin-top: 2px; }
+    .gauge.compact { margin: 2px 4px 0; }
+    .gauge.compact .gauge-rtxt, .gauge.compact .gauge-px.mid { display: none; }
     @media (max-width: 600px) {
         .gauge-lbl .gauge-rtxt, .gauge-px.mid { display: none; }
         .pos-levels { display: block; }
     }
+
+    /* ============ JOURNAL : cellules date / session / résultat ============ */
+    .cell-date { color: #cbd5e1; white-space: nowrap; }
+    .cell-date .t { color: var(--text-muted); margin-left: 6px; }
+    .cell-session { color: #cbd5e1; white-space: nowrap; }
+    .cell-session::before { content: ""; display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 6px; background: var(--text-faint); vertical-align: 1px; }
+    .cell-session.london::before { background: var(--accent-blue); }
+    .cell-session.ny::before { background: var(--accent-gold); }
+    .cell-session.off { color: var(--text-muted); }
+    .res-eur { display: block; font-size: 10px; font-weight: 600; margin-top: 2px; }
+
+    /* ============ BILAN PAR PÉRIODE ============ */
+    .period-tabs { display: flex; gap: 6px; }
+    .period-tab {
+        background: var(--bg-inset); border: 1px solid var(--border-color); color: var(--text-muted);
+        font-family: var(--font-mono); font-size: 11px; padding: 4px 10px; border-radius: 6px; cursor: pointer;
+    }
+    .period-tab.active { color: #fff; border-color: var(--accent-blue); background: var(--accent-blue-soft); }
+    .period-chart-wrap { position: relative; }
+    .period-tip {
+        position: absolute; pointer-events: none; display: none; z-index: 5;
+        background: var(--bg-elevated); border: 1px solid var(--border-color); border-radius: 8px;
+        padding: 8px 10px; font-family: var(--font-mono); font-size: 11px; color: var(--text-main);
+        box-shadow: var(--shadow-card); white-space: nowrap;
+    }
+    .period-tip .muted { color: var(--text-muted); }
 
     .card-footer { margin-top: auto; }
 
@@ -685,6 +715,20 @@
 
     .modal-flash-tp { animation: flash-green 1s ease 2; }
     .modal-flash-sl { animation: flash-red 1s ease 2; }
+    .btn-tv-open {
+        display: inline-flex; align-items: center; gap: 6px; white-space: nowrap;
+        background: var(--accent-blue-soft); border: 1px solid var(--accent-blue); color: #fff;
+        font-family: var(--font-ui); font-size: 12px; font-weight: 700; padding: 7px 12px; border-radius: 7px; text-decoration: none;
+    }
+    .btn-tv-open:hover { background: var(--accent-blue); }
+
+    /* Nouveau signal : la carte clignote quelques secondes pour attirer l'œil (en plus du toast et de la voix). */
+    @keyframes new-signal { 0%, 100% { box-shadow: 0 0 0 0 transparent; } 50% { box-shadow: 0 0 0 4px var(--accent-gold), 0 0 28px var(--accent-gold-soft); } }
+    .card.new-signal { animation: new-signal 1s ease-in-out 6; }
+    .new-signal-tag {
+        display: inline-block; margin-left: 6px; padding: 1px 6px; border-radius: 4px; font-size: 9.5px; font-weight: 800;
+        background: var(--accent-gold); color: #05070b; font-family: var(--font-mono); vertical-align: 2px;
+    }
     @keyframes flash-green { 0%,100% { background: transparent; } 50% { background: var(--accent-green-soft); } }
     @keyframes flash-red { 0%,100% { background: transparent; } 50% { background: var(--accent-red-soft); } }
 
@@ -715,11 +759,11 @@
         <button class="btn-nav" onclick="simulateSignal()">⚡ Signal test</button>
         <button class="btn-nav" id="audio-toggle" onclick="toggleAudio()">🔊 Audio ON</button>
         <button class="btn-nav" onclick="openQrModal()">📱 QR Mobile</button>
-        <div class="system-pill">
+        <div class="system-pill" title="Connexion entre cette page et le serveur. Ne garantit pas que chaque alerte TradingView fonctionne : voir « Dernière alerte » sur chaque carte du Scanner.">
             <span class="live-dot" id="ws-dot"></span>
             <span id="conn-text">SYNCHRONISATION...</span>
         </div>
-        <div class="clock-display" id="clock">--:--:-- UTC</div>
+        <div class="clock-display" id="clock">--</div>
     </div>
 </header>
 
@@ -796,6 +840,8 @@
         </div>
     </div>
 
+    <div class="log-empty" id="filter-empty" style="display:none; margin-top: 12px;">Aucune position en cours pour le moment. Les cartes apparaîtront ici dès qu'un signal sera actif.</div>
+
     <!-- SECTION 1 : INDICES, FOREX & MATIERES PREMIERES -->
     <div class="section-container" id="sec-trad">
         <div class="section-header">
@@ -853,6 +899,7 @@
                 <div class="metric-icon">📈</div>
             </div>
         </div>
+        <div class="pos-note" id="perf-breakdown" style="margin: -2px 0 10px;"></div>
         <div class="analytics-bar">
             <div class="metric-tile">
                 <div>
@@ -865,11 +912,11 @@
                 <div class="metric-icon">💼</div>
             </div>
             <div class="metric-tile">
-                <div><div class="metric-label">P&amp;L cumulé</div><div class="metric-val" id="perf-pnl-eur">0.00 €</div></div>
+                <div><div class="metric-label" id="perf-pnl-label" title="Simulation : R cumulé × risque par trade saisi. Ce n'est pas un solde de courtier.">P&amp;L simulé</div><div class="metric-val" id="perf-pnl-eur">0.00 €</div></div>
                 <div class="metric-icon">💶</div>
             </div>
             <div class="metric-tile">
-                <div><div class="metric-label">Solde actuel</div><div class="metric-val" id="perf-balance" style="color:var(--accent-gold);">10 000.00 €</div></div>
+                <div><div class="metric-label" title="Simulation : taille de portefeuille + P&amp;L simulé. Ce n'est pas un solde de courtier.">Solde simulé</div><div class="metric-val" id="perf-balance" style="color:var(--accent-gold);">10 000.00 €</div></div>
                 <div class="metric-icon">🏦</div>
             </div>
         </div>
@@ -883,10 +930,34 @@
                 <svg id="gauge-svg" viewBox="0 0 200 110" style="width: 100%; max-width: 220px;"></svg>
             </div>
             <div class="metric-tile" style="flex-direction: column; align-items: stretch; gap: 4px; padding: 16px;">
-                <div class="metric-label" style="margin-bottom: 4px;">Courbe d'équité (solde du portefeuille)</div>
+                <div class="metric-label" style="margin-bottom: 4px;">Courbe d'équité simulée (risque fixe par trade)</div>
                 <svg id="equity-svg" viewBox="0 0 600 160" style="width: 100%; height: 160px;"></svg>
             </div>
         </div>
+    </div>
+
+    <!-- SECTION 2.7 : BILAN PAR PÉRIODE -->
+    <div class="log-section" style="margin-top: 8px;">
+        <div class="log-header">
+            <span class="log-title">📅 Bilan par période</span>
+            <div class="period-tabs">
+                <button class="period-tab active" id="period-tab-month" onclick="setPeriodMode('month')">Mois</button>
+                <button class="period-tab" id="period-tab-week" onclick="setPeriodMode('week')">Semaine</button>
+            </div>
+        </div>
+        <div class="period-tabs" id="period-assets" style="padding: 12px 18px 0; flex-wrap: wrap;"></div>
+        <div class="period-chart-wrap" style="padding: 10px 18px 4px;">
+            <div class="metric-label" id="period-chart-title" style="margin-bottom: 4px;"></div>
+            <svg id="period-svg" viewBox="0 0 600 190" style="width: 100%; height: 190px; display:block;"></svg>
+            <div class="period-tip" id="period-tip"></div>
+        </div>
+        <div style="overflow-x: auto;">
+            <table class="log-table">
+                <thead id="period-head"></thead>
+                <tbody id="period-body"></tbody>
+            </table>
+        </div>
+        <div class="pos-note" style="padding: 0 18px 12px;">Mois = janvier à décembre, toutes années confondues (saisonnalité). Montants calculés au risque par trade actuellement réglé (champ « Risque max / trade »), identique pour tous les trades. Seuls les trades clôturés avec un résultat en R sont comptés — sur peu de trades, un mois « gagnant » peut être du hasard.</div>
     </div>
 
     <!-- SECTION 3 : LOG -->
@@ -899,7 +970,7 @@
             <table class="log-table">
                 <thead>
                     <tr>
-                        <th>Heure</th><th>Actif</th><th>Direction</th><th>Pattern ICT</th><th>Session</th>
+                        <th>Date</th><th>Actif</th><th>Direction</th><th>Pattern ICT</th><th>Session</th>
                         <th>Qualité</th><th>R:R</th><th>Entrée</th><th>Résultat</th><th>Statut</th>
                     </tr>
                 </thead>
@@ -925,8 +996,8 @@
                 <div style="display:flex; align-items:center; gap: 8px;">
                     <span style="font-size: 11px; color: var(--text-muted); font-weight: 700;">IMPACT :</span>
                     <button class="filter-btn active" id="cal-impact-all" onclick="setCalendarImpactFilter('ALL', this)">TOUS</button>
-                    <button class="filter-btn" id="cal-impact-high" onclick="setCalendarImpactFilter('High', this)">HIGH</button>
-                    <button class="filter-btn" id="cal-impact-medium" onclick="setCalendarImpactFilter('Medium', this)">MEDIUM</button>
+                    <button class="filter-btn" id="cal-impact-high" onclick="setCalendarImpactFilter('High', this)">FORT</button>
+                    <button class="filter-btn" id="cal-impact-medium" onclick="setCalendarImpactFilter('Medium', this)">MOYEN</button>
                 </div>
             </div>
             <div style="overflow-x: auto;">
@@ -970,7 +1041,10 @@
                 <span class="badge-status" id="modal-badge">--</span>
                 <span class="modal-sub" id="modal-tv-symbol">--</span>
             </div>
-            <button class="btn-modal-close" onclick="closeChartModal()">✕</button>
+            <div style="display:flex; align-items:center; gap:10px;">
+                <a id="modal-tv-link" class="btn-tv-open" href="#" target="_blank" rel="noopener" title="Ouvre ta mise en page TradingView (Radar chargé) : il faut être connecté à ton compte TradingView dans ce navigateur, sinon TradingView refuse l'accès à une mise en page privée.">📈 Voir entrée / SL / TP sur TradingView ↗</a>
+                <button class="btn-modal-close" onclick="closeChartModal()">✕</button>
+            </div>
         </div>
         <div class="modal-body">
             <div class="modal-chart-area" id="modal-chart-area"></div>
@@ -992,6 +1066,7 @@
                     <div class="modal-side-title">Progression vers TP</div>
                     <div class="progress-bar-bg"><div class="progress-bar-fill" id="ms-bar"></div></div>
                     <div class="progress-meta"><span id="ms-pct">0%</span><span id="ms-triggered">--</span></div>
+                    <div id="ms-gauge"></div>
                 </div>
                 <div class="modal-side-block">
                     <div class="modal-side-title">Taille indicative</div>
@@ -1043,6 +1118,22 @@
         DOGEUSDT: "BINANCE:DOGEUSDT"
     };
 
+    // Mise en page TradingView de l'utilisateur, avec l'indicateur Radar chargé : le bouton
+    // « Voir entrée / SL / TP sur TradingView » l'ouvre sur l'actif de la carte. Une mise en page
+    // privée n'est visible que par son propriétaire connecté à son compte TradingView.
+    const RADAR_TV_LAYOUT = "https://fr.tradingview.com/chart/bP9LCmA5/";
+    // Symboles des graphiques TradingView sur lesquels tournent les alertes du Radar (un courtier par
+    // actif, fournis par l'utilisateur le 23/09 et vérifiés via la recherche de symboles TradingView).
+    // À défaut, on utilise le symbole du graphique intégré.
+    const RADAR_TV_SYMBOLS = {
+        GOLD: "FOREXCOM:XAUUSD", EURUSD: "FOREXCOM:EURUSD", SPX500: "CAPITALCOM:SPX500",
+        GER40: "CAPITALCOM:GER40", FR40: "CAPITALCOM:FR40", USDJPY: "FX:USDJPY",
+        USOIL: "TVC:USOIL", NATGAS: "PEPPERSTONE:NATGAS", US100: "FPMARKETS:US100"
+    };
+    // Le graphique intégré utilise le même courtier que l'alerte (vérifié : tous s'affichent dans le
+    // widget gratuit) -> mêmes prix que les niveaux entrée / SL / TP du Radar.
+    Object.assign(TV_SYMBOLS, RADAR_TV_SYMBOLS);
+
     /* ===================== BUILD CARDS ===================== */
     function cardTemplate(sym, label) {
         return `
@@ -1061,10 +1152,12 @@
                 <div class="data-row"><span>Objectif TP</span><span class="val-mono val-tp" id="tp-${sym}">--</span></div>
                 <div class="data-row"><span>Dernier Prix</span><span class="val-mono" id="price-${sym}">--</span></div>
                 <div class="data-row" id="size-row-${sym}" style="display:none;"><span>Taille indicative</span><span class="val-mono val-size" id="size-${sym}">--</span></div>
+                <div class="data-row"><span>Dernière alerte</span><span class="val-mono" id="last-${sym}" style="font-size:11px; color: var(--text-muted);">aucune reçue</span></div>
             </div>
-            <div class="progress-wrapper">
-                <div class="progress-bar-bg"><div class="progress-bar-fill" id="bar-${sym}"></div></div>
-                <div class="progress-meta"><span>Progression TP</span><span id="pct-${sym}">0%</span></div>
+            <div class="progress-wrapper" id="prog-wrap-${sym}" style="display:none;">
+                <div class="progress-meta" style="margin: 0 0 2px;"><span>Progression TP</span><span id="pct-${sym}">0%</span></div>
+                <div class="card-gauge" id="gauge-${sym}" style="display:none;"></div>
+                <div id="simple-bar-${sym}"><div class="progress-bar-bg"><div class="progress-bar-fill" id="bar-${sym}"></div></div></div>
             </div>
             <div class="card-footer">
                 <button class="btn-chart" onclick="openChartModal('${sym}')">📈 Voir le graphique live</button>
@@ -1092,6 +1185,9 @@
     let lastSignalSession = {};
     let calendarData = [];
     let isCalendarCached = false;
+    let calendarSourceDown = false;   // le serveur sert son cache car la source ne répond pas
+    let calendarFetchedAt = null;     // date de la dernière récupération réussie par le serveur
+    let lastAlerts = {};              // dernière alerte reçue par actif (état serveur)
     let calendarDayFilter = 'TODAY';
     let calendarImpactFilter = 'ALL';
     let calendarAlerted = new Set();
@@ -1147,11 +1243,206 @@
         pnlEl.textContent = pnlTxt;
         pnlEl.style.color = pnlEur > 0 ? 'var(--accent-green)' : (pnlEur < 0 ? 'var(--accent-red)' : '#fff');
 
+        document.getElementById('perf-pnl-label').textContent = `P&L simulé (${riskVal.toLocaleString('fr-FR')} € / trade)`;
+
+        // Gagnant / perdant = résultat en R > 0 / < 0 ; on détaille la nature réelle des sorties,
+        // car une sortie EXPIRED légèrement positive n'est pas un TP.
+        const byStatus = s => journalTrades.filter(t => t.status === s);
+        const tp = byStatus('TP_HIT').length, sl = byStatus('SL_HIT').length, exp = byStatus('EXPIRED');
+        const expPos = exp.filter(t => t.rMultiple > 0).length, expNeg = exp.filter(t => t.rMultiple < 0).length;
+        document.getElementById('perf-breakdown').textContent = journalClosed === 0 ? '' :
+            `Détail des sorties : ${tp} TP touché(s) · ${sl} SL touché(s) · ${exp.length} expirée(s) après 30 bougies ` +
+            `(${expPos} positive(s), ${expNeg} négative(s)). « Gagnant » = résultat > 0 R, donc expirées positives incluses. ` +
+            `Montants en € simulés avec ${riskVal.toLocaleString('fr-FR')} € de risque par trade.`;
+
         const balance = portfolioVal + pnlEur;
         document.getElementById('perf-balance').textContent = balance.toLocaleString('fr-FR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' €';
 
         drawWinRateGauge();
         drawEquityCurve();
+        drawPeriodSummary();
+        refreshResultAmounts();
+    }
+
+    /* ===================== BILAN PAR PÉRIODE (mois de l'année / semaine, par actif) ===================== */
+    let periodMode = 'month';
+    let periodAsset = 'ALL';
+    try {
+        if (localStorage.getItem('ictRadarPeriodMode') === 'week') periodMode = 'week';
+        periodAsset = localStorage.getItem('ictRadarPeriodAsset') || 'ALL';
+    } catch (e) {}
+
+    const MONTHS_FR = ['Janvier', 'Février', 'Mars', 'Avril', 'Mai', 'Juin', 'Juillet', 'Août', 'Septembre', 'Octobre', 'Novembre', 'Décembre'];
+    const MONTHS_SHORT = ['janv', 'févr', 'mars', 'avr', 'mai', 'juin', 'juil', 'août', 'sept', 'oct', 'nov', 'déc'];
+
+    function setPeriodMode(mode) {
+        periodMode = mode;
+        try { localStorage.setItem('ictRadarPeriodMode', mode); } catch (e) {}
+        drawPeriodSummary();
+    }
+
+    function setPeriodAsset(asset) {
+        periodAsset = asset;
+        try { localStorage.setItem('ictRadarPeriodAsset', asset); } catch (e) {}
+        drawPeriodSummary();
+    }
+
+    // Mois = mois de l'année (janvier…décembre, toutes années confondues) pour repérer la saisonnalité.
+    // Semaine = semaine ISO (lundi → dimanche), chronologique. Heure locale.
+    function periodOf(date) {
+        if (periodMode === 'month') {
+            const m = date.getMonth();
+            return { key: String(m).padStart(2, '0'), label: MONTHS_FR[m], short: MONTHS_SHORT[m] };
+        }
+        const monday = new Date(date.getFullYear(), date.getMonth(), date.getDate() - ((date.getDay() + 6) % 7));
+        const thursday = new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() + 3);
+        // Écart en jours calculé en UTC : en heure locale, le changement d'heure décale d'1 h et fausse le numéro.
+        const dayIndex = (Date.UTC(thursday.getFullYear(), thursday.getMonth(), thursday.getDate()) - Date.UTC(thursday.getFullYear(), 0, 1)) / 86400000;
+        const week = 1 + Math.floor(dayIndex / 7);
+        const dm = monday.toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit' });
+        return { key: `${thursday.getFullYear()}-W${String(week).padStart(2, '0')}`, label: `Semaine ${week} (du ${dm})`, short: `S${week}` };
+    }
+
+    function validTrades() {
+        return journalTrades.filter(t => t.time && !isNaN(t.time) && t.rMultiple !== null && t.rMultiple !== undefined);
+    }
+
+    function computePeriods(asset) {
+        const map = new Map();
+        if (periodMode === 'month') {
+            MONTHS_FR.forEach((label, m) => map.set(String(m).padStart(2, '0'), { key: String(m).padStart(2, '0'), label, short: MONTHS_SHORT[m], trades: 0, wins: 0, losses: 0, r: 0 }));
+        }
+        validTrades().forEach(t => {
+            if (asset !== 'ALL' && t.symbol !== asset) return;
+            const p = periodOf(t.time);
+            if (!map.has(p.key)) map.set(p.key, { ...p, trades: 0, wins: 0, losses: 0, r: 0 });
+            const agg = map.get(p.key);
+            agg.trades++; agg.r += t.rMultiple;
+            if (t.rMultiple > 0) agg.wins++; else if (t.rMultiple < 0) agg.losses++;
+        });
+        return [...map.values()].sort((a, b) => a.key.localeCompare(b.key));
+    }
+
+    function rTxt(r) { return `${r >= 0 ? '+' : ''}${r.toFixed(2)}R`; }
+
+    function drawPeriodSummary() {
+        const svg = document.getElementById('period-svg');
+        const body = document.getElementById('period-body');
+        const head = document.getElementById('period-head');
+        if (!svg || !body || !head) return;
+        document.getElementById('period-tab-month').classList.toggle('active', periodMode === 'month');
+        document.getElementById('period-tab-week').classList.toggle('active', periodMode === 'week');
+        const riskVal = parseNum(document.getElementById('risk-val').value) || 0;
+        const colorOf = r => r > 0 ? 'var(--accent-green)' : (r < 0 ? 'var(--accent-red)' : 'var(--text-muted)');
+
+        // Filtre par actif : uniquement les actifs présents dans les trades clôturés.
+        const assets = [...new Set(validTrades().map(t => t.symbol).filter(Boolean))].sort();
+        if (periodAsset !== 'ALL' && !assets.includes(periodAsset)) periodAsset = 'ALL';
+        document.getElementById('period-assets').innerHTML = ['ALL', ...assets].map(a =>
+            `<button class="period-tab${a === periodAsset ? ' active' : ''}" onclick="setPeriodAsset('${a}')">${a === 'ALL' ? 'Tous les actifs' : a}</button>`).join('');
+
+        const periods = computePeriods(periodAsset);
+        const total = periods.reduce((s, p) => s + p.trades, 0);
+        document.getElementById('period-chart-title').textContent =
+            `${periodMode === 'month' ? 'Résultat par mois de l\'année' : 'Résultat par semaine'} — ${periodAsset === 'ALL' ? 'tous les actifs' : periodAsset} (${total} trade${total > 1 ? 's' : ''})`;
+
+        if (periodMode === 'month') {
+            // Tableau croisé actif × mois : repère d'un coup d'œil les combinaisons favorables.
+            head.innerHTML = `<tr><th>Actif</th>${MONTHS_SHORT.map(m => `<th>${m}</th>`).join('')}<th>Total</th><th>Montant</th></tr>`;
+            const rowsFor = [...assets, 'ALL'];
+            body.innerHTML = total === 0 && periodAsset === 'ALL'
+                ? '<tr><td colspan="15" class="log-empty">Pas encore de trade clôturé</td></tr>'
+                : rowsFor.map(a => {
+                    const ps = computePeriods(a);
+                    const tr = ps.reduce((s, p) => s + p.r, 0), n = ps.reduce((s, p) => s + p.trades, 0);
+                    const isAll = a === 'ALL';
+                    const cells = ps.map(p => p.trades === 0
+                        ? '<td style="color:var(--text-faint);">·</td>'
+                        : `<td style="color:${colorOf(p.r)}; font-weight:700;" title="${p.label} · ${p.trades} trade(s) · ${p.wins} G / ${p.losses} P · ${formatEur(p.r * riskVal)}">${rTxt(p.r)}</td>`).join('');
+                    const sel = a === periodAsset ? ' style="background:var(--bg-card-hover);"' : '';
+                    return `<tr${sel}>
+                        <td style="color:#fff; font-weight:700; white-space:nowrap;${isAll ? ' border-top:1px solid var(--border-color);' : ''}">${isAll ? 'Tous' : a}</td>
+                        ${cells}
+                        <td style="color:${colorOf(tr)}; font-weight:700;">${n ? rTxt(tr) : '·'}</td>
+                        <td style="color:${colorOf(tr)}; font-weight:700; white-space:nowrap;">${n ? formatEur(tr * riskVal) : '·'}</td>
+                    </tr>`;
+                }).join('');
+        } else {
+            head.innerHTML = '<tr><th>Période</th><th>Trades</th><th>Gagnants</th><th>Perdants</th><th>Win rate</th><th>Résultat</th><th>Montant</th></tr>';
+            body.innerHTML = periods.length === 0
+                ? '<tr><td colspan="7" class="log-empty">Pas encore de trade clôturé</td></tr>'
+                : [...periods].reverse().map(p => `
+                    <tr>
+                        <td style="color:#fff; font-weight:700;">${p.label}</td>
+                        <td>${p.trades}</td>
+                        <td style="color:var(--accent-green);">${p.wins}</td>
+                        <td style="color:var(--accent-red);">${p.losses}</td>
+                        <td>${Math.round((p.wins / p.trades) * 100)}%</td>
+                        <td style="color:${colorOf(p.r)}; font-weight:700;">${rTxt(p.r)}</td>
+                        <td style="color:${colorOf(p.r)}; font-weight:700;">${formatEur(p.r * riskVal)}</td>
+                    </tr>`).join('');
+        }
+
+        const W = 600, H = 190, padL = 44, padR = 10, padT = 14, padB = 26;
+        if (total === 0) {
+            svg.innerHTML = `<text x="${W / 2}" y="${H / 2}" text-anchor="middle" font-size="12" fill="#5b6674">Pas encore de trade clôturé${periodAsset !== 'ALL' ? ' sur ' + periodAsset : ''}</text>`;
+            return;
+        }
+        const maxAbs = Math.max(1, ...periods.map(p => Math.abs(p.r)));
+        const plotH = H - padT - padB;
+        const zeroY = padT + plotH / 2;
+        const scale = (plotH / 2) / maxAbs;
+        const slot = (W - padL - padR) / periods.length;
+        const barW = Math.max(6, Math.min(48, slot * 0.6));
+
+        // Barre arrondie (4px) uniquement du côté de la valeur, ancrée sur la ligne zéro.
+        const barPath = (x, r) => {
+            const h = Math.max(1, Math.abs(r) * scale), rad = Math.min(4, h, barW / 2);
+            if (r >= 0) {
+                const y = zeroY - h;
+                return `M${x},${zeroY} V${y + rad} Q${x},${y} ${x + rad},${y} H${x + barW - rad} Q${x + barW},${y} ${x + barW},${y + rad} V${zeroY} Z`;
+            }
+            const y = zeroY + h;
+            return `M${x},${zeroY} V${y - rad} Q${x},${y} ${x + rad},${y} H${x + barW - rad} Q${x + barW},${y} ${x + barW},${y - rad} V${zeroY} Z`;
+        };
+
+        const tick = maxAbs.toFixed(1).replace('.', ',');
+        let html = `
+            <line x1="${padL}" x2="${W - padR}" y1="${padT}" y2="${padT}" stroke="#161d28"/>
+            <line x1="${padL}" x2="${W - padR}" y1="${padT + plotH}" y2="${padT + plotH}" stroke="#161d28"/>
+            <line x1="${padL}" x2="${W - padR}" y1="${zeroY}" y2="${zeroY}" stroke="#2a3342"/>
+            <text x="${padL - 6}" y="${padT + 4}" text-anchor="end" font-size="10" fill="#8b96a5">+${tick}R</text>
+            <text x="${padL - 6}" y="${zeroY + 4}" text-anchor="end" font-size="10" fill="#8b96a5">0</text>
+            <text x="${padL - 6}" y="${padT + plotH + 4}" text-anchor="end" font-size="10" fill="#8b96a5">−${tick}R</text>`;
+        const labelEvery = Math.ceil(periods.length / 12);
+        periods.forEach((p, i) => {
+            const x = padL + i * slot + (slot - barW) / 2;
+            const fill = p.r > 0 ? '#00e08a' : (p.r < 0 ? '#ff4569' : '#5b6674');
+            if (p.trades) html += `<path d="${barPath(x, p.r)}" fill="${fill}"/>`;
+            if (i % labelEvery === 0) html += `<text x="${x + barW / 2}" y="${H - 8}" text-anchor="middle" font-size="10" fill="#8b96a5">${p.short}</text>`;
+            // Zone de survol plus large que la barre (toute la colonne).
+            html += `<rect class="period-hit" data-i="${i}" x="${padL + i * slot}" y="${padT}" width="${slot}" height="${plotH}" fill="transparent"/>`;
+        });
+        svg.innerHTML = html;
+
+        const tip = document.getElementById('period-tip');
+        svg.querySelectorAll('.period-hit').forEach(el => {
+            el.addEventListener('mouseenter', () => {
+                const p = periods[+el.dataset.i];
+                if (!p.trades) { tip.innerHTML = `<div style="font-weight:700;">${p.label}</div><div class="muted">Aucun trade</div>`; tip.style.display = 'block'; return; }
+                tip.innerHTML = `<div style="font-weight:700;">${p.label}</div>
+                    <div style="color:${colorOf(p.r)}; font-weight:700;">${p.r >= 0 ? '+' : ''}${p.r.toFixed(2)}R · ${formatEur(p.r * riskVal)}</div>
+                    <div class="muted">${p.trades} trade(s) · ${p.wins} G / ${p.losses} P</div>`;
+                tip.style.display = 'block';
+            });
+            el.addEventListener('mousemove', e => {
+                const box = svg.parentElement.getBoundingClientRect();
+                const x = e.clientX - box.left, y = e.clientY - box.top;
+                tip.style.left = Math.min(x + 12, box.width - tip.offsetWidth - 4) + 'px';
+                tip.style.top = Math.max(0, y - tip.offsetHeight - 8) + 'px';
+            });
+            el.addEventListener('mouseleave', () => { tip.style.display = 'none'; });
+        });
     }
 
     function drawWinRateGauge() {
@@ -1176,7 +1467,8 @@
         if (!svg) return;
         const riskVal = parseNum(document.getElementById('risk-val').value) || 0;
         const portfolioVal = parseNum(document.getElementById('portfolio-val').value) || 0;
-        const W = 600, H = 160, pad = 10;
+        // Marges pour l'échelle (gauche) et les dates (bas).
+        const W = 600, H = 160, padL = 76, padR = 10, padT = 10, padB = 22;
 
         if (journalTrades.length === 0) {
             svg.innerHTML = `<text x="${W / 2}" y="${H / 2}" text-anchor="middle" font-size="12" fill="#5b6674">Pas encore de trade clôturé</text>`;
@@ -1189,14 +1481,25 @@
 
         const minV = Math.min(...points), maxV = Math.max(...points);
         const range = (maxV - minV) || 1;
-        const stepX = points.length > 1 ? (W - pad * 2) / (points.length - 1) : 0;
-        const toXY = (i, v) => [pad + i * stepX, H - pad - ((v - minV) / range) * (H - pad * 2)];
+        const stepX = points.length > 1 ? (W - padL - padR) / (points.length - 1) : 0;
+        const toXY = (i, v) => [padL + i * stepX, H - padB - ((v - minV) / range) * (H - padT - padB)];
 
         const pathD = points.map((v, i) => { const [x, y] = toXY(i, v); return (i === 0 ? 'M' : 'L') + x.toFixed(1) + ',' + y.toFixed(1); }).join(' ');
-        const areaD = pathD + ` L${(pad + (points.length - 1) * stepX).toFixed(1)},${H - pad} L${pad},${H - pad} Z`;
+        const areaD = pathD + ` L${(padL + (points.length - 1) * stepX).toFixed(1)},${H - padB} L${padL},${H - padB} Z`;
         const finalColor = points[points.length - 1] >= portfolioVal ? '#00e08a' : '#ff4569';
 
-        svg.innerHTML = `
+        const eur = v => Math.round(v).toLocaleString('fr-FR') + ' €';
+        const dated = journalTrades.filter(t => t.time && !isNaN(t.time));
+        const dFmt = d => d.toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit' });
+        const axis = `
+            <line x1="${padL}" x2="${W - padR}" y1="${padT}" y2="${padT}" stroke="#161d28"/>
+            <line x1="${padL}" x2="${W - padR}" y1="${H - padB}" y2="${H - padB}" stroke="#161d28"/>
+            <text x="${padL - 6}" y="${padT + 4}" text-anchor="end" font-size="13" fill="#8b96a5">${eur(maxV)}</text>
+            <text x="${padL - 6}" y="${H - padB + 3}" text-anchor="end" font-size="13" fill="#8b96a5">${eur(minV)}</text>
+            ${dated.length ? `<text x="${padL}" y="${H - 4}" font-size="13" fill="#8b96a5">${dFmt(dated[0].time)}</text>
+            <text x="${W - padR}" y="${H - 4}" text-anchor="end" font-size="13" fill="#8b96a5">${dFmt(dated[dated.length - 1].time)} · ${journalTrades.length} trades</text>` : ''}`;
+
+        svg.innerHTML = axis + `
             <defs>
                 <linearGradient id="eqGrad" x1="0" y1="0" x2="0" y2="1">
                     <stop offset="0%" stop-color="${finalColor}" stop-opacity="0.35"/>
@@ -1282,7 +1585,8 @@
     // un repère intermédiaire est masqué s'il atteint ou dépasse le TP final (doublon).
     const INDICATIVE_TP_R = [1, 1.5];
 
-    function gaugeHtml(pos) {
+    function gaugeHtml(pos, opts = {}) {
+        const compact = !!opts.compact; // cartes du Scanner / fenêtre graphique : espace étroit
         const sign = pos.direction === 'BUY' ? 1 : -1;
         const ep = parseNum(pos.entry_price), slp = parseNum(pos.sl_price), tpP = parseNum(pos.tp_price);
         const prog = computeProgress(pos.direction, ep, slp, tpP, pos.last_price);
@@ -1302,9 +1606,15 @@
         ];
         marks.push({ r: prog.rr, name: `TP${marks.length - 1}`, rTxt: `${prog.rr.toFixed(1).replace('.', ',')}R`, cls: 'tp', price: tpP });
 
-        let html = '<div class="gauge"><div class="gauge-track"></div>';
+        let html = `<div class="gauge${compact ? ' compact' : ''}"><div class="gauge-track"></div>`;
         const xm = Math.max(0, Math.min(1, fracOfR(prog.r)));
         const x0 = fracOfR(0);
+        // Zone du meilleur moment atteint (entrée -> plus haut favorable), visible quand le prix est
+        // revenu en arrière : explique pourquoi TP1/TP2 sont cochés alors que la barre est plus bas.
+        const xb = Math.max(0, Math.min(1, fracOfR(bestR)));
+        if (bestR > Math.max(prog.r, 0) + 1e-9) {
+            html += `<div class="gauge-best" style="left:${(x0 * 100).toFixed(2)}%; width:${((xb - x0) * 100).toFixed(2)}%;" title="Meilleur moment atteint : +${bestR.toFixed(2)}R"></div>`;
+        }
         html += `<div class="gauge-fill" style="left:${(Math.min(x0, xm) * 100).toFixed(2)}%; width:${(Math.abs(xm - x0) * 100).toFixed(2)}%; background:${prog.r >= 0 ? 'var(--accent-green)' : 'var(--accent-red)'};"></div>`;
         marks.forEach(m => {
             const x = fracOfR(m.r) * 100;
@@ -1318,8 +1628,109 @@
         html += `<div class="gauge-marker${outside ? ' out' : ''}" style="left:${(xm * 100).toFixed(2)}%;" title="Dernier prix reçu : ${formatDisplay(pos.last_price)}"></div>`;
         html += '</div>';
         // Écran étroit : les prix intermédiaires se chevaucheraient sur la jauge, on les liste ici.
-        html += `<div class="pos-note pos-levels">${marks.filter(m => m.rTxt).map(m => `${m.name} (${m.rTxt}) ${formatDisplay(m.price)}`).join(' · ')}</div>`;
+        html += `<div class="pos-note pos-levels${compact ? ' show' : ''}">${marks.filter(m => m.rTxt).map(m => `${m.name} (${m.rTxt}) ${formatDisplay(m.price)}`).join(' · ')}</div>`;
+        if (bestR > Math.max(prog.r, 0) + 1e-9) {
+            const fmtR = r => `${r >= 0 ? '+' : ''}${r.toFixed(2).replace('.', ',')}R`;
+            html += `<div class="pos-note">Meilleur moment : <span style="color:var(--accent-green);">${fmtR(bestR)}</span> → ${pos.closed ? 'résultat final' : 'actuellement'} : <span style="color:${prog.r >= 0 ? 'var(--accent-green)' : 'var(--accent-red)'};">${fmtR(prog.r)}</span></div>`;
+        }
         return html;
+    }
+
+    // Position à afficher pour un actif : état serveur, sinon position de test, sinon (secours)
+    // la dernière entrée reçue par cette page si la carte est encore active.
+    function positionForSymbol(sym) {
+        if (serverPositions[sym]) return serverPositions[sym];
+        if (testPositions[sym]) return testPositions[sym];
+        const d = lastSignalData[sym];
+        if (d && activePositions.has(sym) && (d.direction === 'BUY' || d.direction === 'SELL')) {
+            const cp = marketCache[sym] && marketCache[sym].current_price !== undefined ? marketCache[sym].current_price : d.current_price;
+            return { ...d, last_price: cp };
+        }
+        // Trade clôturé : la jauge reste affichée avec le résultat final jusqu'au Reset (la carte
+        // repasse alors en STANDBY). Elle est reconstruite depuis le journal, donc survit au F5.
+        const st = marketCache[sym] && marketCache[sym].status;
+        if (closedTrades[sym] && ['TP_HIT', 'SL_HIT', 'EXPIRED'].includes(st)) return closedTrades[sym];
+        return null;
+    }
+
+    // Dernier trade clôturé par actif, avec le prix de sortie retenu pour le R (niveau TP/SL touché,
+    // ou clôture pour EXPIRED) : même résultat sur la carte et dans la fenêtre graphique.
+    let closedTrades = {};
+    function rememberClosedTrade(sym, levels, exitStatus, exitPrice, bestR) {
+        if (!levels || parseNum(levels.entry_price) === null || parseNum(levels.sl_price) === null || parseNum(levels.tp_price) === null) return;
+        const lastPrice = exitStatus === 'TP_HIT' ? levels.tp_price : (exitStatus === 'SL_HIT' ? levels.sl_price : exitPrice);
+        closedTrades[sym] = {
+            symbol: sym, direction: levels.direction, status: levels.status, quality: levels.quality, rr: levels.rr,
+            entry_price: levels.entry_price, sl_price: levels.sl_price, tp_price: levels.tp_price,
+            last_price: lastPrice, best_r: bestR || 0, closed: exitStatus
+        };
+    }
+
+    // Le bloc « Progression TP » n'apparaît que s'il y a un trade (en cours ou qui vient de se clôturer).
+    function setCardProgressVisible(sym, visible) {
+        const wrap = document.getElementById('prog-wrap-' + sym);
+        if (wrap) wrap.style.display = visible ? '' : 'none';
+    }
+
+    // « Dernière alerte » : preuve que l'alerte TradingView de cet actif envoie bien quelque chose.
+    function relativeTime(date) {
+        const min = Math.round((Date.now() - date.getTime()) / 60000);
+        if (min < 1) return "à l'instant";
+        if (min < 60) return `il y a ${min} min`;
+        const h = Math.round(min / 60);
+        if (h < 48) return `il y a ${h} h`;
+        return `il y a ${Math.round(h / 24)} j`;
+    }
+
+    function renderLastAlerts() {
+        document.querySelectorAll('[id^="last-"]').forEach(el => {
+            const sym = el.id.slice(5);
+            const a = lastAlerts[sym];
+            if (!a || !a.time) { el.textContent = 'aucune reçue'; el.title = "Aucune alerte reçue par le serveur pour cet actif depuis l'activation du suivi."; return; }
+            const d = new Date(a.time + 'Z');
+            const what = a.status === 'PRICE_UPDATE' ? 'mise à jour du prix' : (a.status || '');
+            el.textContent = `${relativeTime(d)} · ${what}`;
+            el.title = d.toLocaleString('fr-FR');
+        });
+    }
+    setInterval(renderLastAlerts, 60 * 1000);
+
+    // Jauge détaillée sur la carte du Scanner (remplace la barre simple tant qu'une position est ouverte).
+    function renderCardGauge(sym) {
+        const holder = document.getElementById('gauge-' + sym);
+        const simple = document.getElementById('simple-bar-' + sym);
+        if (!holder || !simple) return;
+        const pos = positionForSymbol(sym);
+        const html = pos ? gaugeHtml(pos, { compact: true }) : '';
+        holder.innerHTML = html;
+        holder.style.display = html ? '' : 'none';
+        simple.style.display = html ? 'none' : '';
+        if (pos) {
+            setCardProgressVisible(sym, true);
+            // Trade clôturé rechargé depuis le journal : la carte affiche aussi ses niveaux (au lieu de « -- »).
+            if (pos.closed) {
+                const setTxt = (id, v) => { const el = document.getElementById(id + sym); if (el && el.textContent === '--') el.textContent = formatDisplay(v); };
+                setTxt('entry-', pos.entry_price); setTxt('sl-', pos.sl_price); setTxt('tp-', pos.tp_price);
+            }
+            // Le pourcentage affiché suit toujours la même position que la jauge (source unique).
+            setProgressBar(document.getElementById('bar-' + sym), document.getElementById('pct-' + sym),
+                computeProgress(pos.direction, pos.entry_price, pos.sl_price, pos.tp_price, pos.last_price));
+        }
+    }
+
+    function renderModalGauge() {
+        const holder = document.getElementById('ms-gauge');
+        if (!holder) return;
+        const pos = currentModalSymbol ? positionForSymbol(currentModalSymbol) : null;
+        holder.innerHTML = pos ? gaugeHtml(pos, { compact: true }) : '';
+        // La jauge remplace la barre simple tant qu'une position est ouverte.
+        const simple = document.getElementById('ms-bar').parentElement;
+        if (simple) simple.style.display = holder.innerHTML ? 'none' : '';
+    }
+
+    function renderAllGauges() {
+        document.querySelectorAll('.card-gauge').forEach(el => renderCardGauge(el.id.slice(6)));
+        renderModalGauge();
     }
 
     function renderOpenPositions() {
@@ -1355,6 +1766,7 @@
                 <div class="pos-note${stale ? ' stale' : ''}">Dernier prix ${formatDisplay(pos.last_price)} · reçu ${upd ? upd.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }) : '--'}${stale ? ` · ⚠ aucune mise à jour depuis ${Math.round(ageMin)} min` : ''}</div>
             </div>`;
         }).join('');
+        renderAllGauges();
     }
 
     async function loadPositionsFromServer() {
@@ -1375,7 +1787,11 @@
     /* ===================== CLOCK / SESSIONS ===================== */
     function updateClockAndSessions() {
         const now = new Date();
-        document.getElementById('clock').textContent = now.toUTCString().slice(17, 25) + ' UTC';
+        // Date du jour + heure locale (fuseau du navigateur) + heure de New York (référence des killzones).
+        const day = now.toLocaleDateString('fr-FR', { weekday: 'short', day: '2-digit', month: '2-digit', year: 'numeric' });
+        const local = now.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        const ny = now.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/New_York' });
+        document.getElementById('clock').textContent = `${day} · ${local} · New York ${ny}`;
 
         const nyTimeStr = now.toLocaleTimeString("en-US", { timeZone: "America/New_York", hour12: false });
         const [nyHour, nyMin] = nyTimeStr.split(":").map(Number);
@@ -1459,30 +1875,85 @@
         } catch (e) {}
 
         if ('speechSynthesis' in window) {
-            const text = `${symbol} ${dir ? dir : status}`;
-            const utterance = new SpeechSynthesisUtterance(text);
-            utterance.lang = 'en-US';
+            const utterance = new SpeechSynthesisUtterance(spokenMessage(symbol, dir, status));
+            utterance.lang = 'fr-FR';
+            const frVoice = window.speechSynthesis.getVoices().find(v => v.lang && v.lang.toLowerCase().startsWith('fr'));
+            if (frVoice) utterance.voice = frVoice;
             utterance.rate = 1.05;
             window.speechSynthesis.speak(utterance);
         }
     }
 
+    // Signal d'entrée bien visible : carte qui clignote + badge « NOUVEAU » + titre de l'onglet,
+    // pour le repérer même si la page n'est pas au premier plan.
+    const BASE_TITLE = document.title;
+    function highlightNewSignal(sym, dir) {
+        const card = document.getElementById('card-' + sym);
+        if (card) {
+            card.classList.remove('new-signal'); void card.offsetWidth; card.classList.add('new-signal');
+            // Retrait après l'animation : rend la main à l'animation habituelle des cartes actives.
+            setTimeout(() => card.classList.remove('new-signal'), 6500);
+            const nameEl = card.querySelector('.sym-name');
+            if (nameEl && !nameEl.querySelector('.new-signal-tag')) {
+                nameEl.insertAdjacentHTML('beforeend', '<span class="new-signal-tag">NOUVEAU</span>');
+                setTimeout(() => { const t = nameEl.querySelector('.new-signal-tag'); if (t) t.remove(); }, 5 * 60 * 1000);
+            }
+        }
+        document.title = `🔔 ${sym} ${dir === 'BUY' ? 'ACHAT' : 'VENTE'} — ${BASE_TITLE}`;
+        if (document.hasFocus()) setTimeout(() => { document.title = BASE_TITLE; }, 10000);
+    }
+
+    function clearNewSignalTag(sym) {
+        const card = document.getElementById('card-' + sym);
+        const t = card && card.querySelector('.new-signal-tag');
+        if (t) t.remove();
+        if (card) card.classList.remove('new-signal');
+    }
+    window.addEventListener('focus', () => { document.title = BASE_TITLE; });
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) setTimeout(() => { document.title = BASE_TITLE; }, 4000); });
+
+    // Annonces vocales en français, avec des noms d'actifs prononçables.
+    const SPOKEN_NAMES = {
+        GOLD: "L'or", US100: 'Le Nasdaq', SPX500: 'Le S&P 500', GER40: 'Le DAX', FR40: 'Le CAC 40',
+        USOIL: 'Le pétrole', NATGAS: 'Le gaz naturel', EURUSD: 'Euro dollar', USDJPY: 'Dollar yen',
+        BTCUSD: 'Le bitcoin', ETHUSD: "L'ether", SOLUSD: 'Solana', ADAUSDT: 'Cardano', DOGEUSDT: 'Dogecoin'
+    };
+    function spokenMessage(symbol, dir, status) {
+        const name = SPOKEN_NAMES[symbol] || symbol;
+        if (dir === 'BUY') return `${name} : signal d'achat.`;
+        if (dir === 'SELL') return `${name} : signal de vente.`;
+        if (status === 'TP_HIT') return `${name} : objectif atteint.`;
+        if (status === 'SL_HIT') return `${name} : stop loss touché.`;
+        if (status === 'EXPIRED') return `${name} : position expirée.`;
+        return status || name; // annonces du calendrier : le message est déjà en français
+    }
+    // Chrome charge la liste des voix en différé : on la demande tôt pour avoir la voix française au 1er signal.
+    if ('speechSynthesis' in window) window.speechSynthesis.getVoices();
+
     /* ===================== FILTERS ===================== */
     function applyFilter(filter, btn) {
         currentFilter = filter;
-        document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+        // Uniquement les boutons du Scanner (les filtres du calendrier ont la même classe).
+        document.querySelectorAll('.filter-btn[onclick^="applyFilter"]').forEach(b => b.classList.remove('active'));
         btn.classList.add('active');
+        refreshCardFilter();
+    }
 
+    // Réappliqué aussi quand une position s'ouvre ou se ferme, pour que « En cours » reste à jour.
+    function refreshCardFilter() {
+        let visible = 0;
         document.querySelectorAll('.card').forEach(card => {
             const sym = card.id.replace('card-', '');
             const cat = card.getAttribute('data-cat');
-            const isActive = activePositions.has(sym);
             let show = true;
-            if (filter === 'ACTIVE') show = isActive;
-            else if (filter === 'TRAD') show = cat === 'TRAD';
-            else if (filter === 'CRYPTO') show = cat === 'CRYPTO';
+            if (currentFilter === 'ACTIVE') show = activePositions.has(sym);
+            else if (currentFilter === 'TRAD') show = cat === 'TRAD';
+            else if (currentFilter === 'CRYPTO') show = cat === 'CRYPTO';
             card.style.display = show ? 'flex' : 'none';
+            if (show) visible++;
         });
+        const empty = document.getElementById('filter-empty');
+        if (empty) empty.style.display = visible === 0 ? '' : 'none';
     }
 
     /* ===================== RESET ===================== */
@@ -1529,6 +2000,7 @@
 
     function updateActiveKpi() {
         document.getElementById("kpi-active").textContent = activePositions.size;
+        refreshCardFilter();
     }
 
     function suggestedSize(entry, sl) {
@@ -1562,6 +2034,42 @@
     }
 
     /* ===================== LOG ===================== */
+    // Cellules communes aux lignes live (test) et historiques, pour un rendu identique.
+    function dateCellHtml(date) {
+        if (!date || isNaN(date)) return '<td class="cell-date">--</td>';
+        const d = date.toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric' });
+        const t = date.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+        return `<td class="cell-date">${d}<span class="t">${t}</span></td>`;
+    }
+
+    // Les sessions sont stockées avec un emoji drapeau (illisible sous Windows : « GB », « US ») :
+    // on affiche un libellé propre avec une pastille de couleur à la place.
+    function sessionCellHtml(label) {
+        const s = label || '';
+        if (s.includes('Londres')) return '<td class="cell-session london">Londres</td>';
+        if (s.includes('NY')) return '<td class="cell-session ny">New York AM</td>';
+        if (s.includes('Hors')) return '<td class="cell-session off">Hors killzone</td>';
+        return '<td class="cell-session off">--</td>';
+    }
+
+    function formatEur(v) {
+        return (v >= 0 ? '+' : '') + v.toLocaleString('fr-FR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' €';
+    }
+
+    function resultCellHtml(r) {
+        if (r === null || r === undefined) return '<td>--</td>';
+        const rColor = r > 0 ? "var(--accent-green)" : (r < 0 ? "var(--accent-red)" : "var(--text-muted)");
+        const riskVal = parseNum(document.getElementById('risk-val').value) || 0;
+        return `<td><span style="color:${rColor}; font-weight:700;">${r >= 0 ? '+' : ''}${r.toFixed(2)}R</span>` +
+               `<span class="res-eur" data-r="${r}" style="color:${rColor};">${formatEur(r * riskVal)}</span></td>`;
+    }
+
+    // Le risque par trade peut changer : on recalcule les montants déjà affichés.
+    function refreshResultAmounts() {
+        const riskVal = parseNum(document.getElementById('risk-val').value) || 0;
+        document.querySelectorAll('.res-eur[data-r]').forEach(el => { el.textContent = formatEur(parseFloat(el.dataset.r) * riskVal); });
+    }
+
     function appendToLog(data, opts = {}) {
         const logBody = document.getElementById("log-body");
         const emptyRow = document.getElementById("log-empty");
@@ -1575,24 +2083,17 @@
         const qData = isExit && entryData ? entryData : data;
         const qClass = qualityClass(qData.quality);
 
-        let resultCell = '--';
-        if (isExit && opts.rMultiple !== null && opts.rMultiple !== undefined) {
-            const r = opts.rMultiple;
-            const rColor = r > 0 ? "var(--accent-green)" : (r < 0 ? "var(--accent-red)" : "var(--text-muted)");
-            resultCell = `<span style="color:${rColor}; font-weight:700;">${r >= 0 ? '+' : ''}${r.toFixed(2)}R</span>`;
-        }
-
         const tr = document.createElement("tr");
         tr.innerHTML = `
-            <td style="color: var(--text-muted);">${formatTime()}</td>
+            ${dateCellHtml(new Date())}
             <td style="font-weight: 700; color: #fff;">${data.symbol}</td>
             <td style="color: ${dirColor}; font-weight: 700;">${dir || '--'}</td>
             <td style="color: #cbd5e1;">${isExit ? (entryData ? setupIctLabel(entryData.status) : '--') : setupIctLabel(data.status)}</td>
-            <td style="color: var(--text-muted); font-size:10.5px;">${isExit ? (opts.sessionAtEntry || '--') : sessionLabelNow()}</td>
+            ${sessionCellHtml(isExit ? opts.sessionAtEntry : sessionLabelNow())}
             <td>${qData.quality && qData.quality !== '--' ? `<span class="tag-chip ${qClass}">${qData.quality}</span>` : '--'}</td>
             <td>${qData.rr && qData.rr !== '0.0' ? qData.rr + ':1' : '--'}</td>
             <td style="color: #fff;">${formatDisplay(isExit && entryData ? entryData.entry_price : data.entry_price)}</td>
-            <td>${resultCell}</td>
+            ${isExit ? resultCellHtml(opts.rMultiple) : '<td>--</td>'}
             <td><span class="badge-status ${data.status}">${data.status}</span></td>
         `;
         logBody.insertBefore(tr, logBody.firstChild);
@@ -1614,27 +2115,19 @@
         const dir = row.direction;
         const dirColor = dir === "BUY" ? "var(--accent-green)" : (dir === "SELL" ? "var(--accent-red)" : "var(--text-muted)");
         const qClass = qualityClass(row.quality);
-        const rowTime = row.time ? new Date(row.time + 'Z').toLocaleTimeString('fr-FR') : '--';
         const patternStatus = isExit ? (row.entry_status || row.status) : row.status;
-
-        let resultCell = '--';
-        if (isExit && row.r_multiple !== null && row.r_multiple !== undefined) {
-            const r = row.r_multiple;
-            const rColor = r > 0 ? "var(--accent-green)" : (r < 0 ? "var(--accent-red)" : "var(--text-muted)");
-            resultCell = `<span style="color:${rColor}; font-weight:700;">${r >= 0 ? '+' : ''}${r.toFixed(2)}R</span>`;
-        }
 
         const tr = document.createElement("tr");
         tr.innerHTML = `
-            <td style="color: var(--text-muted);">${rowTime}</td>
+            ${dateCellHtml(row.time ? new Date(row.time + 'Z') : null)}
             <td style="font-weight: 700; color: #fff;">${row.symbol}</td>
             <td style="color: ${dirColor}; font-weight: 700;">${dir || '--'}</td>
             <td style="color: #cbd5e1;">${setupIctLabel(patternStatus)}</td>
-            <td style="color: var(--text-muted); font-size:10.5px;">${(isExit ? row.session_at_entry : row.session) || '--'}</td>
+            ${sessionCellHtml(isExit ? row.session_at_entry : row.session)}
             <td>${row.quality && row.quality !== '--' ? `<span class="tag-chip ${qClass}">${row.quality}</span>` : '--'}</td>
             <td>${row.rr && row.rr !== '0.0' ? row.rr + ':1' : '--'}</td>
             <td style="color: #fff;">${formatDisplay(row.entry_price)}</td>
-            <td>${resultCell}</td>
+            ${isExit ? resultCellHtml(row.r_multiple) : '<td>--</td>'}
             <td><span class="badge-status ${row.status}">${row.status}</span></td>
         `;
         logBody.insertBefore(tr, logBody.firstChild);
@@ -1654,11 +2147,17 @@
         if (renderedJournalKeys.has(key)) return false;
         renderedJournalKeys.add(key);
         renderHistoricalLogRow(row);
+        if (row.kind === 'entry') delete closedTrades[row.symbol];
+        if (row.kind === 'exit' && row.sl_price && row.tp_price) {
+            rememberClosedTrade(row.symbol, { ...row, status: row.entry_status }, row.status, row.exit_price, row.best_r);
+            renderCardGauge(row.symbol);
+            if (currentModalSymbol === row.symbol) updateModalSidePanel(row.symbol);
+        }
         if (row.kind === 'exit' && row.r_multiple !== null && row.r_multiple !== undefined) {
             journalR += row.r_multiple;
             journalClosed++;
             if (row.r_multiple > 0) journalWins++; else if (row.r_multiple < 0) journalLosses++;
-            journalTrades.push({ rMultiple: row.r_multiple });
+            journalTrades.push({ rMultiple: row.r_multiple, time: row.time ? new Date(row.time + 'Z') : null, symbol: row.symbol, status: row.status });
         }
         return true;
     }
@@ -1735,7 +2234,9 @@
         if (tp) tp.textContent = "--";
         if (price && data && data.current_price !== undefined) price.textContent = formatDisplay(data.current_price);
         if (bar) bar.style.width = "0%";
-        if (pct) pct.textContent = "0%";
+        if (pct) pct.textContent = "--";
+        setCardProgressVisible(sym, false);
+        clearNewSignalTag(sym);
         if (tags) tags.innerHTML = "";
         if (sizeRow) sizeRow.style.display = "none";
     }
@@ -1795,6 +2296,7 @@
             }
 
             marketCache[sym] = data;
+            renderCardGauge(sym);
 
             // Mettre à jour la fenêtre graphique si elle est ouverte
             if (currentModalSymbol === sym) {
@@ -1809,6 +2311,7 @@
         if (!data.status || data.status === "STANDBY") {
             resetCardVisual(sym, data);
             activePositions.delete(sym);
+            renderCardGauge(sym);
             updateActiveKpi();
             if (currentModalSymbol === sym) updateModalSidePanel(sym);
             return;
@@ -1822,12 +2325,14 @@
             if (isExitEvent) {
                 const entryData = lastSignalData[sym] || null;
                 const rMultiple = computeRMultiple(entryData, data);
+                const t = testPositions[sym];
+                rememberClosedTrade(sym, entryData, data.status, data.current_price, t ? t.best_r : 0);
                 logOpts = { entryData, rMultiple, sessionAtEntry: lastSignalSession[sym] };
                 if (rMultiple !== null) {
                     journalR += rMultiple;
                     journalClosed++;
                     if (rMultiple > 0) journalWins++; else if (rMultiple < 0) journalLosses++;
-                    journalTrades.push({ rMultiple });
+                    journalTrades.push({ rMultiple, time: new Date(), symbol: sym, status: data.status });
                     recomputePerformancePanel();
                 }
             }
@@ -1848,12 +2353,15 @@
             if (price && data.current_price !== undefined) price.textContent = formatDisplay(data.current_price);
 
             activePositions.delete(sym);
+            renderCardGauge(sym);
+            setCardProgressVisible(sym, true); // garde le résultat final visible jusqu'au Reset
+            clearNewSignalTag(sym);
             updateActiveKpi();
             if (isTP) tpCount++; else if (data.status === "SL_HIT") slCount++;
             updateWinRate();
 
             if (!silent) {
-                triggerNotification(sym, null, isTP ? "Take Profit Hit" : "Stop Loss Hit");
+                triggerNotification(sym, null, data.status);
                 pushToast(sym, data, 'exit');
             }
             if (currentModalSymbol === sym) updateModalSidePanel(sym, { flash: data.status });
@@ -1899,9 +2407,11 @@
         updateActiveKpi();
         lastSignalData[sym] = data;
         lastSignalSession[sym] = sessionLabelNow();
+        renderCardGauge(sym);
 
         if (!silent) {
             triggerNotification(sym, dir, data.status);
+            highlightNewSignal(sym, dir);
             pushToast(sym, data, 'entry');
             if (chartAutoOpen && !currentModalSymbol) {
                 openChartModal(sym);
@@ -1920,7 +2430,14 @@
         currentModalSymbol = sym;
 
         document.getElementById('modal-symbol').textContent = sym;
-        document.getElementById('modal-tv-symbol').textContent = tvSymbol;
+        // Deux sources distinctes : le graphique intégré (cotation du fournisseur ci-dessous) et les
+        // niveaux entrée/SL/TP qui viennent des alertes du Radar (courtier du graphique TradingView).
+        document.getElementById('modal-tv-symbol').textContent = RADAR_TV_SYMBOLS[sym]
+            ? `Graphique : ${tvSymbol} · même courtier que tes alertes Radar`
+            : `Graphique : ${tvSymbol} (indicatif) · Niveaux : alertes Radar`;
+        // Le graphique intégré gratuit ne permet pas de dessiner : on renvoie vers le vrai graphique
+        // TradingView de l'utilisateur, où l'indicateur Radar trace entrée / SL / TP.
+        document.getElementById('modal-tv-link').href = RADAR_TV_LAYOUT + '?symbol=' + encodeURIComponent(RADAR_TV_SYMBOLS[sym] || tvSymbol);
 
         const area = document.getElementById('modal-chart-area');
         area.innerHTML = '<div class="tradingview-widget-container__widget"></div>';
@@ -1970,7 +2487,14 @@
         const isExit = data.status === 'TP_HIT' || data.status === 'SL_HIT' || data.status === 'EXPIRED';
         const isPriceUpdate = data.status === 'PRICE_UPDATE';
         // Le payload de sortie renvoie entry/sl/tp à "0.0" : on réutilise le dernier signal d'entrée connu pour l'affichage.
-        const ref = (isExit || isPriceUpdate) && lastSignalData[sym] ? lastSignalData[sym] : data;
+        let ref = (isExit || isPriceUpdate) && lastSignalData[sym] ? lastSignalData[sym] : data;
+        // Sortie sans entrée connue dans cette page (ex. après F5) : le message de sortie porte des
+        // niveaux « 0.0 », on affiche « -- » plutôt que des prix à zéro.
+        if (isExit && !lastSignalData[sym]) {
+            ref = closedTrades[sym]
+                ? { ...data, ...closedTrades[sym], status: data.status }   // niveaux retrouvés dans le journal
+                : { ...data, entry_price: '--', sl_price: '--', tp_price: '--', rr: '0.0', quality: '--' };
+        }
 
         const displayStatus = isPriceUpdate
             ? (ref.status && ref.status !== 'PRICE_UPDATE' ? ref.status : (ref.direction ? ref.direction + ' ACTIF' : '--'))
@@ -2000,6 +2524,7 @@
             prog = { valid: true, pct: isTP ? 100 : 0, r: isTP ? (prog.rr !== null ? prog.rr : null) : -1, rr: prog.rr };
         }
         setProgressBar(document.getElementById('ms-bar'), document.getElementById('ms-pct'), prog);
+        renderModalGauge();
 
         if (opts.flash === 'TP_HIT') flashSide('modal-flash-tp');
         if (opts.flash === 'SL_HIT') flashSide('modal-flash-sl');
@@ -2036,7 +2561,7 @@
         isSyncing = true;
 
         ws.onopen = function () {
-            connText.textContent = "TERMINAL SYNCHRONISÉ";
+            connText.textContent = "SERVEUR CONNECTÉ";
             dot.classList.remove("offline");
             isSyncing = true;
             if (wsHasConnectedOnce) hydrateJournalFromServer(); // rattrape les lignes manquées pendant la coupure
@@ -2048,6 +2573,7 @@
                 const data = JSON.parse(event.data);
                 if (data.type === "sync_complete") { isSyncing = false; return; }
                 if (data.type === "positions") { serverPositions = data.positions || {}; renderOpenPositions(); return; }
+                if (data.type === "last_alerts") { lastAlerts = data.last_alerts || {}; renderLastAlerts(); return; }
                 if (data.type === "journal") { if (addServerJournalRow(data.row)) refreshJournalKpis(); return; }
                 processData(data, { silent: isSyncing });
             } catch (e) {
@@ -2070,13 +2596,25 @@
     // Simule un cycle complet, 100 % local (rien n'est envoyé au serveur ni au journal persistant) :
     // entrée → prix défavorable → prix au-delà de TP1 (1R) → sortie TP/SL, à ~2,5 s d'intervalle.
     function simulateSignal() {
-        const list = ["GOLD", "US100"];
-        const sym = list[Math.floor(Math.random() * list.length)];
+        // Jamais sur un actif déjà en position (réelle ou test) : sinon la simulation écrase la carte
+        // d'un vrai trade (constaté le 23/09 : US100 bloqué à 60 %).
+        const TEST_ASSETS = { GOLD: [4300, 10], US100: [30500, 40], SPX500: [7700, 12], GER40: [24000, 40], FR40: [8100, 15] };
+        const free = Object.keys(TEST_ASSETS).filter(s => !activePositions.has(s) && !serverPositions[s] && !testPositions[s]);
+        if (free.length === 0) {
+            const stack = document.getElementById('toast-stack');
+            const toast = document.createElement('div');
+            toast.className = 'toast';
+            toast.innerHTML = `<div class="toast-top"><span class="toast-sym">Signal test</span><span class="toast-time">${formatTime()}</span></div>
+                <div class="toast-msg">Tous les actifs de test ont déjà une position ouverte.</div>`;
+            stack.appendChild(toast);
+            setTimeout(() => { toast.classList.add('closing'); setTimeout(() => toast.remove(), 250); }, 5000);
+            return;
+        }
+        const sym = free[Math.floor(Math.random() * free.length)];
         const isBuy = Math.random() > 0.5;
         const dir = isBuy ? "BUY" : "SELL";
         const sign = isBuy ? 1 : -1;
-        const base = sym === "GOLD" ? 4300 : 30500;
-        const risk = sym === "GOLD" ? 10 : 40;
+        const [base, risk] = TEST_ASSETS[sym];
         const entry = base;
         const sl = base - sign * risk;
         const tp = base + sign * risk * 2;
@@ -2118,8 +2656,10 @@
         // Sortie simulée (aléatoire TP/SL), pour voir le journal + le panneau performance se mettre à jour
         setTimeout(() => {
             const isWin = Math.random() > 0.45;
+            const bestR = testPositions[sym] ? testPositions[sym].best_r : 0;
             delete testPositions[sym];
             renderOpenPositions();
+            setTimeout(() => { if (closedTrades[sym]) { closedTrades[sym].best_r = bestR; renderCardGauge(sym); } }, 0);
             processData({
                 symbol: sym,
                 status: isWin ? "TP_HIT" : "SL_HIT",
@@ -2156,9 +2696,14 @@
 
     async function loadCalendar() {
         try {
-            const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'ton fuseau';
+            // Les dates de la source portent leur décalage (heure de New York) : new Date() les convertit
+            // automatiquement dans le fuseau du navigateur. On l'affiche explicitement pour lever le doute.
+            const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+            const offMin = -new Date().getTimezoneOffset();
+            const offTxt = `UTC${offMin >= 0 ? '+' : '−'}${Math.floor(Math.abs(offMin) / 60)}${Math.abs(offMin) % 60 ? ':' + String(Math.abs(offMin) % 60).padStart(2, '0') : ''}`;
+            const city = tz.includes('/') ? tz.split('/').pop().replace(/_/g, ' ') : tz;
             const titleEl = document.getElementById('calendar-title');
-            if (titleEl) titleEl.textContent = `📅 Calendrier économique (semaine en cours, ${tz})`;
+            if (titleEl) titleEl.textContent = `📅 Calendrier économique — semaine en cours, heures de ${city === 'Paris' ? 'Paris' : city || 'ton fuseau'} (${offTxt})`;
 
             const res = await fetch('/api/calendar');
             if (!res.ok) {
@@ -2171,6 +2716,10 @@
 
             calendarData = data;
             calendarData.sort((a, b) => new Date(a.date) - new Date(b.date));
+            // Le serveur indique si ces données viennent de son cache faute de pouvoir joindre la source.
+            const fetchedAt = parseInt(res.headers.get('X-Calendar-Fetched-At') || '0', 10);
+            calendarSourceDown = res.headers.get('X-Calendar-Stale') === '1';
+            calendarFetchedAt = fetchedAt ? new Date(fetchedAt * 1000) : null;
             isCalendarCached = false;
             try {
                 localStorage.setItem('ictRadarCalendarCache', JSON.stringify(calendarData));
@@ -2185,11 +2734,11 @@
                 renderCalendarTable();
             } else {
                 const countEl = document.getElementById('calendar-count');
-                if (countEl) countEl.textContent = 'Erreur de chargement';
+                if (countEl) { countEl.textContent = '⚠ Source indisponible'; countEl.style.color = 'var(--accent-gold)'; }
                 const emptyEl = document.getElementById('calendar-empty');
                 if (emptyEl) {
                     emptyEl.style.display = 'block';
-                    emptyEl.textContent = 'Impossible de charger le calendrier.';
+                    emptyEl.textContent = "Calendrier indisponible : la source des annonces ne répond pas et aucune copie n'est enregistrée. Nouvel essai automatique toutes les 15 minutes. (Ce n'est pas une absence d'annonces.)";
                 }
             }
         }
@@ -2220,6 +2769,83 @@
         return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate();
     }
 
+    /* ----- Traduction française du calendrier (source ForexFactory, en anglais) ----- */
+    // Titre inconnu du dictionnaire : on garde l'anglais (l'original reste visible au survol).
+    const CAL_IMPACT_FR = { High: 'Fort', Medium: 'Moyen', Low: 'Faible', Holiday: 'Férié' };
+    const CAL_COUNTRY_FR = { USD: 'États-Unis', EUR: 'Zone euro', GBP: 'Royaume-Uni', JPY: 'Japon', CHF: 'Suisse', CAD: 'Canada', AUD: 'Australie', NZD: 'Nouvelle-Zélande', CNY: 'Chine', All: 'Mondial' };
+    const CAL_PREFIX_FR = { German: 'Allemagne', French: 'France', Italian: 'Italie', Spanish: 'Espagne', Belgian: 'Belgique' };
+    const CAL_QUALIFIER_FR = { Flash: 'flash', Prelim: 'prélim.', Revised: 'révisé', Final: 'final', Advance: 'avancé' };
+    const CAL_SUFFIX_FR = { 'm/m': 'm/m', 'y/y': 'a/a', 'q/q': 't/t', '3m/y': '3m/a' };
+    const CAL_SPEAKER_INST = { FOMC: 'Fed', Fed: 'Fed', ECB: 'BCE', BOE: 'BoE', MPC: 'BoE', BOC: 'BoC', BOJ: 'BoJ', RBA: 'RBA', RBNZ: 'RBNZ', SNB: 'BNS', Buba: 'Bundesbank' };
+    const CAL_TITLES_FR = {
+        'Manufacturing PMI': 'PMI manufacturier', 'Services PMI': 'PMI des services', 'Composite PMI': 'PMI composite',
+        'ISM Manufacturing PMI': 'PMI manufacturier ISM', 'ISM Services PMI': 'PMI des services ISM', 'Chicago PMI': 'PMI de Chicago',
+        'CPI': 'Inflation (IPC)', 'Core CPI': 'Inflation sous-jacente (IPC)', 'BOJ Core CPI': 'Inflation sous-jacente BoJ (IPC)',
+        'PPI': 'Prix à la production', 'Core PPI': 'Prix à la production sous-jacents',
+        'PCE Price Index': 'Inflation PCE', 'Core PCE Price Index': 'Inflation PCE sous-jacente',
+        'GDP': 'PIB', 'Retail Sales': 'Ventes au détail', 'Core Retail Sales': 'Ventes au détail hors automobile',
+        'Unemployment Claims': 'Inscriptions hebdomadaires au chômage', 'Unemployment Rate': 'Taux de chômage',
+        'Employment Change': "Variation de l'emploi", 'Non-Farm Employment Change': 'Emplois non agricoles (NFP)',
+        'ADP Non-Farm Employment Change': 'Emplois privés ADP', 'ADP Weekly Employment Change': 'Emplois ADP (hebdomadaire)',
+        'Average Hourly Earnings': 'Salaire horaire moyen', 'Claimant Count Change': "Demandeurs d'allocations chômage",
+        'Average Earnings Index': 'Indice des salaires moyens', 'JOLTS Job Openings': "Offres d'emploi JOLTS",
+        'Crude Oil Inventories': 'Stocks de pétrole brut (EIA)', 'API Weekly Statistical Bulletin': 'Stocks de pétrole API (hebdomadaire)',
+        'Natural Gas Storage': 'Stocks de gaz naturel',
+        'Consumer Confidence': 'Confiance des consommateurs', 'GfK Consumer Confidence': 'Confiance des consommateurs GfK',
+        'GfK Consumer Climate': 'Climat de consommation GfK', 'UoM Consumer Sentiment': 'Sentiment des consommateurs (Michigan)',
+        'UoM Inflation Expectations': "Anticipations d'inflation (Michigan)",
+        'ifo Business Climate': 'Climat des affaires ifo', 'NBB Business Climate': 'Climat des affaires (BNB)',
+        'ZEW Economic Sentiment': 'Sentiment économique ZEW', 'NAB Quarterly Business Confidence': 'Confiance des entreprises NAB (trimestriel)',
+        'NAB Business Confidence': 'Confiance des entreprises NAB',
+        'Durable Goods Orders': 'Commandes de biens durables', 'Core Durable Goods Orders': 'Commandes de biens durables hors transport',
+        'New Home Sales': 'Ventes de logements neufs', 'Existing Home Sales': 'Ventes de logements anciens',
+        'Pending Home Sales': 'Promesses de ventes de logements', 'Building Permits': 'Permis de construire', 'Housing Starts': 'Mises en chantier',
+        'Rightmove HPI': 'Prix immobiliers Rightmove',
+        'CB Leading Index': 'Indicateur avancé (Conference Board)', 'Richmond Manufacturing Index': 'Indice manufacturier de Richmond',
+        'Empire State Manufacturing Index': 'Indice manufacturier Empire State', 'Philly Fed Manufacturing Index': 'Indice manufacturier de Philadelphie',
+        'CBI Industrial Order Expectations': 'Commandes industrielles CBI (attentes)', 'CBI Realized Sales': 'Ventes réalisées CBI',
+        'Current Account': 'Balance courante', 'Trade Balance': 'Balance commerciale', 'Public Sector Net Borrowing': 'Besoin de financement public',
+        'M3 Money Supply': 'Masse monétaire M3', 'Private Loans': 'Prêts au secteur privé', 'Credit Card Spending': 'Dépenses par carte bancaire',
+        'Industrial Production': 'Production industrielle', 'Personal Spending': 'Dépenses des ménages', 'Personal Income': 'Revenus des ménages',
+        'Federal Funds Rate': 'Taux directeur de la Fed', 'FOMC Statement': 'Communiqué du FOMC', 'FOMC Press Conference': 'Conférence de presse du FOMC',
+        'FOMC Meeting Minutes': 'Compte rendu du FOMC', 'FOMC Economic Projections': 'Projections économiques du FOMC',
+        'Main Refinancing Rate': 'Taux directeur de la BCE', 'Monetary Policy Statement': 'Déclaration de politique monétaire',
+        'ECB Press Conference': 'Conférence de presse de la BCE', 'ECB Economic Bulletin': 'Bulletin économique de la BCE',
+        'Official Bank Rate': 'Taux directeur de la BoE', 'Cash Rate': 'Taux directeur (RBA)', 'Overnight Rate': 'Taux directeur (BoC)',
+        'Official Cash Rate': 'Taux directeur (RBNZ)', 'BOJ Policy Rate': 'Taux directeur de la BoJ', 'SNB Policy Rate': 'Taux directeur de la BNS',
+        'SNB Monetary Policy Assessment': 'Évaluation de politique monétaire (BNS)', 'SNB Press Conference': 'Conférence de presse de la BNS',
+        'Buba Monthly Report': 'Rapport mensuel de la Bundesbank',
+        'Bank Holiday': 'Jour férié', 'Daylight Saving Time Shift': "Changement d'heure",
+        '30-y Bond Auction': 'Adjudication obligataire à 30 ans', '10-y Bond Auction': 'Adjudication obligataire à 10 ans',
+    };
+
+    function translateEventTitle(title) {
+        if (!title) return '--';
+        let t = title.trim();
+        // « X Speaks » -> « Discours de <nom> (<institution>) »
+        const speak = t.match(/^(.*)\s+Speaks$/);
+        if (speak) {
+            const who = speak[1];
+            if (/^President Trump$/.test(who)) return 'Discours de Trump (président des États-Unis)';
+            const words = who.split(/\s+/);
+            const name = words[words.length - 1];
+            const inst = words.map(w => CAL_SPEAKER_INST[w]).find(Boolean);
+            return `Discours de ${name}${inst ? ` (${inst})` : ''}`;
+        }
+        let country = '';
+        const first = t.split(' ')[0];
+        if (CAL_PREFIX_FR[first]) { country = CAL_PREFIX_FR[first]; t = t.slice(first.length + 1); }
+        let qualifier = '';
+        const q = t.split(' ')[0];
+        if (CAL_QUALIFIER_FR[q]) { qualifier = CAL_QUALIFIER_FR[q]; t = t.slice(q.length + 1); }
+        let suffix = '';
+        const sm = t.match(/\s+(m\/m|y\/y|q\/q|3m\/y)$/);
+        if (sm) { suffix = CAL_SUFFIX_FR[sm[1]]; t = t.slice(0, sm.index); }
+        const base = CAL_TITLES_FR[t];
+        if (!base) return title;
+        return `${country ? country + ' : ' : ''}${base}${qualifier ? ' (' + qualifier + ')' : ''}${suffix ? ' ' + suffix : ''}`;
+    }
+
     function renderCalendarTable() {
         const body = document.getElementById('calendar-body');
         const empty = document.getElementById('calendar-empty');
@@ -2230,13 +2856,23 @@
             return true;
         });
 
-        const cacheTag = isCalendarCached ? ' · Données en cache' : '';
-        if (countEl) countEl.textContent = `${filtered.length} événement(s)${cacheTag}`;
+        // Distinguer clairement « source indisponible » (données anciennes) de « aucune annonce ».
+        const fmtStamp = d => d ? d.toLocaleString('fr-FR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '?';
+        let sourceTag = '';
+        if (isCalendarCached) sourceTag = ' · ⚠ serveur injoignable, copie enregistrée dans ce navigateur';
+        else if (calendarSourceDown) sourceTag = ` · ⚠ source indisponible, données du ${fmtStamp(calendarFetchedAt)}`;
+        else if (calendarFetchedAt) sourceTag = ` · à jour (${fmtStamp(calendarFetchedAt)})`;
+        if (countEl) {
+            countEl.textContent = `${filtered.length} événement(s)${sourceTag}`;
+            countEl.style.color = (isCalendarCached || calendarSourceDown) ? 'var(--accent-gold)' : 'var(--text-muted)';
+        }
 
         if (filtered.length === 0) {
             body.innerHTML = '';
             empty.style.display = 'block';
-            empty.textContent = isCalendarCached ? 'Aucun événement pour ce filtre (données en cache).' : 'Aucun événement pour ce filtre.';
+            empty.textContent = calendarDayFilter === 'TODAY'
+                ? "Aucune annonce aujourd'hui pour ce filtre."
+                : 'Aucune annonce cette semaine pour ce filtre.';
             return;
         }
         empty.style.display = 'none';
@@ -2245,16 +2881,17 @@
             const mins = minutesUntil(ev.date);
             // Heure locale du navigateur (pas de timeZone forcée = fuseau de l'utilisateur)
             const localTime = new Intl.DateTimeFormat('fr-FR', { weekday: 'short', hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit' }).format(new Date(ev.date));
+            const nyTime = new Intl.DateTimeFormat('fr-FR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/New_York' }).format(new Date(ev.date));
             let rowClass = '';
             if (isToday(ev.date)) rowClass = 'calendar-row-today';
             if (mins >= -15 && mins <= 15) rowClass = 'calendar-row-now';
             else if (mins > 15 && mins <= 60) rowClass = 'calendar-row-soon';
             return `
                 <tr class="${rowClass}">
-                    <td style="color: var(--text-muted); white-space:nowrap;">${localTime}</td>
-                    <td style="font-weight:700; color:#fff;">${ev.country || '--'}</td>
-                    <td><span class="impact-badge impact-${ev.impact}">${ev.impact || '--'}</span></td>
-                    <td style="color:#cbd5e1;">${ev.title || '--'}</td>
+                    <td style="color: #cbd5e1; white-space:nowrap;">${localTime}<span style="display:block; color: var(--text-faint); font-size:10px;">New York ${nyTime}</span></td>
+                    <td style="font-weight:700; color:#fff;" title="${CAL_COUNTRY_FR[ev.country] || ''}">${ev.country || '--'}</td>
+                    <td><span class="impact-badge impact-${ev.impact}">${CAL_IMPACT_FR[ev.impact] || ev.impact || '--'}</span></td>
+                    <td style="color:#cbd5e1;" title="${(ev.title || '').replace(/"/g, '&quot;')}">${translateEventTitle(ev.title)}</td>
                     <td style="color:#fff;">${ev.forecast || '--'}</td>
                     <td style="color: var(--text-muted);">${ev.previous || '--'}</td>
                 </tr>
@@ -2268,7 +2905,7 @@
         toast.className = 'toast sl'; // style ambre/alerte réutilisé pour l'avertissement
         toast.innerHTML = `
             <div class="toast-top"><span class="toast-sym">📅 ${ev.country}</span><span class="toast-time">dans ${Math.round(minsLeft)} min</span></div>
-            <div class="toast-msg">${ev.title} (${ev.impact})</div>
+            <div class="toast-msg">${translateEventTitle(ev.title)} (impact ${(CAL_IMPACT_FR[ev.impact] || ev.impact || '').toLowerCase()})</div>
             <div class="toast-hint">Prévision : ${ev.forecast || '--'} · Précédent : ${ev.previous || '--'}</div>
         `;
         stack.appendChild(toast);
@@ -2285,7 +2922,7 @@
             if (mins > 0 && mins <= 30) {
                 calendarAlerted.add(key);
                 pushCalendarToast(ev, mins);
-                triggerNotification(ev.country, null, `Annonce économique dans ${Math.round(mins)} minutes : ${ev.title}`);
+                triggerNotification(ev.country, null, `Annonce économique ${CAL_COUNTRY_FR[ev.country] ? '(' + CAL_COUNTRY_FR[ev.country] + ') ' : ''}dans ${Math.round(mins)} minutes : ${translateEventTitle(ev.title)}`);
             }
         });
         renderCalendarTable(); // rafraîchit la mise en évidence "imminent"

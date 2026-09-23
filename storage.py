@@ -94,6 +94,37 @@ def load_positions():
         return {}
 
 
+def load_state(key, filename):
+    """Valeur JSON persistée sous `key` (Postgres) ou dans `filename` (fichiers) ; None si absente."""
+    try:
+        if BACKEND == "postgres":
+            rows = _exec("SELECT value FROM app_state WHERE key = %s", (key,), fetch=True)
+            return rows[0][0] if rows else None
+        with open(os.path.join(BASE_DIR, filename), "r", encoding="utf-8") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return None
+    except Exception as e:
+        print(f"⚠️ Lecture de « {key} » impossible ({BACKEND}) : {e}")
+        return None
+
+
+def save_state(key, filename, value):
+    try:
+        if BACKEND == "postgres":
+            from psycopg.types.json import Jsonb
+            _exec(
+                "INSERT INTO app_state (key, value) VALUES (%s, %s) "
+                "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
+                (key, Jsonb(value)),
+            )
+        else:
+            with open(os.path.join(BASE_DIR, filename), "w", encoding="utf-8") as f:
+                json.dump(value, f)
+    except Exception as e:
+        print(f"⚠️ Écriture de « {key} » impossible ({BACKEND}) : {e}")
+
+
 def save_positions(positions):
     try:
         if BACKEND == "postgres":

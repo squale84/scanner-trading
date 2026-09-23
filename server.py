@@ -54,38 +54,53 @@ async def health_check():
     return {"status": "alive", "connections": len(manager.active_connections)}
 
 # --- Calendrier économique (source gratuite, sans clé API : flux FairEconomy/ForexFactory) ---
-# Cache persisté sur disque (en plus de la mémoire) : un redéploiement Render (déclenché par
-# n'importe quel push, même sans rapport) efface la mémoire du process. Sans persistance sur
-# disque, un redémarrage pile au moment où la source bloque/rate-limite Render laisse le
-# calendrier vide côté site, sans aucun secours.
+# Cache persisté (Postgres/Neon en production, voir storage.py) : la source refuse souvent les
+# requêtes venant de Render, et un redéploiement efface disque et mémoire. Sans cache persistant,
+# le calendrier restait vide après chaque déploiement (constaté le 23/09 : 502 en continu).
 CALENDAR_URL = "https://nfs.faireconomy.media/ff_calendar_thisweek.json"
 CALENDAR_CACHE_TTL = 900  # 15 minutes : on évite de solliciter la source gratuite à chaque requête
-CALENDAR_CACHE_FILE = os.path.join(os.path.dirname(__file__), "calendar_cache.json")
+CALENDAR_RETRY_AFTER_FAILURE = 900  # après un échec, pas de nouvel essai avant 15 min (évite d'aggraver le blocage)
 _calendar_cache = {"data": None, "fetched_at": 0.0}
+_calendar_last_failure = 0.0
+_calendar_last_storage_check = 0.0
 
 def _load_calendar_cache_from_disk():
-    try:
-        with open(CALENDAR_CACHE_FILE, "r", encoding="utf-8") as f:
-            saved = json.load(f)
-        _calendar_cache["data"] = saved.get("data")
-        _calendar_cache["fetched_at"] = saved.get("fetched_at", 0.0)
-    except Exception:
-        pass  # pas de cache disque disponible (premier démarrage) — normal, pas une erreur
+    saved = storage.load_state("calendar_cache", "calendar_cache.json") or {}
+    _calendar_cache["data"] = saved.get("data")
+    _calendar_cache["fetched_at"] = saved.get("fetched_at", 0.0)
 
 def _save_calendar_cache_to_disk():
-    try:
-        with open(CALENDAR_CACHE_FILE, "w", encoding="utf-8") as f:
-            json.dump(_calendar_cache, f)
-    except Exception as e:
-        print(f"⚠️ Impossible d'écrire le cache calendrier sur disque : {e}")
+    storage.save_state("calendar_cache", "calendar_cache.json", _calendar_cache)
 
+storage.init()
 _load_calendar_cache_from_disk()
+
+def _calendar_response(stale):
+    # En-têtes lus par le dashboard pour distinguer « source indisponible, données du JJ/MM HH:MM »
+    # de « aucune annonce ».
+    return JSONResponse(content=_calendar_cache["data"], headers={
+        "X-Calendar-Fetched-At": str(int(_calendar_cache["fetched_at"] or 0)),
+        "X-Calendar-Stale": "1" if stale else "0",
+    })
 
 @app.get("/api/calendar")
 async def get_calendar():
+    global _calendar_last_failure, _calendar_last_storage_check
     now = time.time()
+    # La tâche GitHub (update_calendar.py) écrit le calendrier dans la base : on relit au plus une
+    # fois par minute pour adopter sa version si elle est plus récente que celle en mémoire.
+    if now - _calendar_last_storage_check > 60:
+        _calendar_last_storage_check = now
+        saved = storage.load_state("calendar_cache", "calendar_cache.json") or {}
+        if saved.get("data") and saved.get("fetched_at", 0) > (_calendar_cache["fetched_at"] or 0):
+            _calendar_cache["data"] = saved["data"]
+            _calendar_cache["fetched_at"] = saved["fetched_at"]
     if _calendar_cache["data"] is not None and (now - _calendar_cache["fetched_at"]) < CALENDAR_CACHE_TTL:
-        return _calendar_cache["data"]
+        return _calendar_response(stale=False)
+    if (now - _calendar_last_failure) < CALENDAR_RETRY_AFTER_FAILURE:
+        if _calendar_cache["data"] is not None:
+            return _calendar_response(stale=True)
+        return JSONResponse(status_code=502, content={"error": "Calendrier indisponible"})
     try:
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
@@ -98,13 +113,14 @@ async def get_calendar():
             _calendar_cache["data"] = data
             _calendar_cache["fetched_at"] = now
             _save_calendar_cache_to_disk()
-            return data
+            return _calendar_response(stale=False)
     except Exception as e:
         print(f"⚠️ Erreur récupération calendrier économique : {e}")
+        _calendar_last_failure = now
         if _calendar_cache["data"] is not None:
             # On sert le cache existant même périmé (mieux qu'une page vide), qu'il vienne
             # de cette session ou qu'il ait été rechargé depuis le disque au démarrage.
-            return _calendar_cache["data"]
+            return _calendar_response(stale=True)
         return JSONResponse(status_code=502, content={"error": "Calendrier indisponible"})
 
 # --- Journal de trading et positions ouvertes (persistance : voir storage.py) ---
@@ -328,6 +344,13 @@ market_state = {
 def _positions_message():
     return json.dumps({"type": "positions", "positions": open_positions})
 
+# Dernière alerte reçue par actif (y compris PRICE_UPDATE), persistée : permet de voir sur chaque
+# carte si l'alerte TradingView de cet actif envoie bien quelque chose, et depuis quand.
+last_alerts: dict = storage.load_state("last_alerts", "last_alerts.json") or {}
+
+def _last_alerts_message():
+    return json.dumps({"type": "last_alerts", "last_alerts": last_alerts})
+
 class ResetRequest(BaseModel):
     symbol: str
 
@@ -373,6 +396,8 @@ async def receive_webhook(request: Request):
     print(f"⚡ [{symbol}] {status} | Dir: {direction} | Entree: {data.get('entry_price')} | SL: {data.get('sl_price')} | TP: {data.get('tp_price')}")
 
     added_rows = _record_journal_event(symbol, status, direction, data)
+    last_alerts[symbol] = {"time": datetime.utcnow().isoformat(), "status": status}
+    storage.save_state("last_alerts", "last_alerts.json", last_alerts)
     market_state[symbol] = data
     await manager.broadcast(json.dumps(data))
     # Le journal et les jauges du front sont pilotés par l'état serveur (source unique) :
@@ -380,6 +405,7 @@ async def receive_webhook(request: Request):
     for row in added_rows:
         await manager.broadcast(json.dumps({"type": "journal", "row": row}))
     await manager.broadcast(_positions_message())
+    await manager.broadcast(_last_alerts_message())
     return {"status": "success", "symbol": symbol}
 
 @app.websocket("/ws")
@@ -390,6 +416,7 @@ async def websocket_endpoint(websocket: WebSocket):
         for sym, item in market_state.items():
             await websocket.send_text(json.dumps(item))
         await websocket.send_text(_positions_message())
+        await websocket.send_text(_last_alerts_message())
         # Signal de fin de synchro : le front sait qu'il peut réactiver son (audio/popups/log)
         await websocket.send_text(json.dumps({"type": "sync_complete"}))
 
