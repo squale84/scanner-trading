@@ -485,6 +485,53 @@
         margin-top: 4px; font-family: var(--font-mono);
     }
 
+    /* ============ POSITIONS EN COURS (onglet Journal) ============ */
+    .pos-list { display: flex; flex-direction: column; gap: 10px; }
+    .pos-card {
+        background-color: var(--bg-card); border: 1px solid var(--border-color);
+        border-radius: var(--radius-md); padding: 14px 18px 12px;
+    }
+    .pos-card.buy { border-left: 3px solid var(--accent-green); }
+    .pos-card.sell { border-left: 3px solid var(--accent-red); }
+    .pos-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 14px; font-size: 12px; color: var(--text-muted); }
+    .pos-sym { font-weight: 800; color: #fff; font-size: 14px; }
+    .pos-dir.buy { color: var(--accent-green); font-weight: 700; }
+    .pos-dir.sell { color: var(--accent-red); font-weight: 700; }
+    .pos-r { margin-left: auto; font-family: var(--font-mono); font-weight: 700; font-size: 14px; }
+    .pos-note { font-size: 10.5px; color: var(--text-faint); margin-top: 8px; font-family: var(--font-mono); }
+    .pos-note.stale { color: var(--accent-gold); }
+    .gauge { position: relative; height: 62px; margin: 8px 10px 0; }
+    .gauge-track {
+        position: absolute; left: 0; right: 0; top: 26px; height: 6px; border-radius: 3px;
+        background: linear-gradient(90deg, var(--accent-red-soft), var(--bg-inset) 40%, var(--accent-green-soft));
+        border: 1px solid var(--border-soft);
+    }
+    .gauge-fill { position: absolute; top: 27px; height: 4px; border-radius: 2px; }
+    .gauge-tick { position: absolute; top: 20px; width: 1px; height: 18px; background: var(--text-faint); }
+    .gauge-tick.sl { background: var(--accent-red); }
+    .gauge-tick.entry { background: #fff; }
+    .gauge-tick.tp { background: var(--accent-green); }
+    .gauge-tick.hit { background: var(--accent-green); width: 2px; }
+    .gauge-lbl, .gauge-px {
+        position: absolute; transform: translateX(-50%); white-space: nowrap;
+        font-family: var(--font-mono); font-size: 9.5px; color: var(--text-muted);
+    }
+    .gauge-lbl { top: 4px; }
+    .gauge-px { top: 42px; color: var(--text-faint); }
+    .gauge-lbl.edge-l, .gauge-px.edge-l { transform: none; }
+    .gauge-lbl.edge-r, .gauge-px.edge-r { transform: translateX(-100%); }
+    .gauge-lbl.hit { color: var(--accent-green); }
+    .gauge-marker {
+        position: absolute; top: 18px; width: 12px; height: 22px; margin-left: -6px;
+        border-radius: 3px; background: var(--accent-gold); box-shadow: 0 0 0 2px var(--bg-card);
+    }
+    .gauge-marker.out { background: var(--accent-purple); }
+    .pos-levels { display: none; }
+    @media (max-width: 600px) {
+        .gauge-lbl .gauge-rtxt, .gauge-px.mid { display: none; }
+        .pos-levels { display: block; }
+    }
+
     .card-footer { margin-top: auto; }
 
     .btn-chart {
@@ -769,6 +816,16 @@
 
     </div><!-- /view-scanner -->
     <div id="view-journal" style="display:none;">
+    <!-- SECTION 2.4 : POSITIONS EN COURS -->
+    <div class="section-container" style="margin-top: 8px;">
+        <div class="section-header">
+            <div class="section-tag" style="background: var(--accent-gold-soft); color: var(--accent-gold); border:1px solid rgba(255,199,60,0.25);"><span>🎯 POSITIONS EN COURS</span></div>
+        </div>
+        <div class="pos-list" id="pos-list"></div>
+        <div class="log-empty" id="pos-empty">Aucune position ouverte.</div>
+        <div class="pos-note">Prix actualisé à la clôture de chaque bougie M5 (alerte Radar). TP1 = 1R et TP2 = 1,5R sont des repères indicatifs : seul le TP final est une sortie du Radar.</div>
+    </div>
+
     <!-- SECTION 2.5 : PERFORMANCE -->
     <div class="section-container" style="margin-top: 8px;">
         <div class="section-header">
@@ -1191,6 +1248,122 @@
         return null;
     }
 
+    // Calcul UNIQUE de la progression d'une position (cartes, fenêtre graphique, jauges).
+    // pct : 0-100 % du chemin entrée → TP (0 si défavorable) ; r : résultat latent en R (négatif
+    // si défavorable) ; rr : R du TP final déduit des niveaux ; valid=false si un niveau manque.
+    function computeProgress(direction, entryPrice, slPrice, tpPrice, price) {
+        const ep = parseNum(entryPrice), slp = parseNum(slPrice), tpP = parseNum(tpPrice), cp = parseNum(price);
+        const sign = direction === 'BUY' ? 1 : (direction === 'SELL' ? -1 : 0);
+        const out = { valid: false, pct: 0, r: null, rr: null };
+        if (!sign || ep === null || tpP === null || cp === null) return out;
+        const reward = (tpP - ep) * sign;
+        if (reward <= 0) return out;
+        out.valid = true;
+        out.pct = Math.max(0, Math.min(100, Math.round(((cp - ep) * sign / reward) * 100)));
+        const risk = slp !== null ? (ep - slp) * sign : null;
+        if (risk !== null && risk > 0) {
+            out.r = (cp - ep) * sign / risk;
+            out.rr = reward / risk;
+        }
+        return out;
+    }
+
+    function setProgressBar(bar, pctEl, prog, extraText) {
+        if (bar) bar.style.width = prog.pct + '%';
+        if (pctEl) pctEl.textContent = !prog.valid ? '--'
+            : prog.pct + '%' + (prog.r !== null ? ` · ${prog.r >= 0 ? '+' : ''}${prog.r.toFixed(2)}R` : '') + (extraText || '');
+    }
+
+    /* ===================== POSITIONS EN COURS (jauges) ===================== */
+    let serverPositions = {};   // état serveur (/api/positions + WebSocket {"type":"positions"})
+    let testPositions = {};     // positions du bouton « Signal test », locales, jamais envoyées au serveur
+
+    // Repères indicatifs en multiples de R. Le TP final est toujours le dernier repère ;
+    // un repère intermédiaire est masqué s'il atteint ou dépasse le TP final (doublon).
+    const INDICATIVE_TP_R = [1, 1.5];
+
+    function gaugeHtml(pos) {
+        const sign = pos.direction === 'BUY' ? 1 : -1;
+        const ep = parseNum(pos.entry_price), slp = parseNum(pos.sl_price), tpP = parseNum(pos.tp_price);
+        const prog = computeProgress(pos.direction, ep, slp, tpP, pos.last_price);
+        if (!prog.valid || prog.rr === null) {
+            return `<div class="pos-note">Niveaux incomplets (entrée ${formatDisplay(ep)} · SL ${formatDisplay(slp)} · TP ${formatDisplay(tpP)}) : jauge indisponible.</div>`;
+        }
+        const risk = (ep - slp) * sign;
+        const bestR = Math.max(parseNum(pos.best_r) || 0, prog.r);
+        const span = prog.rr + 1;                       // de -1R (SL) à +rr (TP final)
+        const fracOfR = r => (r + 1) / span;             // position 0..1 sur la jauge
+        const priceAtR = r => ep + sign * risk * r;
+
+        const marks = [
+            { r: -1, name: 'SL', cls: 'sl', price: slp },
+            { r: 0, name: 'Entrée', cls: 'entry', price: ep },
+            ...INDICATIVE_TP_R.filter(r => r < prog.rr - 1e-6).map((r, i) => ({ r, name: `TP${i + 1}`, rTxt: `${String(r).replace('.', ',')}R`, cls: 'mid', price: priceAtR(r) })),
+        ];
+        marks.push({ r: prog.rr, name: `TP${marks.length - 1}`, rTxt: `${prog.rr.toFixed(1).replace('.', ',')}R`, cls: 'tp', price: tpP });
+
+        let html = '<div class="gauge"><div class="gauge-track"></div>';
+        const xm = Math.max(0, Math.min(1, fracOfR(prog.r)));
+        const x0 = fracOfR(0);
+        html += `<div class="gauge-fill" style="left:${(Math.min(x0, xm) * 100).toFixed(2)}%; width:${(Math.abs(xm - x0) * 100).toFixed(2)}%; background:${prog.r >= 0 ? 'var(--accent-green)' : 'var(--accent-red)'};"></div>`;
+        marks.forEach(m => {
+            const x = fracOfR(m.r) * 100;
+            const hit = m.r > 0 && bestR >= m.r - 1e-9;
+            const edge = x <= 0.5 ? ' edge-l' : (x >= 99.5 ? ' edge-r' : '');
+            html += `<div class="gauge-tick ${m.cls}${hit ? ' hit' : ''}" style="left:${x.toFixed(2)}%;"></div>`;
+            html += `<div class="gauge-lbl${edge}${hit ? ' hit' : ''}" style="left:${x.toFixed(2)}%;">${m.name}${m.rTxt ? `<span class="gauge-rtxt"> ${m.rTxt}</span>` : ''}${hit ? ' ✓' : ''}</div>`;
+            html += `<div class="gauge-px${edge}${m.cls === 'mid' ? ' mid' : ''}" style="left:${x.toFixed(2)}%;">${formatDisplay(m.price)}</div>`;
+        });
+        const outside = fracOfR(prog.r) < 0 || fracOfR(prog.r) > 1;
+        html += `<div class="gauge-marker${outside ? ' out' : ''}" style="left:${(xm * 100).toFixed(2)}%;" title="Dernier prix reçu : ${formatDisplay(pos.last_price)}"></div>`;
+        html += '</div>';
+        // Écran étroit : les prix intermédiaires se chevaucheraient sur la jauge, on les liste ici.
+        html += `<div class="pos-note pos-levels">${marks.filter(m => m.rTxt).map(m => `${m.name} (${m.rTxt}) ${formatDisplay(m.price)}`).join(' · ')}</div>`;
+        return html;
+    }
+
+    function renderOpenPositions() {
+        const list = document.getElementById('pos-list');
+        const empty = document.getElementById('pos-empty');
+        if (!list) return;
+        const all = [
+            ...Object.values(serverPositions).map(p => ({ ...p, isTest: false })),
+            ...Object.values(testPositions).map(p => ({ ...p, isTest: true })),
+        ];
+        empty.style.display = all.length ? 'none' : '';
+        list.innerHTML = all.map(pos => {
+            const dirCls = pos.direction === 'BUY' ? 'buy' : 'sell';
+            const prog = computeProgress(pos.direction, pos.entry_price, pos.sl_price, pos.tp_price, pos.last_price);
+            const rTxt = prog.r === null ? '--' : `${prog.r >= 0 ? '+' : ''}${prog.r.toFixed(2)}R`;
+            const rColor = prog.r === null ? 'var(--text-muted)' : (prog.r >= 0 ? 'var(--accent-green)' : 'var(--accent-red)');
+            const upd = pos.last_update ? new Date(pos.last_update + (pos.isTest ? '' : 'Z')) : null;
+            const ageMin = upd ? (Date.now() - upd.getTime()) / 60000 : null;
+            const stale = !pos.isTest && ageMin !== null && ageMin > 12;
+            const opened = pos.opened_at ? new Date(pos.opened_at + (pos.isTest ? '' : 'Z')).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }) : '?';
+            return `
+            <div class="pos-card ${dirCls}">
+                <div class="pos-head">
+                    <span class="pos-sym">${pos.symbol}</span>
+                    <span class="pos-dir ${dirCls}">${pos.direction}</span>
+                    <span>${setupIctLabel(pos.status)}</span>
+                    ${pos.quality && pos.quality !== '--' ? `<span class="tag-chip ${qualityClass(pos.quality)}">${pos.quality}</span>` : ''}
+                    ${pos.isTest ? '<span class="tag-chip">TEST</span>' : ''}
+                    <span>Ouverte ${pos.recovered ? '(reprise en cours de trade)' : 'à ' + opened}</span>
+                    <span class="pos-r" style="color:${rColor};">${rTxt}${prog.valid ? ` · ${prog.pct}% vers TP` : ''}</span>
+                </div>
+                ${gaugeHtml(pos)}
+                <div class="pos-note${stale ? ' stale' : ''}">Dernier prix ${formatDisplay(pos.last_price)} · reçu ${upd ? upd.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }) : '--'}${stale ? ` · ⚠ aucune mise à jour depuis ${Math.round(ageMin)} min` : ''}</div>
+            </div>`;
+        }).join('');
+    }
+
+    async function loadPositionsFromServer() {
+        try {
+            const res = await fetch('/api/positions');
+            if (res.ok) { serverPositions = await res.json() || {}; renderOpenPositions(); }
+        } catch (e) { console.error('Erreur chargement positions:', e); }
+    }
+
     function updateJournalStats() {
         const el = document.getElementById('log-count');
         if (!el) return;
@@ -1471,26 +1644,41 @@
     // Hydrate le journal depuis l'historique persisté côté serveur, une seule fois au chargement
     // de page — avant connectWebSocket(). Les reconnexions WebSocket rejouent market_state en
     // mode silencieux (voir processData/isSyncing) et ne repassent jamais par ici : pas de doublon.
+    const renderedJournalKeys = new Set();
+    function journalRowKey(row) { return [row.kind, row.time, row.symbol, row.status].join('|'); }
+
+    // Ajoute une ligne serveur au tableau + aux stats, une seule fois (clé unique : une ligne
+    // reçue en direct pendant le rechargement de l'historique n'est pas affichée deux fois).
+    function addServerJournalRow(row) {
+        const key = journalRowKey(row);
+        if (renderedJournalKeys.has(key)) return false;
+        renderedJournalKeys.add(key);
+        renderHistoricalLogRow(row);
+        if (row.kind === 'exit' && row.r_multiple !== null && row.r_multiple !== undefined) {
+            journalR += row.r_multiple;
+            journalClosed++;
+            if (row.r_multiple > 0) journalWins++; else if (row.r_multiple < 0) journalLosses++;
+            journalTrades.push({ rMultiple: row.r_multiple });
+        }
+        return true;
+    }
+
+    function refreshJournalKpis() {
+        document.getElementById("kpi-total").textContent = totalAlerts;
+        updateJournalStats();
+        recomputePerformancePanel();
+    }
+
+    // (Re)charge tout l'historique serveur : au chargement ET à chaque reconnexion WebSocket,
+    // pour récupérer les lignes arrivées pendant une coupure.
     async function hydrateJournalFromServer() {
         try {
             const res = await fetch('/api/journal');
             if (!res.ok) return;
             const rows = await res.json();
-            if (!Array.isArray(rows) || rows.length === 0) return;
-
-            rows.forEach(row => {
-                renderHistoricalLogRow(row);
-                if (row.kind === 'exit' && row.r_multiple !== null && row.r_multiple !== undefined) {
-                    journalR += row.r_multiple;
-                    journalClosed++;
-                    if (row.r_multiple > 0) journalWins++; else if (row.r_multiple < 0) journalLosses++;
-                    journalTrades.push({ rMultiple: row.r_multiple });
-                }
-            });
-
-            document.getElementById("kpi-total").textContent = totalAlerts;
-            updateJournalStats();
-            recomputePerformancePanel();
+            if (!Array.isArray(rows)) return;
+            rows.forEach(addServerJournalRow);
+            refreshJournalKpis();
         } catch (e) {
             console.error('Erreur hydratation journal:', e);
         }
@@ -1571,21 +1759,8 @@
 
             // Conserver l'entrée, SL, TP, direction et qualité existants
             const base = lastSignalData[sym] || data;
-            const ep = parseNum(base.entry_price);
-            const tpP = parseNum(base.tp_price);
-            const cp = parseNum(data.current_price);
             const dir = base.direction || data.direction;
-
-            let progress = 0;
-            if (ep !== null && tpP !== null && cp !== null && dir) {
-                if (dir === "BUY" && tpP > ep) {
-                    progress = Math.max(0, Math.min(100, Math.round(((cp - ep) / (tpP - ep)) * 100)));
-                } else if (dir === "SELL" && ep > tpP) {
-                    progress = Math.max(0, Math.min(100, Math.round(((ep - cp) / (ep - tpP)) * 100)));
-                }
-            }
-            if (bar) bar.style.width = progress + "%";
-            if (pct) pct.textContent = progress + "%";
+            setProgressBar(bar, pct, computeProgress(dir, base.entry_price, base.sl_price, base.tp_price, data.current_price));
 
             // Si rafraîchissement en cours de position, restaurer les repères visuels sans alerte ni journal
             if (!lastSignalData[sym] && (dir === "BUY" || dir === "SELL")) {
@@ -1639,7 +1814,9 @@
             return;
         }
 
-        if (!silent) {
+        // Journal : les événements réels arrivent déjà dédoublonnés via {"type":"journal"} (voir
+        // addServerJournalRow). Seul le bouton « Signal test » (opts.local) écrit directement ici.
+        if (!silent && opts.local) {
             const isExitEvent = ['TP_HIT', 'SL_HIT', 'EXPIRED'].includes(data.status);
             let logOpts = {};
             if (isExitEvent) {
@@ -1716,16 +1893,7 @@
 
         renderPositionSize(sym, data);
 
-        const ep = parseNum(data.entry_price);
-        const tpP = parseNum(data.tp_price);
-        const cp = parseNum(data.current_price);
-        let progress = 0;
-        if (ep !== null && tpP !== null && cp !== null) {
-            if (dir === "BUY" && tpP > ep) progress = Math.max(0, Math.min(100, Math.round(((cp - ep) / (tpP - ep)) * 100)));
-            else if (dir === "SELL" && ep > tpP) progress = Math.max(0, Math.min(100, Math.round(((ep - cp) / (ep - tpP)) * 100)));
-        }
-        if (bar) bar.style.width = progress + "%";
-        if (pct) pct.textContent = progress + "%";
+        setProgressBar(bar, pct, computeProgress(dir, data.entry_price, data.sl_price, data.tp_price, data.current_price));
 
         activePositions.add(sym);
         updateActiveKpi();
@@ -1825,18 +1993,13 @@
         const size = suggestedSize(ref.entry_price, ref.sl_price);
         document.getElementById('ms-size').textContent = size !== null ? size.toFixed(2) + ' unités' : '--';
 
-        const ep = parseNum(ref.entry_price);
-        const tpP = parseNum(ref.tp_price);
-        const cp = parseNum(data.current_price);
-        let progress = 0;
-        if (isExit) {
-            progress = data.status === 'TP_HIT' ? 100 : (data.status === 'SL_HIT' ? 0 : progress);
-        } else if (ep !== null && tpP !== null && cp !== null) {
-            if (ref.direction === 'BUY' && tpP > ep) progress = Math.max(0, Math.min(100, Math.round(((cp - ep) / (tpP - ep)) * 100)));
-            else if (ref.direction === 'SELL' && ep > tpP) progress = Math.max(0, Math.min(100, Math.round(((ep - cp) / (ep - tpP)) * 100)));
+        let prog = computeProgress(ref.direction, ref.entry_price, ref.sl_price, ref.tp_price, data.current_price);
+        if (isExit && data.status !== 'EXPIRED') {
+            // TP/SL : le prix de clôture reçu a pu dépasser le niveau, on affiche le niveau touché.
+            const isTP = data.status === 'TP_HIT';
+            prog = { valid: true, pct: isTP ? 100 : 0, r: isTP ? (prog.rr !== null ? prog.rr : null) : -1, rr: prog.rr };
         }
-        document.getElementById('ms-bar').style.width = progress + '%';
-        document.getElementById('ms-pct').textContent = progress + '%';
+        setProgressBar(document.getElementById('ms-bar'), document.getElementById('ms-pct'), prog);
 
         if (opts.flash === 'TP_HIT') flashSide('modal-flash-tp');
         if (opts.flash === 'SL_HIT') flashSide('modal-flash-sl');
@@ -1861,6 +2024,7 @@
     });
 
     /* ===================== WEBSOCKET ===================== */
+    let wsHasConnectedOnce = false;
     function connectWebSocket() {
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         const wsUrl = `${protocol}//${window.location.host}/ws`;
@@ -1875,12 +2039,16 @@
             connText.textContent = "TERMINAL SYNCHRONISÉ";
             dot.classList.remove("offline");
             isSyncing = true;
+            if (wsHasConnectedOnce) hydrateJournalFromServer(); // rattrape les lignes manquées pendant la coupure
+            wsHasConnectedOnce = true;
         };
 
         ws.onmessage = function (event) {
             try {
                 const data = JSON.parse(event.data);
                 if (data.type === "sync_complete") { isSyncing = false; return; }
+                if (data.type === "positions") { serverPositions = data.positions || {}; renderOpenPositions(); return; }
+                if (data.type === "journal") { if (addServerJournalRow(data.row)) refreshJournalKpis(); return; }
                 processData(data, { silent: isSyncing });
             } catch (e) {
                 console.error("Erreur JSON:", e);
@@ -1899,18 +2067,40 @@
     }
 
     /* ===================== TEST SIGNAL ===================== */
-    // Simule un cycle complet entrée + sortie (pour tester le journal et le panneau performance en un clic)
+    // Simule un cycle complet, 100 % local (rien n'est envoyé au serveur ni au journal persistant) :
+    // entrée → prix défavorable → prix au-delà de TP1 (1R) → sortie TP/SL, à ~2,5 s d'intervalle.
     function simulateSignal() {
-        const list = ["GOLD", "US100", "BTCUSD", "ETHUSD"];
+        const list = ["GOLD", "US100"];
         const sym = list[Math.floor(Math.random() * list.length)];
         const isBuy = Math.random() > 0.5;
         const dir = isBuy ? "BUY" : "SELL";
-        const base = sym === "GOLD" ? 2580 : (sym === "BTCUSD" ? 64500 : 19400);
+        const sign = isBuy ? 1 : -1;
+        const base = sym === "GOLD" ? 4300 : 30500;
+        const risk = sym === "GOLD" ? 10 : 40;
         const entry = base;
-        const sl = isBuy ? base - 10 : base + 10;
-        const tp = isBuy ? base + 20 : base - 20;
+        const sl = base - sign * risk;
+        const tp = base + sign * risk * 2;
         const grade = Math.random() > 0.5 ? "A+" : "A";
-        const setupType = Math.random() > 0.5 ? "SSL SWEEP" : (Math.random() > 0.5 ? "BSL SWEEP" : "RETEST");
+        const setupType = isBuy ? (Math.random() > 0.5 ? "SSL SWEEP" : "RETEST") : (Math.random() > 0.5 ? "BSL SWEEP" : "RETEST");
+        const levels = { entry_price: entry, sl_price: sl, tp_price: tp };
+
+        testPositions[sym] = {
+            symbol: sym, direction: dir, status: setupType, quality: grade, rr: "2.0", ...levels,
+            last_price: entry, best_r: 0, opened_at: new Date().toISOString(), last_update: new Date().toISOString()
+        };
+        renderOpenPositions();
+
+        const priceUpdate = (r, delay) => setTimeout(() => {
+            if (!testPositions[sym]) return;
+            const px = entry + sign * risk * r;
+            testPositions[sym].last_price = px;
+            testPositions[sym].best_r = Math.max(testPositions[sym].best_r, r);
+            testPositions[sym].last_update = new Date().toISOString();
+            renderOpenPositions();
+            processData({ symbol: sym, status: "PRICE_UPDATE", direction: dir, quality: grade, rr: "2.0", ...levels, current_price: px }, { local: true });
+        }, delay);
+        priceUpdate(-0.4, 2500);  // mouvement défavorable
+        priceUpdate(1.2, 5000);   // au-delà de TP1 indicatif
 
         processData({
             symbol: sym,
@@ -1923,11 +2113,13 @@
             sl_price: sl,
             tp_price: tp,
             current_price: entry
-        });
+        }, { local: true });
 
-        // Sortie simulée (aléatoire TP/SL) après quelques secondes, pour voir le journal + le panneau performance se mettre à jour
+        // Sortie simulée (aléatoire TP/SL), pour voir le journal + le panneau performance se mettre à jour
         setTimeout(() => {
             const isWin = Math.random() > 0.45;
+            delete testPositions[sym];
+            renderOpenPositions();
             processData({
                 symbol: sym,
                 status: isWin ? "TP_HIT" : "SL_HIT",
@@ -1939,8 +2131,8 @@
                 tp_price: "0.0",
                 current_price: isWin ? tp : sl,
                 rr: "0.0"
-            });
-        }, 4000);
+            }, { local: true });
+        }, 7500);
     }
 
     /* ===================== CALENDRIER ÉCONOMIQUE ===================== */
@@ -2109,7 +2301,8 @@
     loadCalendar();
     setInterval(loadCalendar, 15 * 60 * 1000);
     setInterval(checkUpcomingEvents, 60 * 1000);
-    hydrateJournalFromServer().finally(connectWebSocket);
+    setInterval(renderOpenPositions, 60 * 1000); // rafraîchit l'alerte « aucune mise à jour depuis X min »
+    Promise.all([hydrateJournalFromServer(), loadPositionsFromServer()]).finally(connectWebSocket);
 </script>
 </body>
 </html>

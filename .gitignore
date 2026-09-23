@@ -8,3 +8,6 @@ app/build/
 local.properties
 calendar_cache.json
 journal_history.json
+positions_state.json
+backtest_exports/
+*.csv

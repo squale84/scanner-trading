@@ -12,6 +12,10 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 from typing import List
 from starlette.websockets import WebSocket, WebSocketDisconnect
+from dotenv import load_dotenv
+
+load_dotenv()  # en local : lit DATABASE_URL dans .env (sur Render, variable d'environnement du service)
+import storage  # après load_dotenv : storage lit DATABASE_URL à l'import
 
 # Evite un crash (UnicodeEncodeError) sur la console Windows (cp1252) quand on
 # print() des emojis dans les logs du webhook.
@@ -103,33 +107,20 @@ async def get_calendar():
             return _calendar_cache["data"]
         return JSONResponse(status_code=502, content={"error": "Calendrier indisponible"})
 
-# --- Journal de trading (historique persistant, survit au F5 ET aux redéploiements Render) ---
-# La table HTML du journal est reconstruite au chargement de la page à partir de cet historique
-# serveur (voir /api/journal), en plus des mises à jour temps réel par WebSocket. Les deux
-# chemins ne se recoupent jamais : l'hydratation REST n'a lieu qu'une fois au chargement, et le
-# rejeu WebSocket à la reconnexion est déjà "silencieux" côté front (ne touche pas le journal) —
-# donc aucun doublon possible.
-JOURNAL_FILE = os.path.join(os.path.dirname(__file__), "journal_history.json")
+# --- Journal de trading et positions ouvertes (persistance : voir storage.py) ---
+# La table HTML du journal est reconstruite depuis cet historique (/api/journal) au chargement
+# et à chaque reconnexion, puis complétée en direct par les messages WebSocket {"type":"journal"}
+# émis uniquement quand une ligne est réellement ajoutée ici (doublons déjà filtrés).
+# Positions ouvertes par actif (niveaux figés à l'entrée + dernier prix reçu) : persistées pour
+# qu'un redémarrage entre l'entrée et la sortie ne produise plus de sortie "orpheline" sans R.
 JOURNAL_MAX_ENTRIES = 500
-journal_log: List[dict] = []
-last_entry_by_symbol = {}
+storage.init()
+journal_log: List[dict] = storage.load_journal(JOURNAL_MAX_ENTRIES)
+open_positions: dict = storage.load_positions()
+print(f"💾 Persistance : {storage.BACKEND} — {len(journal_log)} ligne(s) de journal, {len(open_positions)} position(s) ouverte(s)")
 
-def _load_journal_from_disk():
-    global journal_log
-    try:
-        with open(JOURNAL_FILE, "r", encoding="utf-8") as f:
-            journal_log = json.load(f)
-    except Exception:
-        journal_log = []  # pas d'historique disponible (premier démarrage) — normal, pas une erreur
-
-def _save_journal_to_disk():
-    try:
-        with open(JOURNAL_FILE, "w", encoding="utf-8") as f:
-            json.dump(journal_log, f)
-    except Exception as e:
-        print(f"⚠️ Impossible d'écrire le journal sur disque : {e}")
-
-_load_journal_from_disk()
+def _save_positions_to_disk():
+    storage.save_positions(open_positions)
 
 def _session_label_now():
     ny_hour = datetime.now(ZoneInfo("America/New_York")).hour
@@ -145,8 +136,18 @@ def _parse_num(v):
     except (TypeError, ValueError):
         return None
 
-# Miroir exact de computeRMultiple() côté JS (index.html) : la sortie ne contient que le prix
-# courant, pas entry/sl/tp, donc on a besoin de l'entrée mémorisée pour calculer le résultat.
+def _r_at_price(pos, price):
+    """Résultat latent en multiples de R si on sortait à `price` (None si niveaux inexploitables)."""
+    ep = _parse_num(pos.get("entry_price"))
+    slp = _parse_num(pos.get("sl_price"))
+    px = _parse_num(price)
+    if ep is None or slp is None or px is None or ep == slp:
+        return None
+    risk = abs(ep - slp)
+    return (px - ep) / risk if pos.get("direction") == "BUY" else (ep - px) / risk
+
+# Miroir de computeRMultiple() côté JS (index.html) : la sortie ne contient que le prix
+# courant, pas entry/sl/tp, donc on a besoin de la position mémorisée pour calculer le résultat.
 def _compute_r_multiple(entry, exit_data):
     if not entry:
         return None
@@ -156,60 +157,144 @@ def _compute_r_multiple(entry, exit_data):
     if status == "SL_HIT":
         return -1
     if status == "EXPIRED":
-        ep = _parse_num(entry.get("entry_price"))
-        slp = _parse_num(entry.get("sl_price"))
-        xp = _parse_num(exit_data.get("current_price"))
-        if ep is None or slp is None or xp is None:
-            return None
-        risk = abs(ep - slp)
-        if risk == 0:
-            return None
-        return (xp - ep) / risk if entry.get("direction") == "BUY" else (ep - xp) / risk
+        return _r_at_price(entry, exit_data.get("current_price"))
     return None
 
+# Prix de sortie retenu pour le R : le niveau touché pour TP/SL (le Radar renvoie la clôture de
+# la bougie, qui a pu dépasser le niveau), la clôture pour EXPIRED.
+def _exit_price(entry, status, exit_data):
+    if entry and status == "TP_HIT":
+        return entry.get("tp_price")
+    if entry and status == "SL_HIT":
+        return entry.get("sl_price")
+    return exit_data.get("current_price")
+
+def _levels_valid(data):
+    return all(_parse_num(data.get(k)) not in (None, 0) for k in ("entry_price", "sl_price", "tp_price"))
+
+def _same_levels(pos, data):
+    return pos.get("direction") == data.get("direction") and all(
+        _parse_num(pos.get(k)) == _parse_num(data.get(k)) for k in ("entry_price", "sl_price", "tp_price")
+    )
+
+def _new_position(symbol, status, data, now, recovered=False):
+    return {
+        "symbol": symbol,
+        "direction": data.get("direction"),
+        "status": status,
+        "quality": data.get("quality", "--"),
+        "grade": data.get("grade", "--"),
+        "rr": data.get("rr", "0.0"),
+        "entry_price": data.get("entry_price"),
+        "sl_price": data.get("sl_price"),
+        "tp_price": data.get("tp_price"),
+        "last_price": data.get("current_price") or data.get("entry_price"),
+        "best_r": 0.0,
+        "session": _session_label_now(),
+        "opened_at": None if recovered else now,
+        "last_update": now,
+        "recovered": recovered,
+    }
+
+def _append_journal(row):
+    journal_log.append(row)
+    del journal_log[: max(0, len(journal_log) - JOURNAL_MAX_ENTRIES)]
+    storage.append_journal_row(row, journal_log)
+
 def _record_journal_event(symbol, status, direction, data):
-    if status in ("PRICE_UPDATE", "STANDBY", "INFO"):
-        return
+    """Met à jour les positions ouvertes et le journal. Renvoie la liste des lignes de journal
+    ajoutées (vide si doublon ou simple mise à jour de prix), pour diffusion WebSocket."""
+    if status in ("STANDBY", "INFO"):
+        return []
+    now = datetime.utcnow().isoformat()
+
+    if status == "PRICE_UPDATE":
+        pos = open_positions.get(symbol)
+        if pos is None:
+            # Entrée manquée (serveur redémarré, alerte créée en cours de position…) : le payload
+            # R5 contient les niveaux, on reconstruit la position sans inventer de ligne d'entrée.
+            if direction not in ("BUY", "SELL") or not _levels_valid(data):
+                return []
+            pos = _new_position(symbol, "--", data, now, recovered=True)
+            open_positions[symbol] = pos
+        pos["last_price"] = data.get("current_price", pos.get("last_price"))
+        pos["last_update"] = now
+        r_now = _r_at_price(pos, pos["last_price"])
+        if r_now is not None:
+            pos["best_r"] = max(pos.get("best_r") or 0.0, r_now)
+        _save_positions_to_disk()
+        return []
+
+    added = []
     if direction in ("BUY", "SELL"):
-        entry_record = dict(data)
-        entry_record["session"] = _session_label_now()
-        last_entry_by_symbol[symbol] = entry_record
-        journal_log.append({
+        pos = open_positions.get(symbol)
+        if pos is not None and _same_levels(pos, data):
+            return []  # même entrée renvoyée deux fois (retry webhook) : pas de doublon
+        if pos is not None:
+            # Nouvelle entrée alors que la précédente n'a jamais reçu de sortie : on la clôt
+            # explicitement sans résultat plutôt que de l'écraser silencieusement.
+            row = _exit_row(symbol, "REPLACED", pos, {"current_price": pos.get("last_price")}, now)
+            _append_journal(row)
+            added.append(row)
+        open_positions[symbol] = _new_position(symbol, status, data, now)
+        _save_positions_to_disk()
+        row = {
             "kind": "entry",
-            "time": datetime.utcnow().isoformat(),
+            "time": now,
             "symbol": symbol,
             "direction": direction,
             "status": status,
-            "session": entry_record["session"],
+            "session": open_positions[symbol]["session"],
             "quality": data.get("quality", "--"),
             "grade": data.get("grade", "--"),
             "rr": data.get("rr", "0.0"),
             "entry_price": data.get("entry_price", "--"),
-        })
+            "sl_price": data.get("sl_price"),
+            "tp_price": data.get("tp_price"),
+        }
+        _append_journal(row)
+        added.append(row)
     elif status in ("TP_HIT", "SL_HIT", "EXPIRED"):
-        entry = last_entry_by_symbol.get(symbol)
-        journal_log.append({
-            "kind": "exit",
-            "time": datetime.utcnow().isoformat(),
-            "symbol": symbol,
-            "direction": entry.get("direction") if entry else data.get("direction"),
-            "status": status,
-            "entry_status": entry.get("status") if entry else None,
-            "session_at_entry": entry.get("session") if entry else None,
-            "quality": entry.get("quality") if entry else "--",
-            "grade": entry.get("grade") if entry else "--",
-            "rr": entry.get("rr") if entry else "0.0",
-            "entry_price": entry.get("entry_price") if entry else "--",
-            "r_multiple": _compute_r_multiple(entry, data),
-        })
-    else:
-        return
-    del journal_log[: max(0, len(journal_log) - JOURNAL_MAX_ENTRIES)]
-    _save_journal_to_disk()
+        pos = open_positions.pop(symbol, None)
+        if pos is None:
+            last = next((r for r in reversed(journal_log) if r.get("symbol") == symbol), None)
+            if last is not None and last.get("kind") == "exit":
+                return []  # sortie déjà enregistrée, aucune position ouverte : doublon
+        else:
+            _save_positions_to_disk()
+        row = _exit_row(symbol, status, pos, data, now)
+        _append_journal(row)
+        added.append(row)
+    return added
+
+def _exit_row(symbol, status, pos, data, now):
+    return {
+        "kind": "exit",
+        "time": now,
+        "symbol": symbol,
+        "direction": pos.get("direction") if pos else data.get("direction"),
+        "status": status,
+        "entry_status": pos.get("status") if pos else None,
+        "session_at_entry": pos.get("session") if pos else None,
+        "quality": pos.get("quality") if pos else "--",
+        "grade": pos.get("grade") if pos else "--",
+        "rr": pos.get("rr") if pos else "0.0",
+        "entry_price": pos.get("entry_price") if pos else "--",
+        "sl_price": pos.get("sl_price") if pos else None,
+        "tp_price": pos.get("tp_price") if pos else None,
+        "exit_price": _exit_price(pos, status, data),
+        "last_price": data.get("current_price"),
+        "best_r": pos.get("best_r") if pos else None,
+        "r_multiple": _compute_r_multiple(pos, data) if status != "REPLACED" else None,
+    }
 
 @app.get("/api/journal")
 async def get_journal():
     return journal_log
+
+@app.get("/api/positions")
+async def get_positions():
+    return open_positions
 
 class ConnectionManager:
     def __init__(self):
@@ -231,7 +316,17 @@ class ConnectionManager:
                 self.disconnect(connection)
 
 manager = ConnectionManager()
-market_state = {}
+
+# Après un redémarrage, market_state (mémoire) est vide : on le réamorce depuis les positions
+# persistées pour que les cartes du dashboard retrouvent leur position active à la reconnexion.
+market_state = {
+    sym: {**{k: pos.get(k) for k in ("symbol", "direction", "quality", "grade", "rr", "entry_price", "sl_price", "tp_price")},
+          "status": "PRICE_UPDATE", "current_price": pos.get("last_price")}
+    for sym, pos in open_positions.items()
+}
+
+def _positions_message():
+    return json.dumps({"type": "positions", "positions": open_positions})
 
 class ResetRequest(BaseModel):
     symbol: str
@@ -250,7 +345,11 @@ async def reset_card(data: ResetRequest):
         "progress": 0
     }
     market_state[sym] = reset_data
+    # Reset manuel = l'utilisateur abandonne le suivi : la position disparaît aussi de la jauge.
+    if open_positions.pop(sym, None) is not None:
+        _save_positions_to_disk()
     await manager.broadcast(json.dumps(reset_data))
+    await manager.broadcast(_positions_message())
     print(f"🔄 [{sym}] Carte remise en STANDBY.")
     return {"status": "success", "symbol": sym}
 
@@ -273,9 +372,14 @@ async def receive_webhook(request: Request):
 
     print(f"⚡ [{symbol}] {status} | Dir: {direction} | Entree: {data.get('entry_price')} | SL: {data.get('sl_price')} | TP: {data.get('tp_price')}")
 
-    _record_journal_event(symbol, status, direction, data)
+    added_rows = _record_journal_event(symbol, status, direction, data)
     market_state[symbol] = data
     await manager.broadcast(json.dumps(data))
+    # Le journal et les jauges du front sont pilotés par l'état serveur (source unique) :
+    # mêmes données en direct qu'après un F5, et les doublons filtrés ici n'apparaissent nulle part.
+    for row in added_rows:
+        await manager.broadcast(json.dumps({"type": "journal", "row": row}))
+    await manager.broadcast(_positions_message())
     return {"status": "success", "symbol": symbol}
 
 @app.websocket("/ws")
@@ -285,6 +389,7 @@ async def websocket_endpoint(websocket: WebSocket):
         # Envoi initial de l'état actuel de tous les actifs connus
         for sym, item in market_state.items():
             await websocket.send_text(json.dumps(item))
+        await websocket.send_text(_positions_message())
         # Signal de fin de synchro : le front sait qu'il peut réactiver son (audio/popups/log)
         await websocket.send_text(json.dumps({"type": "sync_complete"}))
 
