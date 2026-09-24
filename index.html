@@ -869,7 +869,7 @@
         </div>
         <div class="pos-list" id="pos-list"></div>
         <div class="log-empty" id="pos-empty">Aucune position ouverte.</div>
-        <div class="pos-note">Prix actualisé à la clôture de chaque bougie M5 (alerte Radar). TP1 = 1R et TP2 = 1,5R sont des repères indicatifs : seul le TP final est une sortie du Radar.</div>
+        <div class="pos-note">Prix actualisé à la clôture de chaque bougie M5 (alerte Radar). Radar R6 : les TP sont les cibles de liquidité (pivots, equal highs/lows, PDH/PDL, sessions Asie/Londres, swing H1, FVG) ; le Radar suit le trade jusqu'au dernier TP, au SL ou à l'expiration — les sorties restent manuelles. Alertes R5 : TP1 = 1R et TP2 = 1,5R sont des repères indicatifs.</div>
     </div>
 
     <!-- SECTION 2.5 : PERFORMANCE -->
@@ -1602,9 +1602,22 @@
         const marks = [
             { r: -1, name: 'SL', cls: 'sl', price: slp },
             { r: 0, name: 'Entrée', cls: 'entry', price: ep },
-            ...INDICATIVE_TP_R.filter(r => r < prog.rr - 1e-6).map((r, i) => ({ r, name: `TP${i + 1}`, rTxt: `${String(r).replace('.', ',')}R`, cls: 'mid', price: priceAtR(r) })),
         ];
-        marks.push({ r: prog.rr, name: `TP${marks.length - 1}`, rTxt: `${prog.rr.toFixed(1).replace('.', ',')}R`, cls: 'tp', price: tpP });
+        // Radar R6 : TP = cibles de liquidité envoyées par l'alerte (le dernier = TP final suivi).
+        // Alertes R5 (sans cibles) : repères indicatifs 1R / 1,5R + TP final.
+        const targets = Array.isArray(pos.targets)
+            ? pos.targets.map(t => ({ r: parseNum(t.r), price: parseNum(t.p), type: t.t || '' })).filter(t => t.r !== null && t.price !== null)
+            : [];
+        const rFmt = r => `+${r.toFixed(1).replace('.', ',')}R`;
+        if (targets.length) {
+            targets.forEach((t, i) => {
+                const isFinal = i === targets.length - 1;
+                marks.push({ r: isFinal ? prog.rr : t.r, name: `TP${i + 1}`, rTxt: rFmt(isFinal ? prog.rr : t.r), cls: isFinal ? 'tp' : 'mid', price: isFinal ? tpP : t.price, type: t.type });
+            });
+        } else {
+            INDICATIVE_TP_R.filter(r => r < prog.rr - 1e-6).forEach((r, i) => marks.push({ r, name: `TP${i + 1}`, rTxt: `${String(r).replace('.', ',')}R`, cls: 'mid', price: priceAtR(r) }));
+            marks.push({ r: prog.rr, name: `TP${marks.length - 1}`, rTxt: `${prog.rr.toFixed(1).replace('.', ',')}R`, cls: 'tp', price: tpP });
+        }
 
         let html = `<div class="gauge${compact ? ' compact' : ''}"><div class="gauge-track"></div>`;
         const xm = Math.max(0, Math.min(1, fracOfR(prog.r)));
@@ -1621,14 +1634,15 @@
             const hit = m.r > 0 && bestR >= m.r - 1e-9;
             const edge = x <= 0.5 ? ' edge-l' : (x >= 99.5 ? ' edge-r' : '');
             html += `<div class="gauge-tick ${m.cls}${hit ? ' hit' : ''}" style="left:${x.toFixed(2)}%;"></div>`;
-            html += `<div class="gauge-lbl${edge}${hit ? ' hit' : ''}" style="left:${x.toFixed(2)}%;">${m.name}${m.rTxt ? `<span class="gauge-rtxt"> ${m.rTxt}</span>` : ''}${hit ? ' ✓' : ''}</div>`;
+            html += `<div class="gauge-lbl${edge}${hit ? ' hit' : ''}" style="left:${x.toFixed(2)}%;"${m.type ? ` title="${m.type}"` : ''}>${m.name}${m.rTxt ? `<span class="gauge-rtxt"> ${m.rTxt}</span>` : ''}${hit ? ' ✓' : ''}</div>`;
             html += `<div class="gauge-px${edge}${m.cls === 'mid' ? ' mid' : ''}" style="left:${x.toFixed(2)}%;">${formatDisplay(m.price)}</div>`;
         });
         const outside = fracOfR(prog.r) < 0 || fracOfR(prog.r) > 1;
         html += `<div class="gauge-marker${outside ? ' out' : ''}" style="left:${(xm * 100).toFixed(2)}%;" title="Dernier prix reçu : ${formatDisplay(pos.last_price)}"></div>`;
         html += '</div>';
         // Écran étroit : les prix intermédiaires se chevaucheraient sur la jauge, on les liste ici.
-        html += `<div class="pos-note pos-levels${compact ? ' show' : ''}">${marks.filter(m => m.rTxt).map(m => `${m.name} (${m.rTxt}) ${formatDisplay(m.price)}`).join(' · ')}</div>`;
+        // Liste des TP : toujours affichée quand ce sont des cibles de liquidité (le type n'est pas sur la jauge).
+        html += `<div class="pos-note pos-levels${compact || targets.length ? ' show' : ''}">${marks.filter(m => m.rTxt).map(m => `${m.name}${m.type ? ' · ' + m.type : ''} (${m.rTxt}) ${formatDisplay(m.price)}`).join(' · ')}</div>`;
         if (bestR > Math.max(prog.r, 0) + 1e-9) {
             const fmtR = r => `${r >= 0 ? '+' : ''}${r.toFixed(2).replace('.', ',')}R`;
             html += `<div class="pos-note">Meilleur moment : <span style="color:var(--accent-green);">${fmtR(bestR)}</span> → ${pos.closed ? 'résultat final' : 'actuellement'} : <span style="color:${prog.r >= 0 ? 'var(--accent-green)' : 'var(--accent-red)'};">${fmtR(prog.r)}</span></div>`;
@@ -1662,7 +1676,7 @@
         closedTrades[sym] = {
             symbol: sym, direction: levels.direction, status: levels.status, quality: levels.quality, rr: levels.rr,
             entry_price: levels.entry_price, sl_price: levels.sl_price, tp_price: levels.tp_price,
-            last_price: lastPrice, best_r: bestR || 0, closed: exitStatus
+            last_price: lastPrice, best_r: bestR || 0, closed: exitStatus, targets: levels.targets || []
         };
     }
 
@@ -2056,12 +2070,15 @@
         return (v >= 0 ? '+' : '') + v.toLocaleString('fr-FR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' €';
     }
 
-    function resultCellHtml(r) {
+    // targetsInfo (Radar R6) : { reached, total } -> « TP 2/3 atteints » sous le résultat.
+    function resultCellHtml(r, targetsInfo) {
         if (r === null || r === undefined) return '<td>--</td>';
         const rColor = r > 0 ? "var(--accent-green)" : (r < 0 ? "var(--accent-red)" : "var(--text-muted)");
         const riskVal = parseNum(document.getElementById('risk-val').value) || 0;
+        const tg = targetsInfo && targetsInfo.total
+            ? `<span class="res-eur" style="color:var(--text-muted);">TP ${targetsInfo.reached}/${targetsInfo.total} atteint${targetsInfo.reached > 1 ? 's' : ''}</span>` : '';
         return `<td><span style="color:${rColor}; font-weight:700;">${r >= 0 ? '+' : ''}${r.toFixed(2)}R</span>` +
-               `<span class="res-eur" data-r="${r}" style="color:${rColor};">${formatEur(r * riskVal)}</span></td>`;
+               `<span class="res-eur" data-r="${r}" style="color:${rColor};">${formatEur(r * riskVal)}</span>${tg}</td>`;
     }
 
     // Le risque par trade peut changer : on recalcule les montants déjà affichés.
@@ -2127,7 +2144,7 @@
             <td>${row.quality && row.quality !== '--' ? `<span class="tag-chip ${qClass}">${row.quality}</span>` : '--'}</td>
             <td>${row.rr && row.rr !== '0.0' ? row.rr + ':1' : '--'}</td>
             <td style="color: #fff;">${formatDisplay(row.entry_price)}</td>
-            ${isExit ? resultCellHtml(row.r_multiple) : '<td>--</td>'}
+            ${isExit ? resultCellHtml(row.r_multiple, Array.isArray(row.targets) && row.targets.length ? { reached: row.targets_reached || 0, total: row.targets.length } : null) : '<td>--</td>'}
             <td><span class="badge-status ${row.status}">${row.status}</span></td>
         `;
         logBody.insertBefore(tr, logBody.firstChild);
@@ -2617,13 +2634,16 @@
         const [base, risk] = TEST_ASSETS[sym];
         const entry = base;
         const sl = base - sign * risk;
-        const tp = base + sign * risk * 2;
+        // Cibles de liquidité simulées (comme celles envoyées par le Radar R6) ; le TP final est la dernière.
+        const targets = [[1.2, 'Equal highs'], [2.1, isBuy ? 'PDH' : 'PDL'], [3.4, 'Swing H1']]
+            .map(([r, t]) => ({ p: String(base + sign * risk * r), r: String(r), t: isBuy ? t : t.replace('highs', 'lows') }));
+        const tp = base + sign * risk * 3.4;
         const grade = Math.random() > 0.5 ? "A+" : "A";
         const setupType = isBuy ? (Math.random() > 0.5 ? "SSL SWEEP" : "RETEST") : (Math.random() > 0.5 ? "BSL SWEEP" : "RETEST");
-        const levels = { entry_price: entry, sl_price: sl, tp_price: tp };
+        const levels = { entry_price: entry, sl_price: sl, tp_price: tp, targets };
 
         testPositions[sym] = {
-            symbol: sym, direction: dir, status: setupType, quality: grade, rr: "2.0", ...levels,
+            symbol: sym, direction: dir, status: setupType, quality: grade, rr: "3.4", ...levels,
             last_price: entry, best_r: 0, opened_at: new Date().toISOString(), last_update: new Date().toISOString()
         };
         renderOpenPositions();
@@ -2635,10 +2655,10 @@
             testPositions[sym].best_r = Math.max(testPositions[sym].best_r, r);
             testPositions[sym].last_update = new Date().toISOString();
             renderOpenPositions();
-            processData({ symbol: sym, status: "PRICE_UPDATE", direction: dir, quality: grade, rr: "2.0", ...levels, current_price: px }, { local: true });
+            processData({ symbol: sym, status: "PRICE_UPDATE", direction: dir, quality: grade, rr: "3.4", ...levels, current_price: px }, { local: true });
         }, delay);
         priceUpdate(-0.4, 2500);  // mouvement défavorable
-        priceUpdate(1.2, 5000);   // au-delà de TP1 indicatif
+        priceUpdate(2.3, 5000);   // au-delà de TP1 et TP2
 
         processData({
             symbol: sym,
@@ -2646,10 +2666,11 @@
             direction: dir,
             quality: grade,
             grade: grade === "A+" ? "★★★★★" : "★★★★☆",
-            rr: "2.0",
+            rr: "3.4",
             entry_price: entry,
             sl_price: sl,
             tp_price: tp,
+            targets,
             current_price: entry
         }, { local: true });
 

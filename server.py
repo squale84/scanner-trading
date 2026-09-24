@@ -189,9 +189,31 @@ def _levels_valid(data):
     return all(_parse_num(data.get(k)) not in (None, 0) for k in ("entry_price", "sl_price", "tp_price"))
 
 def _same_levels(pos, data):
+    # Depuis le R6, chaque trade a un identifiant : c'est lui qui fait foi pour repérer un doublon.
+    if pos.get("trade_id") and data.get("trade_id"):
+        return pos.get("trade_id") == data.get("trade_id")
     return pos.get("direction") == data.get("direction") and all(
         _parse_num(pos.get(k)) == _parse_num(data.get(k)) for k in ("entry_price", "sl_price", "tp_price")
     )
+
+def _clean_targets(data):
+    """Cibles de liquidité envoyées par le Radar R6 : [{"p": prix, "r": R, "t": type}, ...]
+    (liste vide pour les alertes R5, qui n'en envoient pas)."""
+    out = []
+    targets = data.get("targets")
+    if isinstance(targets, list):
+        for t in targets:
+            if isinstance(t, dict) and _parse_num(t.get("p")) is not None and _parse_num(t.get("r")) is not None:
+                out.append({"p": t.get("p"), "r": t.get("r"), "t": str(t.get("t") or "")[:40]})
+    return out
+
+def _targets_reached(pos, status):
+    """Nombre de cibles atteintes pendant le trade (toutes si le TP final est touché)."""
+    targets = (pos or {}).get("targets") or []
+    if status == "TP_HIT":
+        return len(targets)
+    best = (pos or {}).get("best_r") or 0.0
+    return sum(1 for t in targets if (_parse_num(t.get("r")) or 0) <= best + 1e-9)
 
 def _new_position(symbol, status, data, now, recovered=False):
     return {
@@ -210,6 +232,9 @@ def _new_position(symbol, status, data, now, recovered=False):
         "opened_at": None if recovered else now,
         "last_update": now,
         "recovered": recovered,
+        "version": data.get("version"),
+        "trade_id": data.get("trade_id"),
+        "targets": _clean_targets(data),
     }
 
 def _append_journal(row):
@@ -267,6 +292,9 @@ def _record_journal_event(symbol, status, direction, data):
             "entry_price": data.get("entry_price", "--"),
             "sl_price": data.get("sl_price"),
             "tp_price": data.get("tp_price"),
+            "version": data.get("version"),
+            "trade_id": data.get("trade_id"),
+            "targets": open_positions[symbol]["targets"],
         }
         _append_journal(row)
         added.append(row)
@@ -302,6 +330,10 @@ def _exit_row(symbol, status, pos, data, now):
         "last_price": data.get("current_price"),
         "best_r": pos.get("best_r") if pos else None,
         "r_multiple": _compute_r_multiple(pos, data) if status != "REPLACED" else None,
+        "version": (pos.get("version") if pos else None) or data.get("version"),
+        "trade_id": (pos.get("trade_id") if pos else None) or data.get("trade_id"),
+        "targets": pos.get("targets") if pos else [],
+        "targets_reached": _targets_reached(pos, status) if pos else None,
     }
 
 @app.get("/api/journal")
