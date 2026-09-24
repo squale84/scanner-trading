@@ -29,13 +29,16 @@ HEADERS = {
 
 
 def main():
-    storage.init()
+    if not storage.init():
+        sys.exit(f"Base injoignable : {storage.STATUS['last_error']}")
     resp = httpx.get(CALENDAR_URL, headers=HEADERS, timeout=30, follow_redirects=True)
     resp.raise_for_status()
     data = resp.json()
     if not isinstance(data, list) or not data:
         sys.exit(f"Réponse inattendue de la source : {str(data)[:200]}")
-    storage.save_state("calendar_cache", "calendar_cache.json", {"data": data, "fetched_at": time.time()})
+    # Échec d'écriture = échec de la tâche (croix rouge dans l'onglet Actions de GitHub), jamais un faux succès.
+    if not storage.save_state("calendar_cache", "calendar_cache.json", {"data": data, "fetched_at": time.time()}):
+        sys.exit(f"Écriture en base impossible : {storage.STATUS['last_error']}")
     print(f"Calendrier enregistré : {len(data)} événements.")
 
 

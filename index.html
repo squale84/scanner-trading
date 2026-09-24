@@ -612,6 +612,14 @@
     .log-empty { padding: 26px; text-align: center; color: var(--text-faint); font-size: 11.5px; }
 
     /* ============ TOASTS ============ */
+    /* Bandeau d'état dégradé de la persistance (base de données) */
+    .storage-banner {
+        margin: 10px auto 0; max-width: 1400px; padding: 10px 16px; border-radius: 10px;
+        background: var(--accent-red-soft); border: 1px solid var(--accent-red); color: #fff;
+        font-size: 12.5px; line-height: 1.5;
+    }
+    .storage-banner.recovered { background: var(--accent-gold-soft); border-color: var(--accent-gold); }
+
     .toast-stack {
         position: fixed; top: 78px; right: 20px; z-index: 400;
         display: flex; flex-direction: column; gap: 10px; width: 300px; max-width: calc(100vw - 40px);
@@ -766,6 +774,8 @@
         <div class="clock-display" id="clock">--</div>
     </div>
 </header>
+
+<div class="storage-banner" id="storage-banner" style="display:none;" role="alert"></div>
 
 <nav class="view-tabs">
     <button class="view-tab active" id="tab-scanner" onclick="switchView('scanner')">🖥️ Scanner</button>
@@ -1188,6 +1198,7 @@
     let calendarSourceDown = false;   // le serveur sert son cache car la source ne répond pas
     let calendarFetchedAt = null;     // date de la dernière récupération réussie par le serveur
     let lastAlerts = {};              // dernière alerte reçue par actif (état serveur)
+    let storageStatus = null;         // état de la persistance (base de données) côté serveur
     let calendarDayFilter = 'TODAY';
     let calendarImpactFilter = 'ALL';
     let calendarAlerted = new Set();
@@ -2566,6 +2577,36 @@
     });
 
     /* ===================== WEBSOCKET ===================== */
+    // Bandeau affiché quand la base de données ne sauvegarde plus (ou n'a pas sauvegardé) des alertes.
+    // Il n'existe pas de file de réessai : une alerte non sauvegardée n'est visible qu'ici, jusqu'au
+    // prochain redémarrage du serveur.
+    function renderStorageBanner() {
+        const el = document.getElementById('storage-banner');
+        if (!el) return;
+        const s = storageStatus;
+        const t = ts => ts ? new Date(ts * 1000).toLocaleString('fr-FR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '?';
+        const recentRecovery = s && s.recovered_events && s.recovered_at && (Date.now() / 1000 - s.recovered_at) < 3600;
+        if (!s || (s.healthy && s.loaded !== false && !s.unsaved_events && !recentRecovery)) { el.style.display = 'none'; return; }
+        const lost = s.unsaved_events
+            ? ` <b>${s.unsaved_events} alerte(s)</b> reçue(s) depuis ${t(s.first_unsaved_at)} ne sont pas encore en base : visibles ici, réécrites au retour de la base, mais perdues si le serveur redémarre avant.`
+            : '';
+        if (s.loaded === false) {
+            el.className = 'storage-banner';
+            el.innerHTML = `⛔ <b>Base de données injoignable</b> — l'historique et les positions enregistrés n'ont pas encore pu être chargés (protection : rien n'est écrasé).${lost}`;
+        } else if (!s.healthy) {
+            el.className = 'storage-banner';
+            el.innerHTML = `⛔ <b>Base de données en erreur</b> depuis ${t(s.last_error_at)} — les nouvelles alertes ne sont pas sauvegardées.${lost}`;
+        } else if (s.unsaved_events) {
+            el.className = 'storage-banner recovered';
+            el.innerHTML = `⚠ La base de données répond de nouveau, réécriture en cours.${lost}`;
+        } else {
+            el.className = 'storage-banner recovered';
+            el.innerHTML = `✔ La base de données est revenue : ${s.recovered_events} alerte(s) reçue(s) pendant la panne ont été réécrites à ${t(s.recovered_at)}.`;
+        }
+        el.title = s.last_error || '';
+        el.style.display = '';
+    }
+
     let wsHasConnectedOnce = false;
     function connectWebSocket() {
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -2591,6 +2632,7 @@
                 if (data.type === "sync_complete") { isSyncing = false; return; }
                 if (data.type === "positions") { serverPositions = data.positions || {}; renderOpenPositions(); return; }
                 if (data.type === "last_alerts") { lastAlerts = data.last_alerts || {}; renderLastAlerts(); return; }
+                if (data.type === "storage") { storageStatus = data.storage || null; renderStorageBanner(); return; }
                 if (data.type === "journal") { if (addServerJournalRow(data.row)) refreshJournalKpis(); return; }
                 processData(data, { silent: isSyncing });
             } catch (e) {

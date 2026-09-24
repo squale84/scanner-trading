@@ -51,7 +51,11 @@ async def get_index():
 # Route santé pour ping automatique anti-sommeil Render (UptimeRobot / Cron)
 @app.get("/health")
 async def health_check():
-    return {"status": "alive", "connections": len(manager.active_connections)}
+    _sync_storage()
+    report = _storage_report()
+    degraded = not report["healthy"] or report["unsaved_events"] > 0
+    return {"status": "degraded" if degraded else "alive",
+            "connections": len(manager.active_connections), "storage": report}
 
 # --- Calendrier économique (source gratuite, sans clé API : flux FairEconomy/ForexFactory) ---
 # Cache persisté (Postgres/Neon en production, voir storage.py) : la source refuse souvent les
@@ -65,7 +69,9 @@ _calendar_last_failure = 0.0
 _calendar_last_storage_check = 0.0
 
 def _load_calendar_cache_from_disk():
-    saved = storage.load_state("calendar_cache", "calendar_cache.json") or {}
+    saved = storage.load_state("calendar_cache", "calendar_cache.json")
+    if saved is storage.FAILED or not saved:
+        return
     _calendar_cache["data"] = saved.get("data")
     _calendar_cache["fetched_at"] = saved.get("fetched_at", 0.0)
 
@@ -91,7 +97,9 @@ async def get_calendar():
     # fois par minute pour adopter sa version si elle est plus récente que celle en mémoire.
     if now - _calendar_last_storage_check > 60:
         _calendar_last_storage_check = now
-        saved = storage.load_state("calendar_cache", "calendar_cache.json") or {}
+        saved = storage.load_state("calendar_cache", "calendar_cache.json")
+        if saved is storage.FAILED or not saved:
+            saved = {}
         if saved.get("data") and saved.get("fetched_at", 0) > (_calendar_cache["fetched_at"] or 0):
             _calendar_cache["data"] = saved["data"]
             _calendar_cache["fetched_at"] = saved["fetched_at"]
@@ -130,13 +138,20 @@ async def get_calendar():
 # Positions ouvertes par actif (niveaux figés à l'entrée + dernier prix reçu) : persistées pour
 # qu'un redémarrage entre l'entrée et la sortie ne produise plus de sortie "orpheline" sans R.
 JOURNAL_MAX_ENTRIES = 500
-storage.init()
-journal_log: List[dict] = storage.load_journal(JOURNAL_MAX_ENTRIES)
-open_positions: dict = storage.load_positions()
-print(f"💾 Persistance : {storage.BACKEND} — {len(journal_log)} ligne(s) de journal, {len(open_positions)} position(s) ouverte(s)")
+# Rempli par _sync_storage() (plus bas) : tant que l'état en base n'a pas été lu (Neon injoignable
+# au démarrage), storage.STATUS["loaded"] reste False et AUCUNE écriture susceptible d'écraser
+# l'état distant (positions, dernières alertes) n'est faite.
+journal_log: List[dict] = []
+open_positions: dict = {}
+pending_rows: List[dict] = []   # lignes de journal pas encore écrites en base (mémoire seulement)
+touched_symbols: set = set()    # actifs modifiés en mémoire pendant que l'état distant était inconnu
 
-def _save_positions_to_disk():
-    storage.save_positions(open_positions)
+def _save_positions_to_disk(symbol=None):
+    if not storage.STATUS["loaded"]:
+        if symbol:
+            touched_symbols.add(symbol)
+        return storage.blocked_write("des positions")
+    return storage.save_positions(open_positions)
 
 def _session_label_now():
     ny_hour = datetime.now(ZoneInfo("America/New_York")).hour
@@ -240,7 +255,14 @@ def _new_position(symbol, status, data, now, recovered=False):
 def _append_journal(row):
     journal_log.append(row)
     del journal_log[: max(0, len(journal_log) - JOURNAL_MAX_ENTRIES)]
-    storage.append_journal_row(row, journal_log)
+    # On garde l'ordre : les lignes en attente sont réécrites d'abord. Si elles ne passent pas,
+    # celle-ci attend derrière elles et compte comme NON sauvegardée.
+    if pending_rows and not _flush_pending():
+        pending_rows.append(row)
+        storage.deferred_write("du journal")
+        return
+    if not storage.append_journal_row(row, journal_log):
+        pending_rows.append(row)
 
 def _record_journal_event(symbol, status, direction, data):
     """Met à jour les positions ouvertes et le journal. Renvoie la liste des lignes de journal
@@ -263,7 +285,7 @@ def _record_journal_event(symbol, status, direction, data):
         r_now = _r_at_price(pos, pos["last_price"])
         if r_now is not None:
             pos["best_r"] = max(pos.get("best_r") or 0.0, r_now)
-        _save_positions_to_disk()
+        _save_positions_to_disk(symbol)
         return []
 
     added = []
@@ -278,7 +300,7 @@ def _record_journal_event(symbol, status, direction, data):
             _append_journal(row)
             added.append(row)
         open_positions[symbol] = _new_position(symbol, status, data, now)
-        _save_positions_to_disk()
+        _save_positions_to_disk(symbol)
         row = {
             "kind": "entry",
             "time": now,
@@ -305,7 +327,7 @@ def _record_journal_event(symbol, status, direction, data):
             if last is not None and last.get("kind") == "exit":
                 return []  # sortie déjà enregistrée, aucune position ouverte : doublon
         else:
-            _save_positions_to_disk()
+            _save_positions_to_disk(symbol)
         row = _exit_row(symbol, status, pos, data, now)
         _append_journal(row)
         added.append(row)
@@ -338,10 +360,12 @@ def _exit_row(symbol, status, pos, data, now):
 
 @app.get("/api/journal")
 async def get_journal():
+    _sync_storage()
     return journal_log
 
 @app.get("/api/positions")
 async def get_positions():
+    _sync_storage()
     return open_positions
 
 class ConnectionManager:
@@ -367,28 +391,156 @@ manager = ConnectionManager()
 
 # Après un redémarrage, market_state (mémoire) est vide : on le réamorce depuis les positions
 # persistées pour que les cartes du dashboard retrouvent leur position active à la reconnexion.
-market_state = {
-    sym: {**{k: pos.get(k) for k in ("symbol", "direction", "quality", "grade", "rr", "entry_price", "sl_price", "tp_price")},
-          "status": "PRICE_UPDATE", "current_price": pos.get("last_price")}
-    for sym, pos in open_positions.items()
-}
+market_state = {}
+
+def _seed_market_state():
+    for sym, pos in open_positions.items():
+        if sym not in market_state:
+            market_state[sym] = {**{k: pos.get(k) for k in ("symbol", "direction", "quality", "grade", "rr", "entry_price", "sl_price", "tp_price")},
+                                 "status": "PRICE_UPDATE", "current_price": pos.get("last_price")}
 
 def _positions_message():
     return json.dumps({"type": "positions", "positions": open_positions})
 
 # Dernière alerte reçue par actif (y compris PRICE_UPDATE), persistée : permet de voir sur chaque
 # carte si l'alerte TradingView de cet actif envoie bien quelque chose, et depuis quand.
-last_alerts: dict = storage.load_state("last_alerts", "last_alerts.json") or {}
+last_alerts: dict = {}
+
+def _save_last_alerts(symbol):
+    if not storage.STATUS["loaded"]:
+        return storage.blocked_write("des dernières alertes")
+    return storage.save_state("last_alerts", "last_alerts.json", last_alerts)
 
 def _last_alerts_message():
     return json.dumps({"type": "last_alerts", "last_alerts": last_alerts})
+
+_last_sync_attempt = 0.0
+
+def _flush_pending():
+    """Réécrit dans l'ordre les lignes de journal en attente. Renvoie True si toutes sont écrites."""
+    while pending_rows:
+        if not storage.append_journal_row(pending_rows[0], journal_log):
+            return False
+        pending_rows.pop(0)
+    return True
+
+def _load_initial_state():
+    """Lit l'état en base et le FUSIONNE avec ce qui a été reçu en mémoire pendant la panne :
+    positions : la base fait foi, sauf pour les actifs modifiés entre-temps (touched_symbols) ;
+    dernières alertes : la plus récente par actif ; journal : lignes en attente réécrites puis
+    historique relu. Renvoie True si la synchronisation est complète.
+
+    Un échec au milieu du rattrapage laisse loaded=False (rien n'est fusionné ni écrasé) : les
+    lignes déjà réécrites sont retirées de la file une par une, les suivantes restent en attente
+    dans l'ordre, et la tentative suivante reprend là où celle-ci s'est arrêtée.
+
+    LIMITE CONNUE (non corrigée, documentée) : si une alerte de SORTIE arrive alors que l'état en
+    base n'a jamais pu être chargé depuis le démarrage, le serveur ne connaît pas la position :
+    la sortie est journalisée sans résultat en R (sortie « orpheline ») et la position reste ouverte
+    en base jusqu'à la prochaine entrée sur cet actif, qui la clôt en « REPLACED »."""
+    if not storage.init():
+        return False
+    remote_pos = storage.load_positions()
+    remote_alerts = storage.load_state("last_alerts", "last_alerts.json")
+    if remote_pos is storage.FAILED or remote_alerts is storage.FAILED:
+        return False
+    if not _flush_pending():
+        return False
+    remote_journal = storage.load_journal(JOURNAL_MAX_ENTRIES)
+    if remote_journal is storage.FAILED:
+        return False
+
+    merged = dict(remote_pos or {})
+    for sym in touched_symbols:
+        if sym in open_positions:
+            merged[sym] = open_positions[sym]
+        else:
+            merged.pop(sym, None)
+    open_positions.clear()
+    open_positions.update(merged)
+    for sym, a in (remote_alerts or {}).items():
+        if sym not in last_alerts or (a.get("time") or "") > (last_alerts[sym].get("time") or ""):
+            last_alerts[sym] = a
+    journal_log[:] = remote_journal
+    _seed_market_state()
+
+    storage.STATUS["loaded"] = True
+    changed = bool(touched_symbols)
+    touched_symbols.clear()
+    ok = True
+    if changed:
+        ok = storage.save_positions(open_positions) and storage.save_state("last_alerts", "last_alerts.json", last_alerts)
+    print(f"💾 Persistance : {storage.BACKEND} — {len(journal_log)} ligne(s) de journal, {len(open_positions)} position(s) ouverte(s)")
+    return ok
+
+def _sync_storage(force=False):
+    """Appelée au démarrage puis au début des requêtes (au plus toutes les 5 s) : charge l'état si
+    ce n'est pas encore fait, sinon réécrit les lignes de journal en attente."""
+    global _last_sync_attempt
+    now = time.time()
+    if not force and now - _last_sync_attempt < 5:
+        return
+    if storage.STATUS["loaded"] and not pending_rows and not unsaved["count"]:
+        return
+    _last_sync_attempt = now
+    was_pending = unsaved["count"]
+    if not storage.STATUS["loaded"]:
+        ok = _load_initial_state()
+    else:
+        # Base déjà chargée : réécrit le journal en attente, puis l'état courant (positions,
+        # dernières alertes) qui a pu ne pas être écrit pendant la panne.
+        ok = _flush_pending() and storage.save_positions(open_positions) \
+            and storage.save_state("last_alerts", "last_alerts.json", last_alerts)
+    if ok and not pending_rows and not touched_symbols and was_pending:
+        # Tout ce qui avait échoué est maintenant en base : on le dit, sans l'oublier.
+        unsaved["recovered"] += unsaved["count"]
+        unsaved["recovered_at"] = now
+        unsaved["count"] = 0
+        unsaved["first_at"] = None
+
+# Événements reçus dont l'écriture en base a échoué. Il n'existe PAS de file de réessai durable :
+# ils ne vivent qu'en mémoire du serveur (perdus au prochain redémarrage) et ne sont donc jamais
+# présentés comme sauvegardés. Le compteur reste affiché jusqu'au redémarrage du serveur.
+unsaved = {"count": 0, "first_at": None, "last_at": None, "recovered": 0, "recovered_at": None}
+
+def _note_unsaved():
+    now = time.time()
+    unsaved["count"] += 1
+    unsaved["first_at"] = unsaved["first_at"] or now
+    unsaved["last_at"] = now
+
+def _storage_report():
+    report = dict(storage.STATUS)
+    report.update({"unsaved_events": unsaved["count"], "first_unsaved_at": unsaved["first_at"],
+                   "last_unsaved_at": unsaved["last_at"], "pending_journal_rows": len(pending_rows),
+                   "recovered_events": unsaved["recovered"], "recovered_at": unsaved["recovered_at"]})
+    return report
+
+def _storage_message():
+    return json.dumps({"type": "storage", "storage": _storage_report()})
+
+def _persistence_response(symbol, persisted):
+    """Réponse honnête : succès seulement si toutes les écritures en base de la requête ont réussi."""
+    if persisted:
+        return {"status": "success", "symbol": symbol, "persisted": True}
+    return JSONResponse(status_code=500, content={
+        "status": "error", "symbol": symbol, "persisted": False,
+        "error": "Écriture en base impossible : événement conservé en mémoire seulement (réécrit au retour de la base, perdu si le serveur redémarre avant).",
+        "detail": storage.STATUS["last_error"],
+    })
+
+# Démarrage : l'état en base est considéré comme inconnu tant qu'il n'a pas été relu.
+storage.STATUS["loaded"] = False
+_sync_storage(force=True)
 
 class ResetRequest(BaseModel):
     symbol: str
 
 @app.post("/api/reset")
 async def reset_card(data: ResetRequest):
+    _sync_storage()
     sym = data.symbol.upper()
+    failures_before = storage.STATUS["write_failures"]
     reset_data = {
         "symbol": sym,
         "status": "STANDBY",
@@ -401,12 +553,20 @@ async def reset_card(data: ResetRequest):
     }
     market_state[sym] = reset_data
     # Reset manuel = l'utilisateur abandonne le suivi : la position disparaît aussi de la jauge.
-    if open_positions.pop(sym, None) is not None:
-        _save_positions_to_disk()
+    # État en base pas encore chargé : la position peut exister en base sans être en mémoire. Le
+    # Reset est alors noté (touched_symbols) pour être appliqué à la fusion au retour de la base, et
+    # la réponse est persisted:false — jamais un succès sur un état distant inconnu.
+    removed = open_positions.pop(sym, None) is not None
+    if removed or not storage.STATUS["loaded"]:
+        _save_positions_to_disk(sym)
+    persisted = storage.STATUS["write_failures"] == failures_before
+    if not persisted:
+        _note_unsaved()
     await manager.broadcast(json.dumps(reset_data))
     await manager.broadcast(_positions_message())
+    await manager.broadcast(_storage_message())
     print(f"🔄 [{sym}] Carte remise en STANDBY.")
-    return {"status": "success", "symbol": sym}
+    return _persistence_response(sym, persisted)
 
 @app.post("/webhook")
 async def receive_webhook(request: Request):
@@ -421,15 +581,22 @@ async def receive_webhook(request: Request):
             print(f"❌ Erreur lecture payload webhook : {e}")
             return JSONResponse(status_code=400, content={"error": "JSON invalide"})
 
+    _sync_storage()
     symbol = data.get("symbol", "UNKNOWN").upper()
     status = data.get("status", "INFO")
     direction = data.get("direction", "NONE")
 
     print(f"⚡ [{symbol}] {status} | Dir: {direction} | Entree: {data.get('entry_price')} | SL: {data.get('sl_price')} | TP: {data.get('tp_price')}")
 
+    # Aucune attente (await) entre ce relevé et la fin des écritures : le compteur d'échecs ne peut
+    # pas être modifié par une autre requête entre-temps.
+    failures_before = storage.STATUS["write_failures"]
     added_rows = _record_journal_event(symbol, status, direction, data)
     last_alerts[symbol] = {"time": datetime.utcnow().isoformat(), "status": status}
-    storage.save_state("last_alerts", "last_alerts.json", last_alerts)
+    _save_last_alerts(symbol)
+    persisted = storage.STATUS["write_failures"] == failures_before
+    if not persisted:
+        _note_unsaved()
     market_state[symbol] = data
     await manager.broadcast(json.dumps(data))
     # Le journal et les jauges du front sont pilotés par l'état serveur (source unique) :
@@ -438,7 +605,8 @@ async def receive_webhook(request: Request):
         await manager.broadcast(json.dumps({"type": "journal", "row": row}))
     await manager.broadcast(_positions_message())
     await manager.broadcast(_last_alerts_message())
-    return {"status": "success", "symbol": symbol}
+    await manager.broadcast(_storage_message())
+    return _persistence_response(symbol, persisted)
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
@@ -449,6 +617,7 @@ async def websocket_endpoint(websocket: WebSocket):
             await websocket.send_text(json.dumps(item))
         await websocket.send_text(_positions_message())
         await websocket.send_text(_last_alerts_message())
+        await websocket.send_text(_storage_message())
         # Signal de fin de synchro : le front sait qu'il peut réactiver son (audio/popups/log)
         await websocket.send_text(json.dumps({"type": "sync_complete"}))
 
