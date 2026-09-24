@@ -767,6 +767,7 @@
         <button class="btn-nav" onclick="simulateSignal()">⚡ Signal test</button>
         <button class="btn-nav" id="audio-toggle" onclick="toggleAudio()">🔊 Audio ON</button>
         <button class="btn-nav" onclick="openQrModal()">📱 QR Mobile</button>
+        <button class="btn-nav" id="admin-lock-btn" onclick="adminLogout()" style="display:none;" title="Ferme la session administrateur sur cet appareil : le Reset redemandera le code.">🔒 Verrouiller</button>
         <div class="system-pill" title="Connexion entre cette page et le serveur. Ne garantit pas que chaque alerte TradingView fonctionne : voir « Dernière alerte » sur chaque carte du Scanner.">
             <span class="live-dot" id="ws-dot"></span>
             <span id="conn-text">SYNCHRONISATION...</span>
@@ -1039,6 +1040,22 @@
         <p>Scanne ce QR code avec l'appareil photo de ton téléphone Android pour ouvrir le dashboard directement.</p>
         <div id="qr-code-box"></div>
         <div class="qr-url-text" id="qr-url-text">--</div>
+    </div>
+</div>
+
+<!-- CODE ADMINISTRATEUR (Reset) -->
+<div class="modal-overlay" id="admin-modal-overlay" onclick="if(event.target===this) closeAdminModal()">
+    <div class="modal-panel" style="max-width: 380px; height: auto; padding: 22px;">
+        <div style="font-weight: 800; font-size: 15px; margin-bottom: 6px;">🔐 Code administrateur</div>
+        <div style="font-size: 12px; color: var(--text-muted); margin-bottom: 14px;">Nécessaire pour remettre une carte à zéro. À saisir une seule fois sur cet appareil : la session reste ouverte 30 jours (bouton « Verrouiller » pour la fermer).</div>
+        <form onsubmit="event.preventDefault(); submitAdminCode();">
+            <input type="password" id="admin-code" autocomplete="current-password" style="width:100%; background:var(--bg-inset); border:1px solid var(--border-color); border-radius:7px; color:#fff; font-size:14px; padding:9px 10px;" placeholder="Code">
+            <div id="admin-error" style="color: var(--accent-red); font-size: 12px; min-height: 18px; margin-top: 6px;"></div>
+            <div style="display:flex; gap:8px; justify-content:flex-end; margin-top: 6px;">
+                <button type="button" class="btn-nav" onclick="closeAdminModal()">Annuler</button>
+                <button type="submit" class="btn-tv-open" style="border:none; cursor:pointer;">Déverrouiller</button>
+            </div>
+        </form>
     </div>
 </div>
 
@@ -1982,6 +1999,9 @@
     }
 
     /* ===================== RESET ===================== */
+    // Reset protégé (C4) : si le serveur exige une session administrateur (401 auth_required), on
+    // demande le code, le serveur pose un cookie HttpOnly (illisible par cette page), puis on relance.
+    let pendingResetSym = null;
     async function resetAsset(sym) {
         try {
             const response = await fetch('/api/reset', {
@@ -1989,11 +2009,56 @@
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ symbol: sym })
             });
+            if (response.status === 401) { pendingResetSym = sym; openAdminModal(); return; }
             if (!response.ok) console.error("Erreur reset " + sym);
         } catch (err) {
             console.error("Erreur réseau reset:", err);
         }
     }
+
+    function openAdminModal() {
+        document.getElementById('admin-error').textContent = '';
+        document.getElementById('admin-modal-overlay').classList.add('open');
+        setTimeout(() => document.getElementById('admin-code').focus(), 50);
+    }
+    function closeAdminModal() {
+        document.getElementById('admin-code').value = '';
+        document.getElementById('admin-modal-overlay').classList.remove('open');
+        pendingResetSym = null;
+    }
+    async function submitAdminCode() {
+        const input = document.getElementById('admin-code');
+        const err = document.getElementById('admin-error');
+        try {
+            const res = await fetch('/api/admin/login', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ code: input.value })
+            });
+            input.value = '';   // le code n'est gardé nulle part dans la page
+            if (!res.ok) {
+                const body = await res.json().catch(() => ({}));
+                err.textContent = body.error || 'Refusé.';
+                return;
+            }
+            const sym = pendingResetSym;
+            closeAdminModal();
+            refreshAdminState();
+            if (sym) resetAsset(sym);
+        } catch (e) {
+            err.textContent = 'Serveur injoignable.';
+        }
+    }
+    async function adminLogout() {
+        try { await fetch('/api/admin/logout', { method: 'POST' }); } catch (e) {}
+        refreshAdminState();
+    }
+    async function refreshAdminState() {
+        try {
+            const st = await (await fetch('/api/admin/status')).json();
+            document.getElementById('admin-lock-btn').style.display = st.protected && st.unlocked ? '' : 'none';
+        } catch (e) {}
+    }
+    refreshAdminState();
 
     /* ===================== HELPERS ===================== */
     function parseNum(val) {

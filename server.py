@@ -2,8 +2,12 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
+import base64
+import hashlib
+import hmac
 import json
 import os
+import secrets
 import sys
 import asyncio
 import time
@@ -55,7 +59,8 @@ async def health_check():
     report = _storage_report()
     degraded = not report["healthy"] or report["unsaved_events"] > 0
     return {"status": "degraded" if degraded else "alive",
-            "connections": len(manager.active_connections), "storage": report}
+            "connections": len(manager.active_connections), "storage": report,
+            "reset_protected": bool(_reset_secret())}
 
 # --- Calendrier économique (source gratuite, sans clé API : flux FairEconomy/ForexFactory) ---
 # Cache persisté (Postgres/Neon en production, voir storage.py) : la source refuse souvent les
@@ -541,8 +546,87 @@ _sync_storage(force=True)
 class ResetRequest(BaseModel):
     symbol: str
 
+# --- Accès administrateur pour le Reset (C4) ---
+# RESET_SECRET (variable d'environnement Render) = code administrateur choisi par l'utilisateur.
+# Il n'est JAMAIS dans index.html, dans une URL ni dans les journaux : il est saisi une fois par
+# appareil (corps d'une requête POST en HTTPS), puis le serveur remet un cookie de session
+# HttpOnly + Secure + SameSite=Strict valable 30 jours. Le cookie ne contient pas le code : c'est
+# une date d'expiration + un aléa, signés par HMAC avec le code (changer le code invalide toutes
+# les sessions). Sans RESET_SECRET configuré, le Reset reste ouvert comme avant (transition).
+ADMIN_COOKIE = "admin_session"
+ADMIN_SESSION_SECONDS = 30 * 24 * 3600
+ADMIN_MAX_FAILURES = 5
+ADMIN_LOCK_SECONDS = 15 * 60
+_admin_failures: dict = {}   # adresse IP -> {"count": n, "locked_until": ts}
+
+def _reset_secret():
+    return os.environ.get("RESET_SECRET", "").strip()
+
+def _sign(payload, secret):
+    return hmac.new(secret.encode(), payload.encode(), hashlib.sha256).hexdigest()
+
+def _new_admin_token(secret):
+    payload = f"{int(time.time()) + ADMIN_SESSION_SECONDS}.{secrets.token_hex(16)}"
+    return base64.urlsafe_b64encode(f"{payload}.{_sign(payload, secret)}".encode()).decode()
+
+def _admin_session_valid(request: Request):
+    secret = _reset_secret()
+    if not secret:
+        return True  # protection non activée
+    token = request.cookies.get(ADMIN_COOKIE, "")
+    try:
+        expiry, nonce, sig = base64.urlsafe_b64decode(token.encode()).decode().split(".")
+    except Exception:
+        return False
+    return hmac.compare_digest(sig, _sign(f"{expiry}.{nonce}", secret)) and int(expiry) > time.time()
+
+def _client_ip(request: Request):
+    # Derrière le proxy Render, l'adresse réelle est la première de X-Forwarded-For.
+    fwd = request.headers.get("x-forwarded-for", "")
+    return fwd.split(",")[0].strip() if fwd else (request.client.host if request.client else "?")
+
+class AdminLogin(BaseModel):
+    code: str
+
+@app.get("/api/admin/status")
+async def admin_status(request: Request):
+    return {"protected": bool(_reset_secret()), "unlocked": _admin_session_valid(request)}
+
+@app.post("/api/admin/login")
+async def admin_login(data: AdminLogin, request: Request):
+    secret = _reset_secret()
+    if not secret:
+        return {"status": "success", "protected": False}
+    ip = _client_ip(request)
+    now = time.time()
+    fail = _admin_failures.get(ip, {"count": 0, "locked_until": 0})
+    if fail["locked_until"] > now:
+        wait = int((fail["locked_until"] - now) // 60) + 1
+        return JSONResponse(status_code=429, content={"error": f"Trop d'essais : réessaie dans {wait} min."})
+    if not hmac.compare_digest(data.code.encode(), secret.encode()):
+        fail["count"] += 1
+        if fail["count"] >= ADMIN_MAX_FAILURES:
+            fail = {"count": 0, "locked_until": now + ADMIN_LOCK_SECONDS}
+        _admin_failures[ip] = fail
+        print(f"🔒 Code administrateur incorrect ({ip})")  # jamais le code saisi
+        return JSONResponse(status_code=401, content={"error": "Code incorrect."})
+    _admin_failures.pop(ip, None)
+    resp = JSONResponse(content={"status": "success", "protected": True})
+    resp.set_cookie(ADMIN_COOKIE, _new_admin_token(secret), max_age=ADMIN_SESSION_SECONDS, path="/",
+                    httponly=True, secure=True, samesite="strict")
+    print(f"🔓 Session administrateur ouverte ({ip})")
+    return resp
+
+@app.post("/api/admin/logout")
+async def admin_logout():
+    resp = JSONResponse(content={"status": "success"})
+    resp.delete_cookie(ADMIN_COOKIE, path="/", httponly=True, secure=True, samesite="strict")
+    return resp
+
 @app.post("/api/reset")
-async def reset_card(data: ResetRequest):
+async def reset_card(data: ResetRequest, request: Request):
+    if not _admin_session_valid(request):
+        return JSONResponse(status_code=401, content={"error": "auth_required"})
     _sync_storage()
     sym = data.symbol.upper()
     failures_before = storage.STATUS["write_failures"]
