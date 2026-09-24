@@ -62,7 +62,12 @@ async def health_check():
 # requêtes venant de Render, et un redéploiement efface disque et mémoire. Sans cache persistant,
 # le calendrier restait vide après chaque déploiement (constaté le 23/09 : 502 en continu).
 CALENDAR_URL = "https://nfs.faireconomy.media/ff_calendar_thisweek.json"
-CALENDAR_CACHE_TTL = 900  # 15 minutes : on évite de solliciter la source gratuite à chaque requête
+# La tâche GitHub (update_calendar.py) est programmée toutes les 30 min, mais GitHub retarde souvent
+# les tâches programmées (écarts de plusieurs heures constatés le 24/09). Les données restent donc
+# « à jour » pendant 3 h : en deçà, le serveur ne sollicite pas la source (qui bloque Render en 429) ;
+# au-delà, il tente lui-même la source et, s'il échoue, sert le cache marqué en retard (Stale=1).
+CALENDAR_TASK_INTERVAL = 1800        # fréquence programmée de la tâche GitHub (information)
+CALENDAR_CACHE_TTL = 3 * 3600        # durée pendant laquelle les données sont considérées à jour
 CALENDAR_RETRY_AFTER_FAILURE = 900  # après un échec, pas de nouvel essai avant 15 min (évite d'aggraver le blocage)
 _calendar_cache = {"data": None, "fetched_at": 0.0}
 _calendar_last_failure = 0.0

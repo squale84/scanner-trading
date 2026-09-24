@@ -2923,7 +2923,8 @@
         const fmtStamp = d => d ? d.toLocaleString('fr-FR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '?';
         let sourceTag = '';
         if (isCalendarCached) sourceTag = ' · ⚠ serveur injoignable, copie enregistrée dans ce navigateur';
-        else if (calendarSourceDown) sourceTag = ` · ⚠ source indisponible, données du ${fmtStamp(calendarFetchedAt)}`;
+        // Stale=1 : données de plus de 3 h (mise à jour automatique en retard, source injoignable).
+        else if (calendarSourceDown) sourceTag = ` · ⚠ mise à jour en retard, données du ${fmtStamp(calendarFetchedAt)}`;
         else if (calendarFetchedAt) sourceTag = ` · à jour (${fmtStamp(calendarFetchedAt)})`;
         if (countEl) {
             countEl.textContent = `${filtered.length} événement(s)${sourceTag}`;
