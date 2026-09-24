@@ -425,6 +425,33 @@ def _positions_message():
 # carte si l'alerte TradingView de cet actif envoie bien quelque chose, et depuis quand.
 last_alerts: dict = {}
 
+# C6 — état des cartes après redémarrage : il est RECONSTRUIT depuis le journal (dernière sortie
+# par actif) au lieu d'enregistrer chaque message en base. Seule la date du dernier Reset par
+# actif est persistée : une carte clôturée reste affichée tant qu'aucun Reset n'est venu après
+# sa sortie.
+card_resets: dict = {}   # actif -> date ISO (UTC) du dernier Reset
+
+def _save_card_resets():
+    if not storage.STATUS["loaded"]:
+        return storage.blocked_write("des Reset de cartes")
+    return storage.save_state("card_resets", "card_resets.json", card_resets)
+
+def _rebuild_closed_cards():
+    """Cartes clôturées après redémarrage : dernière sortie du journal, si postérieure au dernier
+    Reset de l'actif et sans position ouverte ni état plus récent déjà en mémoire."""
+    last_exit = {}
+    for row in journal_log:
+        if row.get("kind") == "exit" and row.get("status") in ("TP_HIT", "SL_HIT", "EXPIRED"):
+            last_exit[row.get("symbol")] = row
+    for sym, row in last_exit.items():
+        if sym in market_state or sym in open_positions:
+            continue
+        if (row.get("time") or "") <= (card_resets.get(sym) or ""):
+            continue
+        market_state[sym] = {"symbol": sym, "status": row["status"], "direction": "NONE", "quality": "--", "grade": "--",
+                             "entry_price": "0.0", "sl_price": "0.0", "tp_price": "0.0",
+                             "current_price": row.get("last_price") or row.get("exit_price") or "--", "rr": "0.0"}
+
 def _save_last_alerts(symbol):
     if not storage.STATUS["loaded"]:
         return storage.blocked_write("des dernières alertes")
@@ -461,7 +488,8 @@ def _load_initial_state():
         return False
     remote_pos = storage.load_positions()
     remote_alerts = storage.load_state("last_alerts", "last_alerts.json")
-    if remote_pos is storage.FAILED or remote_alerts is storage.FAILED:
+    remote_resets = storage.load_state("card_resets", "card_resets.json")
+    if remote_pos is storage.FAILED or remote_alerts is storage.FAILED or remote_resets is storage.FAILED:
         return False
     if not _flush_pending():
         return False
@@ -480,8 +508,13 @@ def _load_initial_state():
     for sym, a in (remote_alerts or {}).items():
         if sym not in last_alerts or (a.get("time") or "") > (last_alerts[sym].get("time") or ""):
             last_alerts[sym] = a
+    resets_changed = bool(card_resets)
+    for sym, t in (remote_resets or {}).items():
+        if (t or "") > (card_resets.get(sym) or ""):
+            card_resets[sym] = t
     journal_log[:] = remote_journal
     _seed_market_state()
+    _rebuild_closed_cards()
     _bump_positions_version()
 
     storage.STATUS["loaded"] = True
@@ -490,6 +523,8 @@ def _load_initial_state():
     ok = True
     if changed:
         ok = storage.save_positions(open_positions) and storage.save_state("last_alerts", "last_alerts.json", last_alerts)
+    if resets_changed:
+        ok = storage.save_state("card_resets", "card_resets.json", card_resets) and ok
     print(f"💾 Persistance : {storage.BACKEND} — {len(journal_log)} ligne(s) de journal, {len(open_positions)} position(s) ouverte(s)")
     return ok
 
@@ -651,6 +686,8 @@ async def reset_card(data: ResetRequest, request: Request):
         "progress": 0
     }
     market_state[sym] = reset_data
+    card_resets[sym] = datetime.utcnow().isoformat()
+    _save_card_resets()
     # Reset manuel = l'utilisateur abandonne le suivi : la position disparaît aussi de la jauge.
     # État en base pas encore chargé : la position peut exister en base sans être en mémoire. Le
     # Reset est alors noté (touched_symbols) pour être appliqué à la fusion au retour de la base, et

@@ -12,3 +12,4 @@ positions_state.json
 last_alerts.json
 backtest_exports/
 *.csv
+card_resets.json
