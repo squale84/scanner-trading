@@ -982,7 +982,7 @@
                 <thead>
                     <tr>
                         <th>Date</th><th>Actif</th><th>Direction</th><th>Pattern ICT</th><th>Session</th>
-                        <th>Qualité</th><th>R:R</th><th>Entrée</th><th>Résultat</th><th>Statut</th>
+                        <th>Qualité</th><th>R:R</th><th>Entrée</th><th>Sortie</th><th>Résultat</th><th>Motif</th>
                     </tr>
                 </thead>
                 <tbody id="log-body"></tbody>
@@ -1278,9 +1278,11 @@
         const byStatus = s => journalTrades.filter(t => t.status === s);
         const tp = byStatus('TP_HIT').length, sl = byStatus('SL_HIT').length, exp = byStatus('EXPIRED');
         const expPos = exp.filter(t => t.rMultiple > 0).length, expNeg = exp.filter(t => t.rMultiple < 0).length;
+        const expZero = exp.length - expPos - expNeg;
         document.getElementById('perf-breakdown').textContent = journalClosed === 0 ? '' :
             `Détail des sorties : ${tp} TP touché(s) · ${sl} SL touché(s) · ${exp.length} expirée(s) après 30 bougies ` +
-            `(${expPos} positive(s), ${expNeg} négative(s)). « Gagnant » = résultat > 0 R, donc expirées positives incluses. ` +
+            `(${expPos} positive(s), ${expNeg} négative(s)${expZero ? `, ${expZero} nulle(s)` : ''}). « Gagnant » = résultat > 0 R, « perdant » < 0 R, « nul » = 0 R ; ` +
+            `une expiration est clôturée au prix de la 30e bougie et compte selon son résultat. ` +
             `Montants en € simulés avec ${riskVal.toLocaleString('fr-FR')} € de risque par trade.`;
 
         const balance = portfolioVal + pnlEur;
@@ -2080,9 +2082,15 @@
         return isNaN(n) ? null : n;
     }
 
+    // Prix affiché : un prix reçu du Radar (texte déjà au pas de cotation du courtier) garde ses
+    // décimales exactes ; un prix calculé (repère TP, conversion) prend un nombre de décimales
+    // adapté à sa taille. Avant : 2 décimales au-dessus de 1, ce qui affichait EURUSD 1.14813 en « 1.15 ».
     function formatDisplay(val) {
         const n = parseNum(val);
-        return n !== null ? n.toFixed(n < 1 ? 4 : 2) : "--";
+        if (n === null) return "--";
+        if (typeof val === 'string' && /^\s*-?\d+(\.\d+)?\s*$/.test(val)) return val.trim();
+        const a = Math.abs(n);
+        return n.toFixed(a >= 1000 ? 2 : (a >= 10 ? 3 : 5));
     }
 
     function formatTime() {
@@ -2160,14 +2168,39 @@
     }
 
     // targetsInfo (Radar R6) : { reached, total } -> « TP 2/3 atteints » sous le résultat.
-    function resultCellHtml(r, targetsInfo) {
-        if (r === null || r === undefined) return '<td>--</td>';
+    // Raison affichée au survol quand le résultat d'une sortie ne peut pas être calculé.
+    function unavailableReason(row) {
+        if (row.status === 'REPLACED') return "Entrée remplacée par une nouvelle avant sa sortie : pas de résultat.";
+        if (!row.entry_price || row.entry_price === '--') return "Sortie reçue sans entrée connue : prix d'entrée et stop absents, le résultat en R ne peut pas être calculé.";
+        return "Données de la ligne insuffisantes pour calculer le résultat en R.";
+    }
+
+    function resultCellHtml(r, targetsInfo, reason) {
+        if (r === null || r === undefined) {
+            return `<td style="color: var(--text-muted);" title="${(reason || '').replace(/"/g, '&quot;')}">résultat indisponible</td>`;
+        }
         const rColor = r > 0 ? "var(--accent-green)" : (r < 0 ? "var(--accent-red)" : "var(--text-muted)");
         const riskVal = parseNum(document.getElementById('risk-val').value) || 0;
         const tg = targetsInfo && targetsInfo.total
             ? `<span class="res-eur" style="color:var(--text-muted);">TP ${targetsInfo.reached}/${targetsInfo.total} atteint${targetsInfo.reached > 1 ? 's' : ''}</span>` : '';
-        return `<td><span style="color:${rColor}; font-weight:700;">${r >= 0 ? '+' : ''}${r.toFixed(2)}R</span>` +
+        const rLabel = r === 0 ? '0.00R · nul' : `${r > 0 ? '+' : ''}${r.toFixed(2)}R`;
+        return `<td><span style="color:${rColor}; font-weight:700;">${rLabel}</span>` +
                `<span class="res-eur" data-r="${r}" style="color:${rColor};">${formatEur(r * riskVal)}</span>${tg}</td>`;
+    }
+
+    // Prix de sortie : pour les lignes enregistrées avant le 23/09, il n'était pas conservé (le
+    // résultat en R, lui, l'était) -> « non enregistré », jamais un prix reconstitué.
+    function exitPriceCellHtml(isExit, price) {
+        if (!isExit) return '<td style="color: var(--text-faint);">—</td>';
+        if (parseNum(price) === null) {
+            return '<td style="color: var(--text-muted); font-size: 10.5px;" title="Ligne enregistrée avant le 23/09 : le prix de sortie n\'était pas conservé. Le résultat en R a bien été calculé et enregistré à la sortie.">non enregistré</td>';
+        }
+        return `<td style="color: #fff;">${formatDisplay(price)}</td>`;
+    }
+
+    const EXIT_LABELS_FR = { TP_HIT: 'TP atteint', SL_HIT: 'SL touché', EXPIRED: 'Expiration', REPLACED: 'Remplacée' };
+    function statusCellHtml(status) {
+        return `<td><span class="badge-status ${status}">${EXIT_LABELS_FR[status] || status}</span></td>`;
     }
 
     // Le risque par trade peut changer : on recalcule les montants déjà affichés.
@@ -2199,8 +2232,9 @@
             <td>${qData.quality && qData.quality !== '--' ? `<span class="tag-chip ${qClass}">${qData.quality}</span>` : '--'}</td>
             <td>${qData.rr && qData.rr !== '0.0' ? qData.rr + ':1' : '--'}</td>
             <td style="color: #fff;">${formatDisplay(isExit && entryData ? entryData.entry_price : data.entry_price)}</td>
-            ${isExit ? resultCellHtml(opts.rMultiple) : '<td>--</td>'}
-            <td><span class="badge-status ${data.status}">${data.status}</span></td>
+            ${exitPriceCellHtml(isExit, data.current_price)}
+            ${isExit ? resultCellHtml(opts.rMultiple, null, unavailableReason(entryData || {})) : '<td>--</td>'}
+            ${statusCellHtml(data.status)}
         `;
         logBody.insertBefore(tr, logBody.firstChild);
 
@@ -2233,8 +2267,9 @@
             <td>${row.quality && row.quality !== '--' ? `<span class="tag-chip ${qClass}">${row.quality}</span>` : '--'}</td>
             <td>${row.rr && row.rr !== '0.0' ? row.rr + ':1' : '--'}</td>
             <td style="color: #fff;">${formatDisplay(row.entry_price)}</td>
-            ${isExit ? resultCellHtml(row.r_multiple, Array.isArray(row.targets) && row.targets.length ? { reached: row.targets_reached || 0, total: row.targets.length } : null) : '<td>--</td>'}
-            <td><span class="badge-status ${row.status}">${row.status}</span></td>
+            ${exitPriceCellHtml(isExit, row.exit_price)}
+            ${isExit ? resultCellHtml(row.r_multiple, Array.isArray(row.targets) && row.targets.length ? { reached: row.targets_reached || 0, total: row.targets.length } : null, unavailableReason(row)) : '<td>--</td>'}
+            ${statusCellHtml(row.status)}
         `;
         logBody.insertBefore(tr, logBody.firstChild);
         totalAlerts++;
