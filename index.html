@@ -981,13 +981,25 @@
             <table class="log-table">
                 <thead>
                     <tr>
-                        <th>Date</th><th>Actif</th><th>Direction</th><th>Pattern ICT</th><th>Session</th>
-                        <th>Qualité</th><th>R:R</th><th>Entrée</th><th>Sortie</th><th>Résultat</th><th>Motif</th>
+                        <th>Ouverture</th><th>Clôture</th><th>Actif</th><th>Sens</th><th>Pattern ICT</th><th>Session</th>
+                        <th>Qualité</th><th>Prix d'entrée</th><th>Prix de sortie</th><th>Motif</th><th>Résultat</th>
                     </tr>
                 </thead>
                 <tbody id="log-body"></tbody>
             </table>
             <div class="log-empty" id="log-empty">En attente du premier signal…</div>
+        </div>
+        <div id="journal-orphans" style="display:none; border-top: 1px solid var(--border-color);">
+            <div class="log-header" style="border-bottom: none;">
+                <span class="log-title">⚠ Sorties sans entrée connue — exclues du bilan</span>
+                <span id="journal-orphans-count" style="font-family: var(--font-mono); font-size: 11px; color: var(--text-muted);"></span>
+            </div>
+            <div style="overflow-x: auto;">
+                <table class="log-table">
+                    <thead><tr><th>Clôture</th><th>Actif</th><th>Motif</th><th>Résultat</th></tr></thead>
+                    <tbody id="journal-orphans-body"></tbody>
+                </table>
+            </div>
         </div>
     </div>
     </div><!-- /view-journal -->
@@ -1838,7 +1850,8 @@
         if (!el) return;
         const winRate = journalClosed === 0 ? '--' : Math.round((journalWins / journalClosed) * 100) + '%';
         const rTxt = (journalR >= 0 ? '+' : '') + journalR.toFixed(2) + 'R';
-        el.textContent = `${journalClosed} trade(s) clôturé(s) · ${winRate} réussite · ${rTxt} cumulé`;
+        el.textContent = `${journalClosed} trade(s) clôturé(s) · ${winRate} réussite · ${rTxt} cumulé` +
+            (journalOrphanCount ? ` · ${journalOrphanCount} sortie(s) sans entrée, exclue(s)` : '');
     }
 
     /* ===================== CLOCK / SESSIONS ===================== */
@@ -2209,70 +2222,120 @@
         document.querySelectorAll('.res-eur[data-r]').forEach(el => { el.textContent = formatEur(parseFloat(el.dataset.r) * riskVal); });
     }
 
-    function appendToLog(data, opts = {}) {
-        const logBody = document.getElementById("log-body");
-        const emptyRow = document.getElementById("log-empty");
-        if (!hasLogRows) { emptyRow.style.display = 'none'; hasLogRows = true; }
+    /* ---------- Journal : une ligne par trade ----------
+       Les lignes brutes (entrées / sorties, telles qu'enregistrées) sont conservées dans journalRows,
+       puis appariées par actif dans l'ordre chronologique : une entrée + la sortie suivante du même
+       actif = un trade. Une sortie sans entrée ouverte est « orpheline » (bloc séparé, exclue du
+       bilan). Rien n'est modifié ni estimé : les statistiques restent calculées sur les sorties. */
+    const journalRows = [];
+    let journalRenderPending = false;
+    let journalOrphanCount = 0;
 
-        const isExit = ['TP_HIT', 'SL_HIT', 'EXPIRED'].includes(data.status);
-        const entryData = opts.entryData || null;
-        const dir = isExit && entryData ? entryData.direction : data.direction;
-        const isBuy = dir === "BUY";
-        const dirColor = isBuy ? "var(--accent-green)" : (dir === "SELL" ? "var(--accent-red)" : "var(--text-muted)");
-        const qData = isExit && entryData ? entryData : data;
-        const qClass = qualityClass(qData.quality);
+    function nowUtcIso() { return new Date().toISOString().slice(0, -1); }   // même format que le serveur
 
-        const tr = document.createElement("tr");
-        tr.innerHTML = `
-            ${dateCellHtml(new Date())}
-            <td style="font-weight: 700; color: #fff;">${data.symbol}</td>
+    function scheduleJournalRender() {
+        if (journalRenderPending) return;
+        journalRenderPending = true;
+        Promise.resolve().then(() => { journalRenderPending = false; renderJournalTable(); });
+    }
+
+    function buildJournalTrades(rows) {
+        const sorted = [...rows].sort((a, b) => (a.time || '').localeCompare(b.time || ''));
+        const open = {}, trades = [], orphans = [];
+        sorted.forEach(r => {
+            const sym = r.symbol;
+            if (r.kind === 'entry') {
+                // Nouvelle entrée alors que la précédente n'a pas de sortie : la précédente est close
+                // « sortie non enregistrée » (jamais un résultat inventé).
+                if (open[sym]) trades.push({ entry: open[sym], exit: null, missingExit: true });
+                open[sym] = r;
+            } else if (open[sym]) {
+                trades.push({ entry: open[sym], exit: r });
+                delete open[sym];
+            } else {
+                orphans.push(r);
+            }
+        });
+        Object.values(open).forEach(e => trades.push({ entry: e, exit: null, isOpen: true }));
+        const sortKey = t => (t.exit ? t.exit.time : t.entry.time) || '';
+        trades.sort((a, b) => sortKey(b).localeCompare(sortKey(a)));   // plus récent en haut
+        orphans.sort((a, b) => (b.time || '').localeCompare(a.time || ''));
+        return { trades, orphans };
+    }
+
+    const utcDate = t => t ? new Date(t + 'Z') : null;
+
+    function tradeRowHtml(t) {
+        const e = t.entry, x = t.exit;
+        const dir = e.direction || (x && x.direction);
+        const dirColor = dir === "BUY" ? "var(--accent-green)" : (dir === "SELL" ? "var(--accent-red)" : "var(--text-muted)");
+        const quality = e.quality || (x && x.quality);
+        const test = (e._local || (x && x._local)) ? ' <span class="tag-chip">TEST</span>' : '';
+        let closeCell, motif, result;
+        if (x) {
+            closeCell = dateCellHtml(utcDate(x.time));
+            motif = statusCellHtml(x.status);
+            const tg = Array.isArray(x.targets) && x.targets.length ? { reached: x.targets_reached || 0, total: x.targets.length } : null;
+            result = resultCellHtml(x.r_multiple, tg, unavailableReason(x));
+        } else if (t.isOpen) {
+            closeCell = '<td class="cell-date" style="color: var(--text-muted);">en cours</td>';
+            motif = '<td><span class="badge-status">En cours</span></td>';
+            result = '<td style="color: var(--text-muted);">en cours</td>';
+        } else {
+            closeCell = '<td class="cell-date" style="color: var(--text-muted);">—</td>';
+            motif = '<td><span class="badge-status" title="Une nouvelle entrée est arrivée sur cet actif avant la sortie de celle-ci.">Sortie non enregistrée</span></td>';
+            result = '<td style="color: var(--text-muted);" title="Aucune sortie enregistrée pour cette entrée : le résultat ne peut pas être calculé.">résultat indisponible</td>';
+        }
+        return `<tr>
+            ${dateCellHtml(utcDate(e.time))}
+            ${closeCell}
+            <td style="font-weight: 700; color: #fff;">${e.symbol}${test}</td>
             <td style="color: ${dirColor}; font-weight: 700;">${dir || '--'}</td>
-            <td style="color: #cbd5e1;">${isExit ? (entryData ? setupIctLabel(entryData.status) : '--') : setupIctLabel(data.status)}</td>
-            ${sessionCellHtml(isExit ? opts.sessionAtEntry : sessionLabelNow())}
-            <td>${qData.quality && qData.quality !== '--' ? `<span class="tag-chip ${qClass}">${qData.quality}</span>` : '--'}</td>
-            <td>${qData.rr && qData.rr !== '0.0' ? qData.rr + ':1' : '--'}</td>
-            <td style="color: #fff;">${formatDisplay(isExit && entryData ? entryData.entry_price : data.entry_price)}</td>
-            ${exitPriceCellHtml(isExit, data.current_price)}
-            ${isExit ? resultCellHtml(opts.rMultiple, null, unavailableReason(entryData || {})) : '<td>--</td>'}
-            ${statusCellHtml(data.status)}
-        `;
-        logBody.insertBefore(tr, logBody.firstChild);
+            <td style="color: #cbd5e1;">${setupIctLabel(e.status)}</td>
+            ${sessionCellHtml(e.session || (x && x.session_at_entry))}
+            <td>${quality && quality !== '--' ? `<span class="tag-chip ${qualityClass(quality)}">${quality}</span>` : '--'}</td>
+            <td style="color: #fff;">${formatDisplay(e.entry_price)}</td>
+            ${x ? exitPriceCellHtml(true, x.exit_price) : '<td style="color: var(--text-faint);">—</td>'}
+            ${motif}
+            ${result}
+        </tr>`;
+    }
 
-        totalAlerts++;
-        document.getElementById("kpi-total").textContent = totalAlerts;
+    function renderJournalTable() {
+        const { trades, orphans } = buildJournalTrades(journalRows);
+        document.getElementById('log-body').innerHTML = trades.map(tradeRowHtml).join('');
+        document.getElementById('log-empty').style.display = trades.length || orphans.length ? 'none' : '';
+        hasLogRows = journalRows.length > 0;
+        journalOrphanCount = orphans.length;
+        const box = document.getElementById('journal-orphans');
+        box.style.display = orphans.length ? '' : 'none';
+        document.getElementById('journal-orphans-count').textContent = `${orphans.length} sortie(s)`;
+        document.getElementById('journal-orphans-body').innerHTML = orphans.map(o => `<tr>
+            ${dateCellHtml(utcDate(o.time))}
+            <td style="font-weight: 700; color: #fff;">${o.symbol}</td>
+            ${statusCellHtml(o.status)}
+            ${resultCellHtml(null, null, unavailableReason(o))}
+        </tr>`).join('');
         updateJournalStats();
     }
 
-    // Reconstruit une ligne du journal à partir d'un enregistrement persisté côté serveur
-    // (/api/journal). Ne touche pas au chemin temps réel (appendToLog) : hydratation au
-    // chargement de page uniquement, jamais mêlée aux événements WebSocket live.
-    function renderHistoricalLogRow(row) {
-        const logBody = document.getElementById("log-body");
-        const emptyRow = document.getElementById("log-empty");
-        if (!hasLogRows) { emptyRow.style.display = 'none'; hasLogRows = true; }
-
-        const isExit = row.kind === 'exit';
-        const dir = row.direction;
-        const dirColor = dir === "BUY" ? "var(--accent-green)" : (dir === "SELL" ? "var(--accent-red)" : "var(--text-muted)");
-        const qClass = qualityClass(row.quality);
-        const patternStatus = isExit ? (row.entry_status || row.status) : row.status;
-
-        const tr = document.createElement("tr");
-        tr.innerHTML = `
-            ${dateCellHtml(row.time ? new Date(row.time + 'Z') : null)}
-            <td style="font-weight: 700; color: #fff;">${row.symbol}</td>
-            <td style="color: ${dirColor}; font-weight: 700;">${dir || '--'}</td>
-            <td style="color: #cbd5e1;">${setupIctLabel(patternStatus)}</td>
-            ${sessionCellHtml(isExit ? row.session_at_entry : row.session)}
-            <td>${row.quality && row.quality !== '--' ? `<span class="tag-chip ${qClass}">${row.quality}</span>` : '--'}</td>
-            <td>${row.rr && row.rr !== '0.0' ? row.rr + ':1' : '--'}</td>
-            <td style="color: #fff;">${formatDisplay(row.entry_price)}</td>
-            ${exitPriceCellHtml(isExit, row.exit_price)}
-            ${isExit ? resultCellHtml(row.r_multiple, Array.isArray(row.targets) && row.targets.length ? { reached: row.targets_reached || 0, total: row.targets.length } : null, unavailableReason(row)) : '<td>--</td>'}
-            ${statusCellHtml(row.status)}
-        `;
-        logBody.insertBefore(tr, logBody.firstChild);
+    // Ligne locale (bouton « Signal test ») : même modèle qu'une ligne serveur, jamais enregistrée.
+    function appendToLog(data, opts = {}) {
+        const isExit = ['TP_HIT', 'SL_HIT', 'EXPIRED'].includes(data.status);
+        const entryData = opts.entryData || null;
+        journalRows.push(isExit ? {
+            kind: 'exit', time: nowUtcIso(), symbol: data.symbol, status: data.status, _local: true,
+            direction: entryData ? entryData.direction : data.direction, entry_status: entryData ? entryData.status : null,
+            session_at_entry: opts.sessionAtEntry, quality: entryData ? entryData.quality : '--',
+            entry_price: entryData ? entryData.entry_price : '--', exit_price: data.current_price, r_multiple: opts.rMultiple
+        } : {
+            kind: 'entry', time: nowUtcIso(), symbol: data.symbol, status: data.status, _local: true,
+            direction: data.direction, session: sessionLabelNow(), quality: data.quality, rr: data.rr,
+            entry_price: data.entry_price, sl_price: data.sl_price, tp_price: data.tp_price
+        });
         totalAlerts++;
+        document.getElementById("kpi-total").textContent = totalAlerts;
+        scheduleJournalRender();
     }
 
     // Hydrate le journal depuis l'historique persisté côté serveur, une seule fois au chargement
@@ -2287,7 +2350,9 @@
         const key = journalRowKey(row);
         if (renderedJournalKeys.has(key)) return false;
         renderedJournalKeys.add(key);
-        renderHistoricalLogRow(row);
+        journalRows.push(row);
+        totalAlerts++;
+        scheduleJournalRender();
         if (row.kind === 'entry') delete closedTrades[row.symbol];
         if (row.kind === 'exit' && row.sl_price && row.tp_price) {
             rememberClosedTrade(row.symbol, { ...row, status: row.entry_status }, row.status, row.exit_price, row.best_r);
