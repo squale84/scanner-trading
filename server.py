@@ -155,8 +155,17 @@ journal_log: List[dict] = []
 open_positions: dict = {}
 pending_rows: List[dict] = []   # lignes de journal pas encore écrites en base (mémoire seulement)
 touched_symbols: set = set()    # actifs modifiés en mémoire pendant que l'état distant était inconnu
+# Version de l'état des positions (C5) : +1 à chaque modification. Envoyée avec chaque instantané
+# (REST et WebSocket) pour que le dashboard garde toujours le plus récent, quel que soit l'ordre
+# d'arrivée des réponses au chargement de la page.
+positions_version = 0
+
+def _bump_positions_version():
+    global positions_version
+    positions_version += 1
 
 def _save_positions_to_disk(symbol=None):
+    _bump_positions_version()
     if not storage.STATUS["loaded"]:
         if symbol:
             touched_symbols.add(symbol)
@@ -376,7 +385,7 @@ async def get_journal():
 @app.get("/api/positions")
 async def get_positions():
     _sync_storage()
-    return open_positions
+    return JSONResponse(content=open_positions, headers={"X-Positions-Version": str(positions_version)})
 
 class ConnectionManager:
     def __init__(self):
@@ -410,7 +419,7 @@ def _seed_market_state():
                                  "status": "PRICE_UPDATE", "current_price": pos.get("last_price")}
 
 def _positions_message():
-    return json.dumps({"type": "positions", "positions": open_positions})
+    return json.dumps({"type": "positions", "positions": open_positions, "version": positions_version})
 
 # Dernière alerte reçue par actif (y compris PRICE_UPDATE), persistée : permet de voir sur chaque
 # carte si l'alerte TradingView de cet actif envoie bien quelque chose, et depuis quand.
@@ -473,6 +482,7 @@ def _load_initial_state():
             last_alerts[sym] = a
     journal_log[:] = remote_journal
     _seed_market_state()
+    _bump_positions_version()
 
     storage.STATUS["loaded"] = True
     changed = bool(touched_symbols)

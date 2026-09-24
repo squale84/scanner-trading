@@ -1811,10 +1811,23 @@
         renderAllGauges();
     }
 
+    // C5 : un instantané de positions plus ancien (réponse REST lente) ne remplace jamais un plus
+    // récent (reçu en direct). Sans numéro (ancien serveur), on applique comme avant.
+    let positionsVersion = -1;
+    function applyPositionsSnapshot(positions, version) {
+        if (version !== null && version !== undefined && !isNaN(version)) {
+            if (version < positionsVersion) return false;
+            positionsVersion = version;
+        }
+        serverPositions = positions || {};
+        renderOpenPositions();
+        return true;
+    }
+
     async function loadPositionsFromServer() {
         try {
             const res = await fetch('/api/positions');
-            if (res.ok) { serverPositions = await res.json() || {}; renderOpenPositions(); }
+            if (res.ok) applyPositionsSnapshot(await res.json(), parseInt(res.headers.get('X-Positions-Version'), 10));
         } catch (e) { console.error('Erreur chargement positions:', e); }
     }
 
@@ -2672,6 +2685,32 @@
         el.style.display = '';
     }
 
+    // C5 : pendant le chargement de l'historique (REST), les lignes de journal et instantanés de
+    // positions reçus en direct sont mis en tampon, puis rejoués après : rien n'est perdu, et les
+    // doublons sont éliminés (clé unique pour le journal, numéro de version pour les positions).
+    let liveBuffering = false;
+    const liveBuffer = [];
+    function handleLiveMessage(data) {
+        if (data.type === "positions") { applyPositionsSnapshot(data.positions, data.version); return; }
+        if (data.type === "journal") { if (addServerJournalRow(data.row)) refreshJournalKpis(); return; }
+    }
+    // Aiguillage des messages journal / positions reçus en direct : en tampon pendant un chargement.
+    function onLiveData(data) {
+        if (data.type !== "positions" && data.type !== "journal") return false;
+        if (liveBuffering) liveBuffer.push(data); else handleLiveMessage(data);
+        return true;
+    }
+
+    async function loadSnapshotsWithBuffer() {
+        liveBuffering = true;
+        try {
+            await Promise.all([hydrateJournalFromServer(), loadPositionsFromServer()]);
+        } finally {
+            liveBuffering = false;
+            liveBuffer.splice(0).forEach(handleLiveMessage);
+        }
+    }
+
     let wsHasConnectedOnce = false;
     function connectWebSocket() {
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -2687,7 +2726,8 @@
             connText.textContent = "SERVEUR CONNECTÉ";
             dot.classList.remove("offline");
             isSyncing = true;
-            if (wsHasConnectedOnce) hydrateJournalFromServer(); // rattrape les lignes manquées pendant la coupure
+            // Chargement initial ou reconnexion : on relit l'historique en tamponnant le direct.
+            loadSnapshotsWithBuffer();
             wsHasConnectedOnce = true;
         };
 
@@ -2695,10 +2735,9 @@
             try {
                 const data = JSON.parse(event.data);
                 if (data.type === "sync_complete") { isSyncing = false; return; }
-                if (data.type === "positions") { serverPositions = data.positions || {}; renderOpenPositions(); return; }
+                if (onLiveData(data)) return;
                 if (data.type === "last_alerts") { lastAlerts = data.last_alerts || {}; renderLastAlerts(); return; }
                 if (data.type === "storage") { storageStatus = data.storage || null; renderStorageBanner(); return; }
-                if (data.type === "journal") { if (addServerJournalRow(data.row)) refreshJournalKpis(); return; }
                 processData(data, { silent: isSyncing });
             } catch (e) {
                 console.error("Erreur JSON:", e);
@@ -3068,7 +3107,10 @@
     setInterval(loadCalendar, 15 * 60 * 1000);
     setInterval(checkUpcomingEvents, 60 * 1000);
     setInterval(renderOpenPositions, 60 * 1000); // rafraîchit l'alerte « aucune mise à jour depuis X min »
-    Promise.all([hydrateJournalFromServer(), loadPositionsFromServer()]).finally(connectWebSocket);
+    // C5 : la connexion en direct s'ouvre d'abord ; son ouverture lance le chargement de l'historique.
+    connectWebSocket();
+    // Secours : si la connexion en direct ne s'ouvre pas, l'historique est quand même chargé.
+    setTimeout(() => { if (!wsHasConnectedOnce) loadSnapshotsWithBuffer(); }, 4000);
 </script>
 </body>
 </html>
