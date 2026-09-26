@@ -1,5 +1,11 @@
 //@version=5
-indicator("ICT 2022 Scanner Engine — Radar Terminal Institutional Pro [MTF H1-M5 Refined]", overlay=true, max_boxes_count=200, max_lines_count=200, max_labels_count=200, max_bars_back=1000)
+// VERSION DU SCRIPT — à comparer avec ce que Claude annonce à chaque envoi de fichier.
+// Visible en permanence dans le titre sur le graphique (légende en haut à gauche), sans avoir
+// besoin d'ouvrir l'éditeur. Change ce numéro à CHAQUE modification envoyée par Claude.
+SCRIPT_VERSION = "R6.1"
+
+// Version EN TÊTE du nom : la liste « Mes scripts » de TradingView coupe les noms trop longs.
+indicator("Radar ICT R6.1 — Terminal Pro MTF H1-M5", shorttitle="Radar ICT R6.1", overlay=true, max_boxes_count=200, max_lines_count=200, max_labels_count=200, max_bars_back=1000)
 
 // ==========================================
 // 1. CONFIGURATION GÉNÉRALE & PARAMÈTRES
@@ -15,10 +21,15 @@ atr_cap_mult  = input.float(2.5, title="Plafond Stop-Loss (x ATR M5)", minval=0.
 atr_floor_mult = input.float(0.5, title="Plancher Stop-Loss (x ATR M5)", minval=0.1, step=0.1, group=grp_radar)
 zone_window_in   = input.int(20, title="Fenêtre de validité contexte H1 (barres M5)", minval=5, maxval=50, group=grp_radar)
 cooldown_bars_in = input.int(10, title="Cooldown entre signaux (barres M5)", minval=1, maxval=50, group=grp_radar)
+causal_fvg_window_in = input.int(3, title="Fenêtre de formation FVG causale après displacement (barres M5)", minval=1, maxval=10, group=grp_radar)
+disp_body_ratio_min_in = input.float(0.60, title="Displacement : ratio corps/range minimum", minval=0.3, maxval=0.9, step=0.05, group=grp_radar)
+disp_atr_mult_min_in   = input.float(1.0, title="Displacement : corps minimum (x ATR M5)", minval=0.3, maxval=2.0, step=0.05, group=grp_radar)
+sweep_to_mss_window_in  = input.int(18, title="Fenêtre sweep -> displacement (barres M5)", minval=6, maxval=40, group=grp_radar)
+fvg_to_retest_window_in = input.int(20, title="Fenêtre FVG causale -> retest (barres M5)", minval=5, maxval=50, group=grp_radar)
 
 grp_ui        = "Affichage Graphique ICT"
 show_fvg      = input.bool(true, title="Afficher FVG H1", group=grp_ui)
-show_fvg_m5   = input.bool(false, title="Afficher FVG M5", group=grp_ui)
+show_fvg_m5   = input.bool(true, title="Afficher FVG M5", group=grp_ui)
 show_mss      = input.bool(true, title="Afficher CHoCH / BOS", group=grp_ui)
 show_ob       = input.bool(true, title="Afficher Order Blocks (M5)", group=grp_ui)
 show_eqh_eql  = input.bool(true, title="Afficher EQH / EQL (Liquidité)", group=grp_ui)
@@ -28,7 +39,7 @@ ob_filter_dp  = input.bool(false, title="N'afficher que les OB en discount/premi
 show_ote      = input.bool(false, title="Afficher zone OTE (Fibo 61.8%-79%)", group=grp_ui)
 range_lookback = input.int(100, title="Range Discount/Premium (barres M5)", minval=20, maxval=500, group=grp_ui)
 fvg_mitigation_mode = input.string("Mèche", title="Mode de mitigation FVG/OB", options=["Mèche", "Corps", "Clôture"], group=grp_ui)
-max_zones_in  = input.int(10, title="Nombre max de zones OB/FVG affichées", minval=3, maxval=30, group=grp_ui)
+max_zones_in  = input.int(3, title="Nombre max de zones actives par catégorie (OB/FVG)", minval=1, maxval=30, group=grp_ui)
 
 grp_dash      = "Tableau de Bord"
 show_dashboard = input.bool(true, title="Afficher le tableau de bord", group=grp_dash)
@@ -56,6 +67,108 @@ color_panel_bg  = color.new(#0D1117, 8)  // Fond panneau — identique --bg-elev
 color_panel_bd  = color.new(#1C2430, 0)  // Bordure panneau — identique --border-color
 color_ob_bull   = color.new(#2F6BFF, 0)  // Bleu — Order Block acheteur
 color_ob_bear   = color.new(#FF6EC7, 0)  // Rose — Order Block vendeur
+
+// ==========================================
+// GESTIONNAIRE DE ZONES FVG/OB — PATCH 4 : couche graphique unifiée
+// ==========================================
+// Remplace les anciens slots uniques + tableaux "extra" (qui rendaient le principal OB
+// remplaçant systématiquement le précédent) par un cycle de vie identique pour les 6
+// catégories de zones : box/top/bottom/barre de naissance dans des tableaux parallèles
+// plafonnés à max_zones_in. "top" est toujours le prix haut réel de la zone, "bottom" le
+// prix bas réel (contrairement à l'ancien code où ces noms étaient inversés pour les FVG).
+// Aucune de ces variables n'est lue par le moteur d'entrée (vérifié : la machine à états
+// causale ne référence plus mitigated_ob_*/mitigated_fvg_*/is_ob_*_active depuis son
+// remplacement de l'ancien système setup_mtf_*/setup_ict_*).
+var box[]   zn_h1fvg_bull_box   = array.new_box()
+var float[] zn_h1fvg_bull_top   = array.new_float()
+var float[] zn_h1fvg_bull_bot   = array.new_float()
+var int[]   zn_h1fvg_bull_birth = array.new_int()
+
+var box[]   zn_h1fvg_bear_box   = array.new_box()
+var float[] zn_h1fvg_bear_top   = array.new_float()
+var float[] zn_h1fvg_bear_bot   = array.new_float()
+var int[]   zn_h1fvg_bear_birth = array.new_int()
+
+var box[]   zn_m5fvg_bull_box   = array.new_box()
+var float[] zn_m5fvg_bull_top   = array.new_float()
+var float[] zn_m5fvg_bull_bot   = array.new_float()
+var int[]   zn_m5fvg_bull_birth = array.new_int()
+
+var box[]   zn_m5fvg_bear_box   = array.new_box()
+var float[] zn_m5fvg_bear_top   = array.new_float()
+var float[] zn_m5fvg_bear_bot   = array.new_float()
+var int[]   zn_m5fvg_bear_birth = array.new_int()
+
+var box[]   zn_ob_bull_box   = array.new_box()
+var float[] zn_ob_bull_top   = array.new_float()
+var float[] zn_ob_bull_bot   = array.new_float()
+var int[]   zn_ob_bull_birth = array.new_int()
+
+var box[]   zn_ob_bear_box   = array.new_box()
+var float[] zn_ob_bear_top   = array.new_float()
+var float[] zn_ob_bear_bot   = array.new_float()
+var int[]   zn_ob_bear_birth = array.new_int()
+
+// FVG en jaune (demande explicite de longue date) — bordure plus marquée en H1, plus légère en M5.
+// Bull/bear ne sont pas distingués par teinte ici : la direction se lit sur les OB (bleu/rose)
+// et sur le sens du prix ; jaune reste la couleur d'identification unique de la FVG.
+color_fvg_yellow      = #FFD400
+color_fvg_bull_h1_bg = color.new(color_fvg_yellow, 55)
+color_fvg_bull_h1_bd = color.new(color_fvg_yellow, 20)
+color_fvg_bull_m5_bg = color.new(color_fvg_yellow, 78)
+color_fvg_bull_m5_bd = color.new(color_fvg_yellow, 55)
+color_fvg_bear_h1_bg = color.new(color_fvg_yellow, 55)
+color_fvg_bear_h1_bd = color.new(color_fvg_yellow, 20)
+color_fvg_bear_m5_bg = color.new(color_fvg_yellow, 78)
+color_fvg_bear_m5_bd = color.new(color_fvg_yellow, 55)
+color_ob_bull_bg = color.new(color_ob_bull, 72)
+color_ob_bull_bd = color.new(color_ob_bull, 30)
+color_ob_bear_bg = color.new(color_ob_bear, 72)
+color_ob_bear_bd = color.new(color_ob_bear, 30)
+
+// Ajoute une zone (jusqu'à max_zones_in ; au-delà, la plus ancienne est retirée et sa boîte supprimée)
+f_zone_push(box_arr, top_arr, bot_arr, birth_arr, new_box, new_top, new_bot, maxN) =>
+    array.push(box_arr, new_box)
+    array.push(top_arr, new_top)
+    array.push(bot_arr, new_bot)
+    array.push(birth_arr, bar_index)
+    if array.size(box_arr) > maxN
+        old_box = array.shift(box_arr)
+        array.shift(top_arr)
+        array.shift(bot_arr)
+        array.shift(birth_arr)
+        if not na(old_box)
+            box.delete(old_box)
+
+// Mitigation = premier retour dans la zone selon la sonde Mèche/Corps/Clôture (mit_probe_bull/bear),
+// jamais testée sur la barre de naissance. À mitigation : suppression complète de la boîte (le
+// gris de diagnostic a confirmé que la détection se déclenche correctement — plus besoin de le
+// garder affiché). Seules les zones non mitigées restent visibles à l'écran.
+f_mitigate_bull_zones(box_arr, top_arr, bot_arr, birth_arr, probe) =>
+    i = array.size(box_arr) - 1
+    while i >= 0
+        if bar_index > array.get(birth_arr, i) and probe <= array.get(top_arr, i)
+            bx = array.get(box_arr, i)
+            if not na(bx)
+                box.delete(bx)
+            array.remove(box_arr, i)
+            array.remove(top_arr, i)
+            array.remove(bot_arr, i)
+            array.remove(birth_arr, i)
+        i -= 1
+
+f_mitigate_bear_zones(box_arr, top_arr, bot_arr, birth_arr, probe) =>
+    i = array.size(box_arr) - 1
+    while i >= 0
+        if bar_index > array.get(birth_arr, i) and probe >= array.get(bot_arr, i)
+            bx = array.get(box_arr, i)
+            if not na(bx)
+                box.delete(bx)
+            array.remove(box_arr, i)
+            array.remove(top_arr, i)
+            array.remove(bot_arr, i)
+            array.remove(birth_arr, i)
+        i -= 1
 
 // ==========================================
 // 2. EXTRACTION HTF H1 : FVG, BIAIS & BOS
@@ -97,52 +210,43 @@ if h1_bos_bear
 h1_fvg_bull = (h1_low > h1_high2) and ((h1_low - h1_high2) > (0.5 * h1_atr))
 h1_fvg_bear = (h1_high < h1_low2) and ((h1_low2 - h1_high) > (0.5 * h1_atr))
 
-// --- Machine à états HTF (Consommation de zone) ---
+// --- Machine à états HTF (Consommation de zone) — MOTEUR, ne pas toucher : alimente
+// tested_h1_bull/bear donc le grade des entrées (RETEST vs SWEEP). Le dessin de la FVG H1
+// est géré séparément plus bas (PATCH 4, purement visuel, sans effet sur ces variables).
 var float h1_bull_zone_top = na
 var float h1_bull_zone_bot = na
 var bool  h1_bull_consumed = false
-var box   h1_bull_box      = na
 
 var float h1_bear_zone_top = na
 var float h1_bear_zone_bot = na
 var bool  h1_bear_consumed = false
-var box   h1_bear_box      = na
 
-color_fvg_hl = color.new(#FFFF00, 55) // Jaune fluo, bien visible et distinct de l'OTE
-color_ote    = color.new(#A78BFA, 88) // Violet clair — distinct de la FVG pour ne pas se confondre
+color_ote = color.new(#A78BFA, 60) // Violet — opacité renforcée (88 était quasi invisible sur fond clair), distinct du jaune FVG
 
 if ta.change(time("60"))
-    // Bull Zone
+    // Bull Zone (suivi moteur — inchangé)
     if h1_fvg_bull
-        // Réarmer dès qu'une NOUVELLE FVG H1 valide (bornes différentes) se produit
         is_new_fvg = na(h1_bull_zone_bot) or (h1_low != h1_bull_zone_top) or (h1_high2 != h1_bull_zone_bot)
         if is_new_fvg
-            // Supprime l'ancienne boîte (au lieu de la geler) pour ne pas saturer l'écran de zones obsolètes
-            if not na(h1_bull_box)
-                box.delete(h1_bull_box)
-                h1_bull_box := na
-
             h1_bull_zone_top := h1_low
             h1_bull_zone_bot := h1_high2
             h1_bull_consumed := false
-            if show_fvg
-                h1_bull_box := box.new(bar_index, h1_bull_zone_top, bar_index + 1, h1_bull_zone_bot, border_color=na, bgcolor=color_fvg_hl, extend=extend.right)
+        // Dessin (multi-zones, indépendant du suivi moteur ci-dessus)
+        if show_fvg
+            new_h1_box = box.new(bar_index, h1_low, bar_index + 1, h1_high2, border_color=color_fvg_bull_h1_bd, bgcolor=color_fvg_bull_h1_bg, extend=extend.right)
+            f_zone_push(zn_h1fvg_bull_box, zn_h1fvg_bull_top, zn_h1fvg_bull_bot, zn_h1fvg_bull_birth, new_h1_box, h1_low, h1_high2, max_zones_in)
 
-    // Bear Zone
+    // Bear Zone (suivi moteur — inchangé)
     if h1_fvg_bear
-        // Réarmer dès qu'une NOUVELLE FVG H1 valide (bornes différentes) se produit
         is_new_fvg = na(h1_bear_zone_top) or (h1_low2 != h1_bear_zone_top) or (h1_high != h1_bear_zone_bot)
         if is_new_fvg
-            // Supprime l'ancienne boîte (au lieu de la geler)
-            if not na(h1_bear_box)
-                box.delete(h1_bear_box)
-                h1_bear_box := na
-
             h1_bear_zone_top := h1_low2
             h1_bear_zone_bot := h1_high
             h1_bear_consumed := false
-            if show_fvg
-                h1_bear_box := box.new(bar_index, h1_bear_zone_top, bar_index + 1, h1_bear_zone_bot, border_color=na, bgcolor=color_fvg_hl, extend=extend.right)
+        // Dessin (multi-zones, indépendant du suivi moteur ci-dessus)
+        if show_fvg
+            new_h1_box = box.new(bar_index, h1_low2, bar_index + 1, h1_high, border_color=color_fvg_bear_h1_bd, bgcolor=color_fvg_bear_h1_bg, extend=extend.right)
+            f_zone_push(zn_h1fvg_bear_box, zn_h1fvg_bear_top, zn_h1fvg_bear_bot, zn_h1fvg_bear_birth, new_h1_box, h1_low2, h1_high, max_zones_in)
 
 in_h1_bull_zone = not h1_bull_consumed and not na(h1_bull_zone_top) and (high >= h1_bull_zone_bot and low <= h1_bull_zone_top)
 in_h1_bear_zone = not h1_bear_consumed and not na(h1_bear_zone_top) and (high >= h1_bear_zone_bot and low <= h1_bear_zone_top)
@@ -154,69 +258,79 @@ if in_h1_bear_zone
     h1_bear_consumed := true
 
 // ==========================================
-// 2.5 NIVEAUX MAJEURS (PDH, PDL, NY MIDNIGHT)
+// 2.5 NIVEAUX MAJEURS (PDH, PDL, NY OPEN) — PATCH 1 : couche graphique persistante
 // ==========================================
+// Bug corrigé : time("D", "America/New_York") passait "America/New_York" dans le paramètre
+// `session` (2e position), pas `timezone` (3e position) — la frontière de journée ne suivait
+// donc pas réellement minuit New York. Fix : session vide ("") en 2e position pour libérer
+// la 3e position, qui reçoit alors vraiment le fuseau horaire.
+// Rendu corrigé : les lignes/labels étaient recréés une fois par jour avec une longueur fixe
+// (bar_index + 288) au lieu d'être des objets persistants qui suivent le bord droit — le label
+// restait visuellement figé près du début de journée. Remplacé par des objets `var` réutilisés
+// (extend.right pour la ligne, repositionnement du label à chaque barre), ce qui élimine aussi
+// l'accumulation d'un nouveau couple ligne/label par jour (risque de saturation max_lines_count).
 var float pdh = na
 var float pdl = na
-var int   pdh_bar = na
-var int   pdl_bar = na
 var float current_dh = na
 var float current_dl = na
-var int   current_dh_bar = na
-var int   current_dl_bar = na
+var float ny_open_val = na
 
-if ta.change(time("D", "America/New_York"))
+color_level_visible = color.new(#AEB9C7, 0) // gris clair pleinement opaque, lisible (remplace l'ancien quasi invisible)
+
+is_new_ny_day = ta.change(time("D", "", "America/New_York"))
+
+if is_new_ny_day
     pdh := current_dh
     pdl := current_dl
-    pdh_bar := current_dh_bar
-    pdl_bar := current_dl_bar
     current_dh := high
     current_dl := low
-    current_dh_bar := bar_index
-    current_dl_bar := bar_index
+    ny_open_val := open
 else
-    // On ne met à jour la bougie d'origine QUE si elle bat effectivement le record du jour
-    if high > current_dh
+    if na(current_dh) or high > current_dh
         current_dh := high
-        current_dh_bar := bar_index
-    if low < current_dl
+    if na(current_dl) or low < current_dl
         current_dl := low
-        current_dl_bar := bar_index
 
-var float midnight_open = na
-if ta.change(time("D", "America/New_York"))
-    midnight_open := open
-
-// --- Discount / Premium & zone OTE (sur un range glissant, toujours pertinent même en forte tendance) ---
+// --- Discount / Premium (sur un range glissant) — sert uniquement au filtre OB (ob_filter_dp) ---
 range_high = ta.highest(high, range_lookback)
 range_low  = ta.lowest(low, range_lookback)
 eq_level = (range_high + range_low) / 2
-ote_top  = range_low + (range_high - range_low) * 0.382
-ote_bot  = range_low + (range_high - range_low) * 0.21
 
-var box ote_box = na
-if ta.change(time("D", "America/New_York")) and not na(ote_box)
-    box.set_right(ote_box, bar_index)
-    ote_box := na
-if show_ote and not na(ote_top) and not na(ote_bot)
-    if na(ote_box)
-        ote_box := box.new(bar_index, ote_top, bar_index + 1, ote_bot, border_color=na, bgcolor=color_ote, extend=extend.right)
-    else
-        box.set_top(ote_box, ote_top)
-        box.set_bottom(ote_box, ote_bot)
+// Rendu PDH / PDL / NY Open : objets persistants, ligne en extend.right, label repositionné
+// chaque barre pour suivre le bord droit (comme un indicateur LuxAlgo).
+var line  vis_pdh_line     = na
+var label vis_pdh_label    = na
+var line  vis_pdl_line     = na
+var label vis_pdl_label    = na
+var line  vis_nyopen_line  = na
+var label vis_nyopen_label = na
 
-// Rendu Graphique : la ligne démarre EXACTEMENT sur la bougie qui a fait le plus haut/bas de la veille
-if ta.change(time("D", "America/New_York")) and show_levels
-    if not na(pdh)
-        line.new(pdh_bar, pdh, bar_index + 288, pdh, color=color_lux_level, width=1, style=line.style_dotted)
-        label.new(bar_index + 5, pdh, "PDH", color=color.new(color.white, 100), textcolor=color_lux_level, style=label.style_none, size=size.normal)
-    if not na(pdl)
-        line.new(pdl_bar, pdl, bar_index + 288, pdl, color=color_lux_level, width=1, style=line.style_dotted)
-        label.new(bar_index + 5, pdl, "PDL", color=color.new(color.white, 100), textcolor=color_lux_level, style=label.style_none, size=size.normal)
+if show_levels and not na(pdh)
+    if na(vis_pdh_line)
+        vis_pdh_line  := line.new(bar_index, pdh, bar_index, pdh, color=color_level_visible, width=1, style=line.style_dotted, extend=extend.right)
+        vis_pdh_label := label.new(bar_index, pdh, "PDH", color=color.new(color.white, 100), textcolor=color_level_visible, style=label.style_label_left, size=size.small)
+    else if is_new_ny_day
+        line.set_xy1(vis_pdh_line, bar_index, pdh)
+        line.set_xy2(vis_pdh_line, bar_index, pdh)
+    label.set_xy(vis_pdh_label, bar_index + 3, pdh)
 
-if ta.change(time("D", "America/New_York")) and show_levels
-    line.new(bar_index, open, bar_index + 288, open, color=color.new(#FFC73C, 20), width=1, style=line.style_dashed) // Midnight Open en Or discret
-    label.new(bar_index + 5, open, "NY Open", color=color.new(color.white, 100), textcolor=color_lux_gold, style=label.style_none, size=size.normal)
+if show_levels and not na(pdl)
+    if na(vis_pdl_line)
+        vis_pdl_line  := line.new(bar_index, pdl, bar_index, pdl, color=color_level_visible, width=1, style=line.style_dotted, extend=extend.right)
+        vis_pdl_label := label.new(bar_index, pdl, "PDL", color=color.new(color.white, 100), textcolor=color_level_visible, style=label.style_label_left, size=size.small)
+    else if is_new_ny_day
+        line.set_xy1(vis_pdl_line, bar_index, pdl)
+        line.set_xy2(vis_pdl_line, bar_index, pdl)
+    label.set_xy(vis_pdl_label, bar_index + 3, pdl)
+
+if show_levels and not na(ny_open_val)
+    if na(vis_nyopen_line)
+        vis_nyopen_line  := line.new(bar_index, ny_open_val, bar_index, ny_open_val, color=color.new(color_lux_gold, 20), width=1, style=line.style_dashed, extend=extend.right)
+        vis_nyopen_label := label.new(bar_index, ny_open_val, "NY Open", color=color.new(color.white, 100), textcolor=color_lux_gold, style=label.style_label_left, size=size.small)
+    else if is_new_ny_day
+        line.set_xy1(vis_nyopen_line, bar_index, ny_open_val)
+        line.set_xy2(vis_nyopen_line, bar_index, ny_open_val)
+    label.set_xy(vis_nyopen_label, bar_index + 3, ny_open_val)
 
 // ==========================================
 // 3. STRUCTURE M5 & CONFIRMATION DE REJET
@@ -227,56 +341,6 @@ bar_confirmed = barstate.isconfirmed
 // --- Sonde de mitigation (Mèche/Corps/Clôture) — porté du moteur V48 (Projet_ECC_Test) ---
 mit_probe_bull = fvg_mitigation_mode == "Mèche" ? low : fvg_mitigation_mode == "Corps" ? math.min(open, close) : close
 mit_probe_bear = fvg_mitigation_mode == "Mèche" ? high : fvg_mitigation_mode == "Corps" ? math.max(open, close) : close
-
-// --- Gestion des zones "extra" en tableau plafonné (affichage multi-zones, sans effet sur les entrées) ---
-f_push_zone(box_arr, top_arr, bot_arr, mit_arr, new_box, new_top, new_bot, maxN) =>
-    array.push(box_arr, new_box)
-    array.push(top_arr, new_top)
-    array.push(bot_arr, new_bot)
-    array.push(mit_arr, false)
-    if array.size(box_arr) > maxN
-        old_box = array.shift(box_arr)
-        array.shift(top_arr)
-        array.shift(bot_arr)
-        array.shift(mit_arr)
-        if not na(old_box)
-            box.delete(old_box)
-
-f_update_bull_zones(box_arr, top_arr, bot_arr, mit_arr, probe, grey_not_delete, grey_color) =>
-    i = array.size(box_arr) - 1
-    while i >= 0
-        if not array.get(mit_arr, i)
-            top = array.get(top_arr, i)
-            if probe <= top
-                array.set(mit_arr, i, true)
-                bx = array.get(box_arr, i)
-                if not na(bx)
-                    if grey_not_delete
-                        box.set_bgcolor(bx, grey_color)
-                        box.set_extend(bx, extend.none)
-                        box.set_right(bx, bar_index)
-                    else
-                        box.delete(bx)
-                        array.set(box_arr, i, na)
-        i -= 1
-
-f_update_bear_zones(box_arr, top_arr, bot_arr, mit_arr, probe, grey_not_delete, grey_color) =>
-    i = array.size(box_arr) - 1
-    while i >= 0
-        if not array.get(mit_arr, i)
-            bot = array.get(bot_arr, i)
-            if probe >= bot
-                array.set(mit_arr, i, true)
-                bx = array.get(box_arr, i)
-                if not na(bx)
-                    if grey_not_delete
-                        box.set_bgcolor(bx, grey_color)
-                        box.set_extend(bx, extend.none)
-                        box.set_right(bx, bar_index)
-                    else
-                        box.delete(bx)
-                        array.set(box_arr, i, na)
-        i -= 1
 
 // Pivots M5
 ph = ta.pivothigh(high, 5, 5)
@@ -347,14 +411,79 @@ c_range = high - low
 c_body  = math.abs(close - open)
 is_disp = c_range > 0 and ((c_body / c_range) >= 0.50)
 
+// --- Pivots persistants indépendants — JAMAIS réinitialisés par les événements MSS du moteur
+// (contrairement à last_ph/last_pl, consommés/remis à na dès que la détection d'affichage
+// mss_bull/mss_bear les utilise, laquelle a un seuil bien plus permissif — is_disp 50% —
+// que le moteur causal — is_disp_quant 65% + 1,25x ATR). Sans cette copie séparée, le moteur
+// causal capturait souvent un buy_mss_level/sell_mss_level déjà à na au moment du sweep,
+// bloquant silencieusement la détection de displacement. BUG CORRIGÉ : le sweep et le niveau
+// de cassure du moteur causal utilisent maintenant CES pivots, pas last_ph/last_pl.
+var float vis_last_ph = na
+var float vis_prev_ph = na
+var float vis_last_pl = na
+var float vis_prev_pl = na
+
+if not na(ph)
+    vis_prev_ph := vis_last_ph
+    vis_last_ph := ph
+if not na(pl)
+    vis_prev_pl := vis_last_pl
+    vis_last_pl := pl
+
 // Balayage de liquidité (Sweeps de mèches M5)
 wick_top = high - math.max(open, close)
 wick_bot = math.min(open, close) - low
 rej_buy  = c_range > 0 and (wick_bot / c_range) >= 0.35 and close > open
 rej_sell = c_range > 0 and (wick_top / c_range) >= 0.35 and close < open
 
-sweep_l = not na(last_pl) and low < last_pl and close > last_pl and rej_buy
-sweep_h = not na(last_ph) and high > last_ph and close < last_ph and rej_sell
+sweep_l = not na(vis_last_pl) and low < vis_last_pl and close > vis_last_pl and rej_buy
+sweep_h = not na(vis_last_ph) and high > vis_last_ph and close < vis_last_ph and rej_sell
+
+// --- Structure HH/HL/LH/LL (basée sur les mêmes pivots persistants ci-dessus) pour la zone OTE.
+is_hh = not na(vis_last_ph) and not na(vis_prev_ph) and vis_last_ph > vis_prev_ph
+is_lh = not na(vis_last_ph) and not na(vis_prev_ph) and vis_last_ph < vis_prev_ph
+is_hl = not na(vis_last_pl) and not na(vis_prev_pl) and vis_last_pl > vis_prev_pl
+is_ll = not na(vis_last_pl) and not na(vis_prev_pl) and vis_last_pl < vis_prev_pl
+
+// --- Zone OTE (61.8%-79%) de la DERNIÈRE impulsion structurelle, pas d'une plage glissante.
+// Impulsion haussière = jambe partant d'un Higher Low (HL) jusqu'au plus haut atteint depuis
+// (qui deviendra un Higher High). Impulsion baissière = jambe partant d'un Lower High (LH)
+// jusqu'au plus bas atteint depuis (qui deviendra un Lower Low).
+var float vis_ote_low_bull  = na  // le HL d'origine
+var float vis_ote_high_bull = na  // plus haut atteint depuis ce HL
+var float vis_ote_high_bear = na  // le LH d'origine
+var float vis_ote_low_bear  = na  // plus bas atteint depuis ce LH
+var string vis_ote_dir      = "NONE"
+
+if is_hl
+    vis_ote_low_bull  := vis_last_pl
+    vis_ote_high_bull := high
+    vis_ote_dir       := "BULL"
+else if vis_ote_dir == "BULL" and not na(vis_ote_high_bull) and high > vis_ote_high_bull
+    vis_ote_high_bull := high
+
+if is_lh
+    vis_ote_high_bear := vis_last_ph
+    vis_ote_low_bear  := low
+    vis_ote_dir       := "BEAR"
+else if vis_ote_dir == "BEAR" and not na(vis_ote_low_bear) and low < vis_ote_low_bear
+    vis_ote_low_bear := low
+
+ote_top = vis_ote_dir == "BULL" ? vis_ote_high_bull - (vis_ote_high_bull - vis_ote_low_bull) * 0.618 : vis_ote_dir == "BEAR" ? vis_ote_low_bear + (vis_ote_high_bear - vis_ote_low_bear) * 0.79 : na
+ote_bot = vis_ote_dir == "BULL" ? vis_ote_high_bull - (vis_ote_high_bull - vis_ote_low_bull) * 0.79 : vis_ote_dir == "BEAR" ? vis_ote_low_bear + (vis_ote_high_bear - vis_ote_low_bear) * 0.618 : na
+
+var box ote_box = na
+new_impulse = is_hl or is_lh
+if show_ote and not na(ote_top) and not na(ote_bot)
+    if na(ote_box)
+        ote_box := box.new(bar_index, ote_top, bar_index + 1, ote_bot, border_color=na, bgcolor=color_ote, extend=extend.right)
+    else
+        box.set_top(ote_box, ote_top)
+        box.set_bottom(ote_box, ote_bot)
+        // Bord gauche réinitialisé UNIQUEMENT sur une nouvelle impulsion (nouveau HL/LH) —
+        // sinon la boîte s'étirerait depuis le tout premier pivot du graphique.
+        if new_impulse
+            box.set_left(ote_box, bar_index)
 
 // Mémoire de zone H1 touchée récemment (15 barres M5)
 bars_in_h1_bull = ta.barssince(in_h1_bull_zone)
@@ -366,49 +495,8 @@ tested_h1_bear  = not na(bars_in_h1_bear) and bars_in_h1_bear <= zone_window_in
 valid_ctx_bull = tested_h1_bull or (h1_bias_bull and not na(ta.barssince(sweep_l)) and ta.barssince(sweep_l) <= zone_window_in)
 valid_ctx_bear = tested_h1_bear or (h1_bias_bear and not na(ta.barssince(sweep_h)) and ta.barssince(sweep_h) <= zone_window_in)
 
-// Variables pour suivre la mitigation (indépendamment de l'affichage)
-var bool  is_ob_bull_active = false
-var float current_ob_bull_top = na
-var int   current_ob_bull_start = na
-var box   current_ob_bull = na
-
-var bool  is_ob_bear_active = false
-var float current_ob_bear_bot = na
-var int   current_ob_bear_start = na
-var box   current_ob_bear = na
-
-var bool  is_fvg_bull_active = false
-var float current_fvg_bull_m5_top = na
-var int   current_fvg_bull_m5_start = na
-var box   current_fvg_bull_m5 = na
-
-var bool  is_fvg_bear_active = false
-var float current_fvg_bear_m5_bot = na
-var int   current_fvg_bear_m5_start = na
-var box   current_fvg_bear_m5 = na
-
-// Zones "extra" en tableau plafonné (affichage multi-zones simultanées, sans influencer les entrées)
-var box[]   ext_ob_bull_box = array.new_box()
-var float[] ext_ob_bull_top = array.new_float()
-var float[] ext_ob_bull_bot = array.new_float()
-var bool[]  ext_ob_bull_mit = array.new_bool()
-
-var box[]   ext_ob_bear_box = array.new_box()
-var float[] ext_ob_bear_top = array.new_float()
-var float[] ext_ob_bear_bot = array.new_float()
-var bool[]  ext_ob_bear_mit = array.new_bool()
-
-var box[]   ext_fvg_bull_box = array.new_box()
-var float[] ext_fvg_bull_top = array.new_float()
-var float[] ext_fvg_bull_bot = array.new_float()
-var bool[]  ext_fvg_bull_mit = array.new_bool()
-
-var box[]   ext_fvg_bear_box = array.new_box()
-var float[] ext_fvg_bear_top = array.new_float()
-var float[] ext_fvg_bear_bot = array.new_float()
-var bool[]  ext_fvg_bear_mit = array.new_bool()
-
-// MSS / CHoCH en M5
+// MSS / CHoCH en M5 — condition et resets last_ph/last_pl/last_struct_dir INCHANGÉS (lus par
+// sweep_l/sweep_h, donc par la machine à états causale). Seul le dessin de l'OB change (PATCH 4).
 mss_bull = not na(last_ph) and bar_confirmed and ta.crossover(close, last_ph) and is_disp
 if mss_bull
     // On ne trace QUE s'il sort d'une zone H1 testée
@@ -418,22 +506,13 @@ if mss_bull
             lbl_text = is_choch ? "⇄ CHoCH" : "➤ BOS"
             line.new(last_ph_bar, last_ph, bar_index, last_ph, color=color_lux_bull, width=3, style=line.style_dashed)
             label.new(math.round((last_ph_bar + bar_index)/2), last_ph, lbl_text, color=color.new(color.white, 100), textcolor=color_lux_bull, style=label.style_none, size=size.normal)
-        
-        if not na(ob_bull_bot)
-            is_ob_bull_active := true
-            current_ob_bull_top := ob_bull_top
-            current_ob_bull_start := bar_index
-            ob_bull_relevant = not ob_filter_dp or na(eq_level) or (ob_bull_top <= eq_level)
-            if show_ob and ob_bull_relevant
-                if not na(current_ob_bull)
-                    box.delete(current_ob_bull)
-                current_ob_bull := box.new(ob_bull_bar, ob_bull_top, bar_index, ob_bull_bot, border_color=na, bgcolor=color.new(color_ob_bull, 72), extend=extend.right)
-    // Affichage élargi (même condition que les FVG M5) — purement visuel, n'alimente pas les entrées
-    if not tested_h1_bull and valid_ctx_bull and not na(ob_bull_bot)
-        ob_bull_relevant2 = not ob_filter_dp or na(eq_level) or (ob_bull_top <= eq_level)
-        if show_ob and ob_bull_relevant2
-            new_ob_bull_box = box.new(ob_bull_bar, ob_bull_top, bar_index, ob_bull_bot, border_color=na, bgcolor=color.new(color_ob_bull, 72), extend=extend.right)
-            f_push_zone(ext_ob_bull_box, ext_ob_bull_top, ext_ob_bull_bot, ext_ob_bull_mit, new_ob_bull_box, ob_bull_top, ob_bull_bot, max_zones_in)
+    // Order Block acheteur : un seul gestionnaire, plusieurs zones peuvent coexister
+    // (avant : le slot "officiel" nécessitait tested_h1_bull et écrasait le précédent)
+    if not na(ob_bull_bot)
+        ob_bull_relevant = not ob_filter_dp or na(eq_level) or (ob_bull_top <= eq_level)
+        if show_ob and ob_bull_relevant
+            new_ob_box = box.new(ob_bull_bar, ob_bull_top, bar_index, ob_bull_bot, border_color=color_ob_bull_bd, bgcolor=color_ob_bull_bg, extend=extend.right)
+            f_zone_push(zn_ob_bull_box, zn_ob_bull_top, zn_ob_bull_bot, zn_ob_bull_birth, new_ob_box, ob_bull_top, ob_bull_bot, max_zones_in)
     last_ph := na
     last_struct_dir := 1
 
@@ -446,98 +525,255 @@ if mss_bear
             lbl_text = is_choch ? "⇄ CHoCH" : "➤ BOS"
             line.new(last_pl_bar, last_pl, bar_index, last_pl, color=color_lux_bear, width=3, style=line.style_dashed)
             label.new(math.round((last_pl_bar + bar_index)/2), last_pl, lbl_text, color=color.new(color.white, 100), textcolor=color_lux_bear, style=label.style_none, size=size.normal)
-        
-        if not na(ob_bear_top)
-            is_ob_bear_active := true
-            current_ob_bear_bot := ob_bear_bot
-            current_ob_bear_start := bar_index
-            ob_bear_relevant = not ob_filter_dp or na(eq_level) or (ob_bear_bot >= eq_level)
-            if show_ob and ob_bear_relevant
-                if not na(current_ob_bear)
-                    box.delete(current_ob_bear)
-                current_ob_bear := box.new(ob_bear_bar, ob_bear_top, bar_index, ob_bear_bot, border_color=na, bgcolor=color.new(color_ob_bear, 72), extend=extend.right)
-    // Affichage élargi (même condition que les FVG M5) — purement visuel, n'alimente pas les entrées
-    if not tested_h1_bear and valid_ctx_bear and not na(ob_bear_top)
-        ob_bear_relevant2 = not ob_filter_dp or na(eq_level) or (ob_bear_bot >= eq_level)
-        if show_ob and ob_bear_relevant2
-            new_ob_bear_box = box.new(ob_bear_bar, ob_bear_top, bar_index, ob_bear_bot, border_color=na, bgcolor=color.new(color_ob_bear, 72), extend=extend.right)
-            f_push_zone(ext_ob_bear_box, ext_ob_bear_top, ext_ob_bear_bot, ext_ob_bear_mit, new_ob_bear_box, ob_bear_top, ob_bear_bot, max_zones_in)
+    // Order Block vendeur : un seul gestionnaire, plusieurs zones peuvent coexister
+    if not na(ob_bear_top)
+        ob_bear_relevant = not ob_filter_dp or na(eq_level) or (ob_bear_bot >= eq_level)
+        if show_ob and ob_bear_relevant
+            new_ob_box = box.new(ob_bear_bar, ob_bear_top, bar_index, ob_bear_bot, border_color=color_ob_bear_bd, bgcolor=color_ob_bear_bg, extend=extend.right)
+            f_zone_push(zn_ob_bear_box, zn_ob_bear_top, zn_ob_bear_bot, zn_ob_bear_birth, new_ob_box, ob_bear_top, ob_bear_bot, max_zones_in)
     last_pl := na
     last_struct_dir := -1
 
-// FVG en M5 (Rendu graphique conditionnel)
+// FVG en M5 — zones multiples, plus de distinction "officiel/extra". valid_ctx_* retiré du
+// filtre par défaut (n'empêche plus l'affichage) ; show_fvg_m5 reste le seul interrupteur.
 fvg_bull_m5 = (low > high[2]) and (low - high[2] >= atr_val * 0.15)
-if fvg_bull_m5 and valid_ctx_bull
-    if is_fvg_bull_active and show_fvg_m5
-        // Slot officiel déjà occupé : cette nouvelle FVG part dans le tableau "extra" au lieu d'écraser l'ancienne
-        new_fvg_bull_box = box.new(bar_index - 2, low, bar_index, high[2], border_color=na, bgcolor=color_fvg_hl, extend=extend.right)
-        f_push_zone(ext_fvg_bull_box, ext_fvg_bull_top, ext_fvg_bull_bot, ext_fvg_bull_mit, new_fvg_bull_box, high[2], low, max_zones_in)
-    else
-        is_fvg_bull_active := true
-        current_fvg_bull_m5_top := high[2]
-        current_fvg_bull_m5_start := bar_index
-        if show_fvg_m5
-            if not na(current_fvg_bull_m5)
-                box.delete(current_fvg_bull_m5)
-            current_fvg_bull_m5 := box.new(bar_index - 2, low, bar_index, high[2], border_color=na, bgcolor=color_fvg_hl, extend=extend.right)
+if fvg_bull_m5 and show_fvg_m5
+    new_fvg_box = box.new(bar_index - 2, low, bar_index, high[2], border_color=color_fvg_bull_m5_bd, bgcolor=color_fvg_bull_m5_bg, extend=extend.right)
+    f_zone_push(zn_m5fvg_bull_box, zn_m5fvg_bull_top, zn_m5fvg_bull_bot, zn_m5fvg_bull_birth, new_fvg_box, low, high[2], max_zones_in)
 
 fvg_bear_m5 = (high < low[2]) and (low[2] - high >= atr_val * 0.15)
-if fvg_bear_m5 and valid_ctx_bear
-    if is_fvg_bear_active and show_fvg_m5
-        new_fvg_bear_box = box.new(bar_index - 2, low[2], bar_index, high, border_color=na, bgcolor=color_fvg_hl, extend=extend.right)
-        f_push_zone(ext_fvg_bear_box, ext_fvg_bear_top, ext_fvg_bear_bot, ext_fvg_bear_mit, new_fvg_bear_box, high, low[2], max_zones_in)
+if fvg_bear_m5 and show_fvg_m5
+    new_fvg_box = box.new(bar_index - 2, low[2], bar_index, high, border_color=color_fvg_bear_m5_bd, bgcolor=color_fvg_bear_m5_bg, extend=extend.right)
+    f_zone_push(zn_m5fvg_bear_box, zn_m5fvg_bear_top, zn_m5fvg_bear_bot, zn_m5fvg_bear_birth, new_fvg_box, low[2], high, max_zones_in)
+
+// Mitigation de toutes les zones (premier retour dans la zone) — suppression complète, OB et
+// FVG traités à l'identique : seules les zones non mitigées restent affichées.
+f_mitigate_bull_zones(zn_ob_bull_box, zn_ob_bull_top, zn_ob_bull_bot, zn_ob_bull_birth, mit_probe_bull)
+f_mitigate_bear_zones(zn_ob_bear_box, zn_ob_bear_top, zn_ob_bear_bot, zn_ob_bear_birth, mit_probe_bear)
+f_mitigate_bull_zones(zn_m5fvg_bull_box, zn_m5fvg_bull_top, zn_m5fvg_bull_bot, zn_m5fvg_bull_birth, mit_probe_bull)
+f_mitigate_bear_zones(zn_m5fvg_bear_box, zn_m5fvg_bear_top, zn_m5fvg_bear_bot, zn_m5fvg_bear_birth, mit_probe_bear)
+f_mitigate_bull_zones(zn_h1fvg_bull_box, zn_h1fvg_bull_top, zn_h1fvg_bull_bot, zn_h1fvg_bull_birth, mit_probe_bull)
+f_mitigate_bear_zones(zn_h1fvg_bear_box, zn_h1fvg_bear_top, zn_h1fvg_bear_bot, zn_h1fvg_bear_birth, mit_probe_bear)
+
+// ==========================================
+// 3.9 CIBLES DE LIQUIDITÉ (TP STRUCTURELS) — R6 / B7
+// ==========================================
+// Les TP ne sont plus des multiples fixes du risque : on vise la liquidité suivante dans le sens
+// du trade (buy-side au-dessus pour un achat, sell-side en dessous pour une vente) : pivots M5,
+// equal highs / equal lows, swing H1, plus haut / bas des sessions Asie et Londres, PDH / PDL,
+// FVG opposées non comblées (M5 et H1). Un trade n'est pris que s'il existe au moins une cible à
+// min_rr_in R ou plus. Bloc IDENTIQUE dans le Radar et le Backtest, indépendant des options
+// d'affichage (les FVG / EQH dessinées ne sont pas lues ici).
+grp_tp        = "Cibles de profit (liquidité)"
+tp_mode_in    = input.string("Liquidité", title="Mode des TP", options=["Liquidité", "Fixe (R:R)"], group=grp_tp)
+min_rr_in     = input.float(1.5, title="R:R minimum exigé pour prendre le trade", minval=0.5, step=0.1, group=grp_tp)
+min_tp_r_in   = input.float(1.0, title="Distance minimale d'un TP (en R)", minval=0.3, step=0.1, group=grp_tp)
+max_tp_in     = input.int(4, title="Nombre maximum de TP", minval=1, maxval=6, group=grp_tp)
+LIQ_MAX       = 40   // niveaux de liquidité mémorisés par côté
+FVG_MAX       = 30   // FVG M5 mémorisées par côté
+
+var float[]  liq_up_px    = array.new_float()   // buy-side : niveaux au-dessus du prix
+var string[] liq_up_ty    = array.new_string()
+var float[]  liq_dn_px    = array.new_float()   // sell-side : niveaux en dessous du prix
+var string[] liq_dn_ty    = array.new_string()
+var float[]  fvg_bear_bot = array.new_float()   // FVG baissières M5 (cible d'un achat = bord bas)
+var float[]  fvg_bull_top = array.new_float()   // FVG haussières M5 (cible d'une vente = bord haut)
+
+// Ajoute un niveau ; un niveau déjà présent à moins de `tol` est la même liquidité : on fusionne
+// (deux pivots M5 proches = equal highs / equal lows ; un type plus fort remplace « Pivot M5 »).
+f_liq_add(px_arr, ty_arr, price, typ, tol, is_up) =>
+    merged = false
+    n = array.size(px_arr)
+    if n > 0
+        for i = 0 to n - 1
+            p = array.get(px_arr, i)
+            if not merged and math.abs(p - price) <= tol
+                merged := true
+                old_ty = array.get(ty_arr, i)
+                if typ == "Pivot M5"
+                    if old_ty == "Pivot M5"
+                        array.set(ty_arr, i, is_up ? "Equal highs" : "Equal lows")
+                else if old_ty == "Pivot M5" or old_ty == "Equal highs" or old_ty == "Equal lows"
+                    array.set(ty_arr, i, typ)
+                array.set(px_arr, i, is_up ? math.max(p, price) : math.min(p, price))
+    if not merged
+        array.push(px_arr, price)
+        array.push(ty_arr, typ)
+        if array.size(px_arr) > LIQ_MAX
+            array.shift(px_arr)
+            array.shift(ty_arr)
+
+// Un niveau traversé par le prix est consommé (la liquidité a été prise) : il ne sert plus de cible.
+f_liq_sweep(px_arr, ty_arr, is_up) =>
+    n = array.size(px_arr)
+    if n > 0
+        for i = n - 1 to 0
+            p = array.get(px_arr, i)
+            if (is_up and high > p) or (not is_up and low < p)
+                array.remove(px_arr, i)
+                array.remove(ty_arr, i)
+
+f_fvg_mitigate(arr, is_bear_zone) =>
+    n = array.size(arr)
+    if n > 0
+        for i = n - 1 to 0
+            p = array.get(arr, i)
+            if (is_bear_zone and high >= p) or (not is_bear_zone and low <= p)
+                array.remove(arr, i)
+
+liq_tol = atr_val * 0.10
+
+// 1) Consommation des niveaux déjà pris par la bougie courante
+f_liq_sweep(liq_up_px, liq_up_ty, true)
+f_liq_sweep(liq_dn_px, liq_dn_ty, false)
+f_fvg_mitigate(fvg_bear_bot, true)
+f_fvg_mitigate(fvg_bull_top, false)
+
+// 2) Nouveaux niveaux : pivots M5 (confirmés 5 bougies plus tard, donc sous le prix actuel)
+if not na(ph)
+    f_liq_add(liq_up_px, liq_up_ty, ph, "Pivot M5", liq_tol, true)
+if not na(pl)
+    f_liq_add(liq_dn_px, liq_dn_ty, pl, "Pivot M5", liq_tol, false)
+
+// Swing H1 (une seule fois par heure)
+if ta.change(time("60"))
+    if not na(h1_ph)
+        f_liq_add(liq_up_px, liq_up_ty, h1_ph, "Swing H1", liq_tol, true)
+    if not na(h1_pl)
+        f_liq_add(liq_dn_px, liq_dn_ty, h1_pl, "Swing H1", liq_tol, false)
+
+// PDH / PDL (au changement de journée New York)
+if is_new_ny_day
+    if not na(pdh)
+        f_liq_add(liq_up_px, liq_up_ty, pdh, "PDH", liq_tol, true)
+    if not na(pdl)
+        f_liq_add(liq_dn_px, liq_dn_ty, pdl, "PDL", liq_tol, false)
+
+// Plus haut / plus bas des sessions Asie (19h-minuit NY) et Londres, ajoutés à la fin de la session
+in_asia_sess = not na(time(timeframe.period, "1900-2359:1234567", "America/New_York"))
+var float asia_run_hi = na
+var float asia_run_lo = na
+if in_asia_sess
+    asia_run_hi := not in_asia_sess[1] or na(asia_run_hi) ? high : math.max(asia_run_hi, high)
+    asia_run_lo := not in_asia_sess[1] or na(asia_run_lo) ? low : math.min(asia_run_lo, low)
+else if in_asia_sess[1] and not na(asia_run_hi)
+    f_liq_add(liq_up_px, liq_up_ty, asia_run_hi, "Haut Asie", liq_tol, true)
+    f_liq_add(liq_dn_px, liq_dn_ty, asia_run_lo, "Bas Asie", liq_tol, false)
+
+var float lon_run_hi = na
+var float lon_run_lo = na
+if in_london
+    lon_run_hi := not in_london[1] or na(lon_run_hi) ? high : math.max(lon_run_hi, high)
+    lon_run_lo := not in_london[1] or na(lon_run_lo) ? low : math.min(lon_run_lo, low)
+else if in_london[1] and not na(lon_run_hi)
+    f_liq_add(liq_up_px, liq_up_ty, lon_run_hi, "Haut Londres", liq_tol, true)
+    f_liq_add(liq_dn_px, liq_dn_ty, lon_run_lo, "Bas Londres", liq_tol, false)
+
+// FVG M5 (même seuil de taille que la FVG causale : 0,15 x ATR)
+if high < low[2] and (low[2] - high) >= atr_val * 0.15
+    array.push(fvg_bear_bot, high)
+    if array.size(fvg_bear_bot) > FVG_MAX
+        array.shift(fvg_bear_bot)
+if low > high[2] and (low - high[2]) >= atr_val * 0.15
+    array.push(fvg_bull_top, low)
+    if array.size(fvg_bull_top) > FVG_MAX
+        array.shift(fvg_bull_top)
+
+// Sélection des TP pour une entrée : cibles dans le sens du trade, triées par distance,
+// à min_tp_r_in R minimum, fusionnées si trop proches (< 0,15 R). ok = au moins une cible
+// à min_rr_in R ou plus ; elle est toujours conservée, même au-delà de max_tp_in.
+f_select_targets(is_buy, entry, risk) =>
+    c_px = array.new_float()
+    c_ty = array.new_string()
+    if is_buy
+        if array.size(liq_up_px) > 0
+            for i = 0 to array.size(liq_up_px) - 1
+                if array.get(liq_up_px, i) > entry
+                    array.push(c_px, array.get(liq_up_px, i))
+                    array.push(c_ty, array.get(liq_up_ty, i))
+        if array.size(fvg_bear_bot) > 0
+            for i = 0 to array.size(fvg_bear_bot) - 1
+                if array.get(fvg_bear_bot, i) > entry
+                    array.push(c_px, array.get(fvg_bear_bot, i))
+                    array.push(c_ty, "FVG M5")
+        if not h1_bear_consumed and not na(h1_bear_zone_bot) and h1_bear_zone_bot > entry
+            array.push(c_px, h1_bear_zone_bot)
+            array.push(c_ty, "FVG H1")
     else
-        is_fvg_bear_active := true
-        current_fvg_bear_m5_bot := low[2]
-        current_fvg_bear_m5_start := bar_index
-        if show_fvg_m5
-            if not na(current_fvg_bear_m5)
-                box.delete(current_fvg_bear_m5)
-            current_fvg_bear_m5 := box.new(bar_index - 2, low[2], bar_index, high, border_color=na, bgcolor=color_fvg_hl, extend=extend.right)
+        if array.size(liq_dn_px) > 0
+            for i = 0 to array.size(liq_dn_px) - 1
+                if array.get(liq_dn_px, i) < entry
+                    array.push(c_px, array.get(liq_dn_px, i))
+                    array.push(c_ty, array.get(liq_dn_ty, i))
+        if array.size(fvg_bull_top) > 0
+            for i = 0 to array.size(fvg_bull_top) - 1
+                if array.get(fvg_bull_top, i) < entry
+                    array.push(c_px, array.get(fvg_bull_top, i))
+                    array.push(c_ty, "FVG M5")
+        if not h1_bull_consumed and not na(h1_bull_zone_top) and h1_bull_zone_top < entry
+            array.push(c_px, h1_bull_zone_top)
+            array.push(c_ty, "FVG H1")
 
-// Logique de Mitigation (Coupure automatique et déclenchement d'entrée)
-mitigated_ob_bull = false
-mitigated_ob_bear = false
-mitigated_fvg_bull = false
-mitigated_fvg_bear = false
+    c_r = array.new_float()
+    if array.size(c_px) > 0
+        for i = 0 to array.size(c_px) - 1
+            array.push(c_r, risk > 0 ? math.abs(array.get(c_px, i) - entry) / risk : 0.0)
 
-if is_ob_bull_active and bar_index > current_ob_bull_start and mit_probe_bull <= current_ob_bull_top
-    is_ob_bull_active := false
-    mitigated_ob_bull := true
-    if not na(current_ob_bull)
-        box.delete(current_ob_bull)
-        current_ob_bull := na
+    m_px = array.new_float()
+    m_ty = array.new_string()
+    m_r  = array.new_float()
+    if array.size(c_r) > 0
+        idx = array.sort_indices(c_r, order.ascending)
+        for k = 0 to array.size(idx) - 1
+            i = array.get(idx, k)
+            r = array.get(c_r, i)
+            if r >= min_tp_r_in
+                last = array.size(m_r) - 1
+                // Pine évalue les DEUX côtés d'un « and » : lecture de m_r seulement si elle contient une cible.
+                too_close = false
+                if last >= 0
+                    too_close := r - array.get(m_r, last) < 0.15
+                if too_close
+                    old = array.get(m_ty, last)
+                    if not str.contains(old, array.get(c_ty, i))
+                        array.set(m_ty, last, old + " + " + array.get(c_ty, i))
+                else
+                    array.push(m_px, array.get(c_px, i))
+                    array.push(m_ty, array.get(c_ty, i))
+                    array.push(m_r, r)
 
-if is_ob_bear_active and bar_index > current_ob_bear_start and mit_probe_bear >= current_ob_bear_bot
-    is_ob_bear_active := false
-    mitigated_ob_bear := true
-    if not na(current_ob_bear)
-        box.delete(current_ob_bear)
-        current_ob_bear := na
+    first_ok = -1
+    if array.size(m_r) > 0
+        for k = 0 to array.size(m_r) - 1
+            if first_ok < 0 and array.get(m_r, k) >= min_rr_in
+                first_ok := k
 
-if is_fvg_bull_active and bar_index > current_fvg_bull_m5_start and mit_probe_bull <= current_fvg_bull_m5_top
-    is_fvg_bull_active := false
-    mitigated_fvg_bull := true
-    if not na(current_fvg_bull_m5)
-        box.set_bgcolor(current_fvg_bull_m5, color.new(color_lux_level, 85))
-        box.set_extend(current_fvg_bull_m5, extend.none)
-        box.set_right(current_fvg_bull_m5, bar_index)
-        current_fvg_bull_m5 := na
+    o_px = array.new_float()
+    o_ty = array.new_string()
+    o_r  = array.new_float()
+    if first_ok >= 0
+        keep = math.min(array.size(m_r), max_tp_in)
+        for k = 0 to keep - 1
+            // Si la 1re cible valable (>= min_rr_in) est au-delà de max_tp_in, elle prend la dernière place.
+            src = (k == keep - 1 and first_ok > keep - 1) ? first_ok : k
+            array.push(o_px, array.get(m_px, src))
+            array.push(o_ty, array.get(m_ty, src))
+            array.push(o_r, array.get(m_r, src))
+    [o_px, o_ty, o_r, first_ok >= 0]
 
-if is_fvg_bear_active and bar_index > current_fvg_bear_m5_start and mit_probe_bear >= current_fvg_bear_m5_bot
-    is_fvg_bear_active := false
-    mitigated_fvg_bear := true
-    if not na(current_fvg_bear_m5)
-        box.set_bgcolor(current_fvg_bear_m5, color.new(color_lux_level, 85))
-        box.set_extend(current_fvg_bear_m5, extend.none)
-        box.set_right(current_fvg_bear_m5, bar_index)
-        current_fvg_bear_m5 := na
-
-// Mise à jour des zones "extra" en tableau : OB disparaît (comme demandé), FVG passe en gris clair
-f_update_bull_zones(ext_ob_bull_box, ext_ob_bull_top, ext_ob_bull_bot, ext_ob_bull_mit, mit_probe_bull, false, color(na))
-f_update_bear_zones(ext_ob_bear_box, ext_ob_bear_top, ext_ob_bear_bot, ext_ob_bear_mit, mit_probe_bear, false, color(na))
-f_update_bull_zones(ext_fvg_bull_box, ext_fvg_bull_top, ext_fvg_bull_bot, ext_fvg_bull_mit, mit_probe_bull, true, color.new(color_lux_level, 85))
-f_update_bear_zones(ext_fvg_bear_box, ext_fvg_bear_top, ext_fvg_bear_bot, ext_fvg_bear_mit, mit_probe_bear, true, color.new(color_lux_level, 85))
+// TP retenus pour le trade : cibles de liquidité, ou un TP unique à rr_ratio en mode « Fixe (R:R) »
+// (comportement du R5). ok = false -> pas de cible de liquidité à min_rr_in R : trade abandonné.
+f_trade_targets(is_buy, entry, risk) =>
+    [t_px, t_ty, t_r, t_ok] = f_select_targets(is_buy, entry, risk)
+    fixed = tp_mode_in != "Liquidité"
+    if fixed
+        array.clear(t_px)
+        array.clear(t_ty)
+        array.clear(t_r)
+        array.push(t_px, entry + (is_buy ? 1 : -1) * risk * rr_ratio)
+        array.push(t_ty, "R:R fixe")
+        array.push(t_r, rr_ratio)
+    [t_px, t_ty, t_r, fixed or t_ok]
 
 // ==========================================
 // 4. LOGIQUE CAUSALE ICT 2022 (MACHINE D'ETATS) & ENTREE
@@ -557,6 +793,7 @@ var int   buy_sweep_bar        = na
 var float buy_sweep_low        = na
 var float buy_mss_level        = na
 var int   buy_displacement_bar = na
+var float buy_pre_disp_high    = na  // haut de la bougie AVANT le displacement — ancre fixe de la FVG causale
 var float buy_fvg_top          = na
 var float buy_fvg_bottom       = na
 var int   buy_fvg_bar          = na
@@ -567,18 +804,20 @@ var int   sell_sweep_bar        = na
 var float sell_sweep_high       = na
 var float sell_mss_level        = na
 var int   sell_displacement_bar = na
+var float sell_pre_disp_low     = na  // bas de la bougie AVANT le displacement — ancre fixe de la FVG causale
 var float sell_fvg_top          = na
 var float sell_fvg_bottom       = na
 var int   sell_fvg_bar          = na
 
-// Définition quantitative du Displacement (M5)
+// Définition quantitative du Displacement (M5) — seuils réglables (diagnostic du 18/09 : ce
+// filtre éliminait plus de 90% des sweeps à lui seul, goulot d'étranglement principal du moteur).
 // Référence ATR : atr_val[1]
 disp_body_ratio = c_range > 0 ? (c_body / c_range) : 0.0
-is_disp_quant   = (disp_body_ratio >= 0.65) and (c_body >= 1.25 * atr_val[1])
+is_disp_quant   = (disp_body_ratio >= disp_body_ratio_min_in) and (c_body >= disp_atr_mult_min_in * atr_val[1])
 
-// Timeouts maximaux (en barres M5)
-MAX_BARS_SWEEP_TO_MSS = 12
-MAX_BARS_FVG_TO_RETEST = 20
+// Timeouts maximaux (en barres M5) — réglables
+MAX_BARS_SWEEP_TO_MSS = sweep_to_mss_window_in
+MAX_BARS_FVG_TO_RETEST = fvg_to_retest_window_in
 
 // -------------------------------------------------------------
 // ÉVOLUTION MACHINE D'ÉTATS : BUY
@@ -608,7 +847,7 @@ if buy_state == STATE_IDLE
         buy_state            := STATE_SWEEP_ARMED
         buy_sweep_bar        := bar_index
         buy_sweep_low        := low
-        buy_mss_level        := last_ph
+        buy_mss_level        := vis_last_ph
         buy_displacement_bar := na
         buy_fvg_top          := na
         buy_fvg_bottom       := na
@@ -618,24 +857,27 @@ else if buy_state == STATE_SWEEP_ARMED
     if sweep_l
         buy_sweep_bar := bar_index
         buy_sweep_low := low
-        buy_mss_level := last_ph
+        buy_mss_level := vis_last_ph
     // Recherche du Displacement + MSS haussier cassant buy_mss_level
     else if bar_confirmed and not na(buy_mss_level) and close > buy_mss_level and close > open and is_disp_quant
         buy_state            := STATE_MSS_CONFIRMED
         buy_displacement_bar := bar_index
+        buy_pre_disp_high    := high[1] // ancre fixe : haut de la bougie juste avant le displacement
 else if buy_state == STATE_MSS_CONFIRMED
-    // La FVG causale 3 bougies a la bougie de displacement comme bougie centrale (bar_index - 1)
-    // À bar_index (bougie 3 fermée), la condition FVG haussière 3 bougies est: low > high[2]
-    if bar_index == buy_displacement_bar + 1 and bar_confirmed
-        has_causal_fvg = (low > high[2]) and ((low - high[2]) >= atr_val[1] * 0.15)
+    // La FVG causale doit se former dans une fenêtre de `causal_fvg_window_in` bougies après le
+    // displacement (pas uniquement sur la bougie n+1 — trop fragile au timing exact). L'ancre
+    // basse reste la bougie juste avant le displacement (buy_pre_disp_high), fixe quelle que soit
+    // la bougie où le gap se referme.
+    if bar_confirmed and bar_index >= buy_displacement_bar + 1 and bar_index <= buy_displacement_bar + causal_fvg_window_in
+        has_causal_fvg = (low > buy_pre_disp_high) and ((low - buy_pre_disp_high) >= atr_val[1] * 0.15)
         if has_causal_fvg
             buy_fvg_top    := low
-            buy_fvg_bottom := high[2]
+            buy_fvg_bottom := buy_pre_disp_high
             buy_fvg_bar    := bar_index
             buy_state      := STATE_CAUSAL_FVG_CONFIRMED
-        else
-            buy_state := STATE_IDLE // Pas de FVG causale créée par le displacement -> Reset
-    else if bar_index > buy_displacement_bar + 1
+        else if bar_index == buy_displacement_bar + causal_fvg_window_in
+            buy_state := STATE_IDLE // Fenêtre épuisée sans FVG causale valide -> Reset
+    else if bar_index > buy_displacement_bar + causal_fvg_window_in
         buy_state := STATE_IDLE
 else if buy_state == STATE_CAUSAL_FVG_CONFIRMED
     // Passage formel dans l'attente du retest
@@ -673,7 +915,7 @@ if sell_state == STATE_IDLE
         sell_state            := STATE_SWEEP_ARMED
         sell_sweep_bar        := bar_index
         sell_sweep_high       := high
-        sell_mss_level        := last_pl
+        sell_mss_level        := vis_last_pl
         sell_displacement_bar := na
         sell_fvg_top          := na
         sell_fvg_bottom       := na
@@ -683,24 +925,25 @@ else if sell_state == STATE_SWEEP_ARMED
     if sweep_h
         sell_sweep_bar := bar_index
         sell_sweep_high := high
-        sell_mss_level := last_pl
+        sell_mss_level := vis_last_pl
     // Recherche du Displacement + MSS baissier cassant sell_mss_level
     else if bar_confirmed and not na(sell_mss_level) and close < sell_mss_level and close < open and is_disp_quant
         sell_state            := STATE_MSS_CONFIRMED
         sell_displacement_bar := bar_index
+        sell_pre_disp_low     := low[1] // ancre fixe : bas de la bougie juste avant le displacement
 else if sell_state == STATE_MSS_CONFIRMED
-    // La FVG causale 3 bougies a la bougie de displacement comme bougie centrale (bar_index - 1)
-    // À bar_index (bougie 3 fermée), la condition FVG baissière 3 bougies est: high < low[2]
-    if bar_index == sell_displacement_bar + 1 and bar_confirmed
-        has_causal_fvg = (high < low[2]) and ((low[2] - high) >= atr_val[1] * 0.15)
+    // La FVG causale doit se former dans une fenêtre de `causal_fvg_window_in` bougies après le
+    // displacement (pas uniquement sur la bougie n+1). Ancre haute fixe : sell_pre_disp_low.
+    if bar_confirmed and bar_index >= sell_displacement_bar + 1 and bar_index <= sell_displacement_bar + causal_fvg_window_in
+        has_causal_fvg = (high < sell_pre_disp_low) and ((sell_pre_disp_low - high) >= atr_val[1] * 0.15)
         if has_causal_fvg
-            sell_fvg_top    := low[2]
+            sell_fvg_top    := sell_pre_disp_low
             sell_fvg_bottom := high
             sell_fvg_bar    := bar_index
             sell_state      := STATE_CAUSAL_FVG_CONFIRMED
-        else
-            sell_state := STATE_IDLE // Pas de FVG causale créée par le displacement -> Reset
-    else if bar_index > sell_displacement_bar + 1
+        else if bar_index == sell_displacement_bar + causal_fvg_window_in
+            sell_state := STATE_IDLE // Fenêtre épuisée sans FVG causale valide -> Reset
+    else if bar_index > sell_displacement_bar + causal_fvg_window_in
         sell_state := STATE_IDLE
 else if sell_state == STATE_CAUSAL_FVG_CONFIRMED
     // Passage formel dans l'attente du retest
@@ -714,13 +957,17 @@ else if sell_state == STATE_WAIT_RETEST
 var bool   in_pos       = false
 var float  pos_entry    = 0.0
 var float  pos_sl       = 0.0
-var float  pos_tp       = 0.0
+var float  pos_tp       = 0.0   // TP final suivi pour la sortie : la cible de liquidité la plus lointaine retenue
 var string pos_dir      = "NONE"
 var string pos_quality  = "--"
 var string pos_grade    = "--"
+var string pos_rr_txt   = "0.0" // R du TP final, envoyé au serveur (résultat d'un TP_HIT)
+var string pos_trade_id = ""    // identifiant unique du trade (actif + heure de la bougie d'entrée)
 var int    last_sig_bar = 0
 var box    tp_zone_box  = na
 var box    sl_zone_box  = na
+var line[]  tp_lines    = array.new_line()
+var label[] tp_labels   = array.new_label()
 
 // Timeout de 15 barres M5 entre deux signaux dans la même zone
 cooldown_ok = na(last_sig_bar) or (bar_index - last_sig_bar > cooldown_bars_in)
@@ -740,100 +987,143 @@ calc_score(is_mtf) =>
     stars_str = score == 3 ? "★★★★★" : "★★★★☆"
     [score, grade_str, stars_str]
 
+// Cibles envoyées au dashboard : [{"p":"prix","r":"R","t":"type de liquidité"}, ...]
+f_targets_json(px, ty, rr) =>
+    s = ""
+    if array.size(px) > 0
+        for i = 0 to array.size(px) - 1
+            s += (i > 0 ? "," : "") + '{"p":"' + str.tostring(array.get(px, i), format.mintick) + '","r":"' + str.tostring(array.get(rr, i), "#.##") + '","t":"' + array.get(ty, i) + '"}'
+    "[" + s + "]"
+
+// Lignes pointillées TP1…TPn nommées (effacées au trade suivant, raccourcies à la sortie)
+f_draw_targets(px, ty, rr) =>
+    while array.size(tp_lines) > 0
+        line.delete(array.pop(tp_lines))
+    while array.size(tp_labels) > 0
+        label.delete(array.pop(tp_labels))
+    if show_risk_zone and array.size(px) > 0
+        for i = 0 to array.size(px) - 1
+            p = array.get(px, i)
+            array.push(tp_lines, line.new(bar_index, p, bar_index + 30, p, color=color.new(color_lux_bull, 15), style=line.style_dashed, width=1))
+            array.push(tp_labels, label.new(bar_index + 30, p, "TP" + str.tostring(i + 1) + " · " + array.get(ty, i) + " · +" + str.tostring(array.get(rr, i), "#.#") + "R", color=color.new(color.white, 100), textcolor=color_lux_bull, style=label.style_label_left, size=size.small))
+
+
 if raw_buy
     [score, grade_txt, stars_txt] = calc_score(tested_h1_bull)
     grade_ok = (min_grade_in == "B") or (min_grade_in == "A" and score >= 2) or (min_grade_in == "A+" and score == 3)
 
     if grade_ok
-        setup_name   = tested_h1_bull ? "RETEST" : "SSL SWEEP"
-        pos_entry    := close
-        
+        b_entry  = close
         // SL Structurel ancré sur le bas du sweep d'origine, plafonné/planché par ATR M5
-        raw_sl       = not na(buy_sweep_low) ? (buy_sweep_low - syminfo.mintick * 10) : (ta.lowest(low, 15) - syminfo.mintick * 10)
-        raw_risk     = pos_entry - raw_sl
-        risk         = math.max(math.min(raw_risk, atr_val * atr_cap_mult), atr_val * atr_floor_mult)
-        pos_sl       := pos_entry - risk
-        pos_tp       := pos_entry + (risk * rr_ratio)
-        pos_dir      := "BUY"
-        pos_quality  := grade_txt
-        pos_grade    := stars_txt
-        in_pos       := true
-        last_sig_bar := bar_index
+        b_raw_sl = not na(buy_sweep_low) ? (buy_sweep_low - syminfo.mintick * 10) : (ta.lowest(low, 15) - syminfo.mintick * 10)
+        b_risk   = math.max(math.min(b_entry - b_raw_sl, atr_val * atr_cap_mult), atr_val * atr_floor_mult)
+        [t_px, t_ty, t_r, t_ok] = f_trade_targets(true, b_entry, b_risk)
 
-        // Reset de la machine d'état après entrée exécutée
-        buy_state := STATE_IDLE
+        if not t_ok
+            // Setup valide mais aucune cible de liquidité à min_rr_in R : trade abandonné (pas d'alerte)
+            buy_state := STATE_IDLE
+            label.new(bar_index, low - (atr_val * 0.8), "✖ BUY sans cible ≥ " + str.tostring(min_rr_in, "#.#") + "R", color=color.new(color.gray, 55), textcolor=color.white, style=label.style_label_up, size=size.tiny)
+        else
+            setup_name   = tested_h1_bull ? "RETEST" : "SSL SWEEP"
+            pos_entry    := b_entry
+            pos_sl       := b_entry - b_risk
+            pos_tp       := array.get(t_px, array.size(t_px) - 1)
+            pos_rr_txt   := str.tostring(array.get(t_r, array.size(t_r) - 1), "#.##")
+            pos_trade_id := asset_name + "-" + str.tostring(time)
+            pos_dir      := "BUY"
+            pos_quality  := grade_txt
+            pos_grade    := stars_txt
+            in_pos       := true
+            last_sig_bar := bar_index
 
-        // MARQUAGE CONSUMED : Bloque toute réutilisation de cette zone H1
-        h1_bull_consumed := true
+            // Reset de la machine d'état après entrée exécutée
+            buy_state := STATE_IDLE
 
-        // Label d'entrée en 2 niveaux, bien décalé du prix pour rester lisible au milieu des FVG/OB/CHoCH
-        label.new(bar_index, low - (atr_val * 0.8), "🟢 " + grade_txt + " " + setup_name, color=color.new(color_lux_bull, 15), textcolor=color.black, style=label.style_label_up, size=size.small)
+            // MARQUAGE CONSUMED : Bloque toute réutilisation de cette zone H1
+            h1_bull_consumed := true
 
-        // Zone visuelle Risque/Récompense (comme les indicateurs LuxAlgo) : vert vers le TP, rouge vers le SL
-        if show_risk_zone
-            if not na(tp_zone_box)
-                box.delete(tp_zone_box)
-            if not na(sl_zone_box)
-                box.delete(sl_zone_box)
-            tp_zone_box := box.new(bar_index, pos_tp, bar_index + 30, pos_entry, border_color=na, bgcolor=color.new(color_lux_bull, 88))
-            sl_zone_box := box.new(bar_index, pos_entry, bar_index + 30, pos_sl, border_color=na, bgcolor=color.new(color_lux_bear, 88))
+            // Label d'entrée en 2 niveaux, bien décalé du prix pour rester lisible au milieu des FVG/OB/CHoCH
+            label.new(bar_index, low - (atr_val * 0.8), "🟢 " + grade_txt + " " + setup_name, color=color.new(color_lux_bull, 15), textcolor=color.black, style=label.style_label_up, size=size.small)
 
-        payload_entry = '{"symbol":"' + asset_name + '","status":"' + setup_name + '","direction":"BUY","quality":"' + grade_txt + '","grade":"' + stars_txt + '","entry_price":"' + str.tostring(pos_entry, format.mintick) + '","sl_price":"' + str.tostring(pos_sl, format.mintick) + '","tp_price":"' + str.tostring(pos_tp, format.mintick) + '","current_price":"' + str.tostring(close, format.mintick) + '","rr":"' + str.tostring(rr_ratio, "#.#") + '"}'
-        alert(payload_entry, alert.freq_once_per_bar_close)
+            // Zone visuelle Risque/Récompense : vert jusqu'au TP final, rouge jusqu'au SL, + lignes TP1…TPn
+            if show_risk_zone
+                if not na(tp_zone_box)
+                    box.delete(tp_zone_box)
+                if not na(sl_zone_box)
+                    box.delete(sl_zone_box)
+                tp_zone_box := box.new(bar_index, pos_tp, bar_index + 30, pos_entry, border_color=na, bgcolor=color.new(color_lux_bull, 88))
+                sl_zone_box := box.new(bar_index, pos_entry, bar_index + 30, pos_sl, border_color=na, bgcolor=color.new(color_lux_bear, 88))
+            f_draw_targets(t_px, t_ty, t_r)
+
+            payload_entry = '{"symbol":"' + asset_name + '","status":"' + setup_name + '","direction":"BUY","quality":"' + grade_txt + '","grade":"' + stars_txt + '","entry_price":"' + str.tostring(pos_entry, format.mintick) + '","sl_price":"' + str.tostring(pos_sl, format.mintick) + '","tp_price":"' + str.tostring(pos_tp, format.mintick) + '","current_price":"' + str.tostring(close, format.mintick) + '","rr":"' + pos_rr_txt + '","version":"' + SCRIPT_VERSION + '","trade_id":"' + pos_trade_id + '","targets":' + f_targets_json(t_px, t_ty, t_r) + '}'
+            alert(payload_entry, alert.freq_once_per_bar_close)
 
 if raw_sell
     [score, grade_txt, stars_txt] = calc_score(tested_h1_bear)
     grade_ok = (min_grade_in == "B") or (min_grade_in == "A" and score >= 2) or (min_grade_in == "A+" and score == 3)
 
     if grade_ok
-        setup_name   = tested_h1_bear ? "RETEST" : "BSL SWEEP"
-        pos_entry    := close
-        
+        s_entry  = close
         // SL Structurel ancré sur le haut du sweep d'origine, plafonné/planché par ATR M5
-        raw_sl       = not na(sell_sweep_high) ? (sell_sweep_high + syminfo.mintick * 10) : (ta.highest(high, 15) + syminfo.mintick * 10)
-        raw_risk     = raw_sl - pos_entry
-        risk         = math.max(math.min(raw_risk, atr_val * atr_cap_mult), atr_val * atr_floor_mult)
-        pos_sl       := pos_entry + risk
-        pos_tp       := pos_entry - (risk * rr_ratio)
-        pos_dir      := "SELL"
-        pos_quality  := grade_txt
-        pos_grade    := stars_txt
-        in_pos       := true
-        last_sig_bar := bar_index
+        s_raw_sl = not na(sell_sweep_high) ? (sell_sweep_high + syminfo.mintick * 10) : (ta.highest(high, 15) + syminfo.mintick * 10)
+        s_risk   = math.max(math.min(s_raw_sl - s_entry, atr_val * atr_cap_mult), atr_val * atr_floor_mult)
+        [t_px, t_ty, t_r, t_ok] = f_trade_targets(false, s_entry, s_risk)
 
-        // Reset de la machine d'état après entrée exécutée
-        sell_state := STATE_IDLE
+        if not t_ok
+            // Setup valide mais aucune cible de liquidité à min_rr_in R : trade abandonné (pas d'alerte)
+            sell_state := STATE_IDLE
+            label.new(bar_index, high + (atr_val * 0.8), "✖ SELL sans cible ≥ " + str.tostring(min_rr_in, "#.#") + "R", color=color.new(color.gray, 55), textcolor=color.white, style=label.style_label_down, size=size.tiny)
+        else
+            setup_name   = tested_h1_bear ? "RETEST" : "BSL SWEEP"
+            pos_entry    := s_entry
+            pos_sl       := s_entry + s_risk
+            pos_tp       := array.get(t_px, array.size(t_px) - 1)
+            pos_rr_txt   := str.tostring(array.get(t_r, array.size(t_r) - 1), "#.##")
+            pos_trade_id := asset_name + "-" + str.tostring(time)
+            pos_dir      := "SELL"
+            pos_quality  := grade_txt
+            pos_grade    := stars_txt
+            in_pos       := true
+            last_sig_bar := bar_index
 
-        // MARQUAGE CONSUMED : Bloque toute réutilisation de cette zone H1
-        h1_bear_consumed := true
+            // Reset de la machine d'état après entrée exécutée
+            sell_state := STATE_IDLE
 
-        // Label d'entrée en 2 niveaux, bien décalé du prix pour rester lisible au milieu des FVG/OB/CHoCH
-        label.new(bar_index, high + (atr_val * 0.8), "🔴 " + grade_txt + " " + setup_name, color=color.new(color_lux_bear, 15), textcolor=color.white, style=label.style_label_down, size=size.small)
+            // MARQUAGE CONSUMED : Bloque toute réutilisation de cette zone H1
+            h1_bear_consumed := true
 
-        // Zone visuelle Risque/Récompense (comme les indicateurs LuxAlgo) : vert vers le TP, rouge vers le SL
-        if show_risk_zone
-            if not na(tp_zone_box)
-                box.delete(tp_zone_box)
-            if not na(sl_zone_box)
-                box.delete(sl_zone_box)
-            tp_zone_box := box.new(bar_index, pos_entry, bar_index + 30, pos_tp, border_color=na, bgcolor=color.new(color_lux_bull, 88))
-            sl_zone_box := box.new(bar_index, pos_sl, bar_index + 30, pos_entry, border_color=na, bgcolor=color.new(color_lux_bear, 88))
+            // Label d'entrée en 2 niveaux, bien décalé du prix pour rester lisible au milieu des FVG/OB/CHoCH
+            label.new(bar_index, high + (atr_val * 0.8), "🔴 " + grade_txt + " " + setup_name, color=color.new(color_lux_bear, 15), textcolor=color.white, style=label.style_label_down, size=size.small)
 
-        payload_entry = '{"symbol":"' + asset_name + '","status":"' + setup_name + '","direction":"SELL","quality":"' + grade_txt + '","grade":"' + stars_txt + '","entry_price":"' + str.tostring(pos_entry, format.mintick) + '","sl_price":"' + str.tostring(pos_sl, format.mintick) + '","tp_price":"' + str.tostring(pos_tp, format.mintick) + '","current_price":"' + str.tostring(close, format.mintick) + '","rr":"' + str.tostring(rr_ratio, "#.#") + '"}'
-        alert(payload_entry, alert.freq_once_per_bar_close)
+            // Zone visuelle Risque/Récompense : vert jusqu'au TP final, rouge jusqu'au SL, + lignes TP1…TPn
+            if show_risk_zone
+                if not na(tp_zone_box)
+                    box.delete(tp_zone_box)
+                if not na(sl_zone_box)
+                    box.delete(sl_zone_box)
+                tp_zone_box := box.new(bar_index, pos_entry, bar_index + 30, pos_tp, border_color=na, bgcolor=color.new(color_lux_bull, 88))
+                sl_zone_box := box.new(bar_index, pos_sl, bar_index + 30, pos_entry, border_color=na, bgcolor=color.new(color_lux_bear, 88))
+            f_draw_targets(t_px, t_ty, t_r)
+
+            payload_entry = '{"symbol":"' + asset_name + '","status":"' + setup_name + '","direction":"SELL","quality":"' + grade_txt + '","grade":"' + stars_txt + '","entry_price":"' + str.tostring(pos_entry, format.mintick) + '","sl_price":"' + str.tostring(pos_sl, format.mintick) + '","tp_price":"' + str.tostring(pos_tp, format.mintick) + '","current_price":"' + str.tostring(close, format.mintick) + '","rr":"' + pos_rr_txt + '","version":"' + SCRIPT_VERSION + '","trade_id":"' + pos_trade_id + '","targets":' + f_targets_json(t_px, t_ty, t_r) + '}'
+            alert(payload_entry, alert.freq_once_per_bar_close)
 
 // ==========================================
 // 5. SORTIES TP / SL & GESTION DES DESSINS
 // ==========================================
 if in_pos
-    hit_tp = (pos_dir == "BUY" and high >= pos_tp) or (pos_dir == "SELL" and low <= pos_tp)
-    hit_sl = (pos_dir == "BUY" and low <= pos_sl)  or (pos_dir == "SELL" and high >= pos_sl)
+    // BUG CORRIGÉ (revue ChatGPT du 18/09) : hit_tp/hit_sl utilisaient le high/low de LA
+    // BOUGIE D'ENTRÉE elle-même, y compris la partie du mouvement antérieure à la clôture
+    // qui a déclenché l'entrée — un TP/SL "fantôme" pouvait se déclencher instantanément sur
+    // du prix touché avant l'entrée réelle. On ne teste plus la sortie sur la bougie d'entrée.
+    hit_tp = bar_index > last_sig_bar and ((pos_dir == "BUY" and high >= pos_tp) or (pos_dir == "SELL" and low <= pos_tp))
+    hit_sl = bar_index > last_sig_bar and ((pos_dir == "BUY" and low <= pos_sl)  or (pos_dir == "SELL" and high >= pos_sl))
     // Timeout automatique après 30 bougies M5 (2h30) pour débloquer le scanner
     pos_expired = (bar_index - last_sig_bar) >= 30
 
     if hit_sl or hit_tp or pos_expired
         exit_status = hit_sl ? "SL_HIT" : (hit_tp ? "TP_HIT" : "EXPIRED")
-        payload_exit = '{"symbol":"' + asset_name + '","status":"' + exit_status + '","direction":"NONE","quality":"--","grade":"--","entry_price":"0.0","sl_price":"0.0","tp_price":"0.0","current_price":"' + str.tostring(close, format.mintick) + '","rr":"0.0"}'
+        payload_exit = '{"symbol":"' + asset_name + '","status":"' + exit_status + '","direction":"NONE","quality":"--","grade":"--","entry_price":"0.0","sl_price":"0.0","tp_price":"0.0","current_price":"' + str.tostring(close, format.mintick) + '","rr":"0.0","version":"' + SCRIPT_VERSION + '","trade_id":"' + pos_trade_id + '"}'
         alert(payload_exit, alert.freq_once_per_bar_close)
         in_pos      := false
         pos_dir     := "NONE"
@@ -844,28 +1134,19 @@ if in_pos
             box.set_right(tp_zone_box, bar_index)
         if not na(sl_zone_box)
             box.set_right(sl_zone_box, bar_index)
+        for ln in tp_lines
+            line.set_x2(ln, bar_index)
+        for lb in tp_labels
+            label.set_x(lb, bar_index)
     else if bar_index > last_sig_bar
         // Mise à jour de progression à chaque clôture de bougie M5 pendant position active
-        payload_update = '{"symbol":"' + asset_name + '","status":"PRICE_UPDATE","direction":"' + pos_dir + '","quality":"' + pos_quality + '","grade":"' + pos_grade + '","entry_price":"' + str.tostring(pos_entry, format.mintick) + '","sl_price":"' + str.tostring(pos_sl, format.mintick) + '","tp_price":"' + str.tostring(pos_tp, format.mintick) + '","current_price":"' + str.tostring(close, format.mintick) + '","rr":"' + str.tostring(rr_ratio, "#.#") + '"}'
+        payload_update = '{"symbol":"' + asset_name + '","status":"PRICE_UPDATE","direction":"' + pos_dir + '","quality":"' + pos_quality + '","grade":"' + pos_grade + '","entry_price":"' + str.tostring(pos_entry, format.mintick) + '","sl_price":"' + str.tostring(pos_sl, format.mintick) + '","tp_price":"' + str.tostring(pos_tp, format.mintick) + '","current_price":"' + str.tostring(close, format.mintick) + '","rr":"' + pos_rr_txt + '","version":"' + SCRIPT_VERSION + '","trade_id":"' + pos_trade_id + '"}'
         alert(payload_update, alert.freq_once_per_bar_close)
-
-// Passage en gris clair + arrêt d'extension des boîtes H1 lorsqu'elles sont mitigées (preuve visuelle explicite)
-if h1_bull_consumed and not na(h1_bull_box)
-    box.set_bgcolor(h1_bull_box, color.new(color_lux_level, 85))
-    box.set_extend(h1_bull_box, extend.none)
-    box.set_right(h1_bull_box, bar_index)
-    h1_bull_box := na
-
-if h1_bear_consumed and not na(h1_bear_box)
-    box.set_bgcolor(h1_bear_box, color.new(color_lux_level, 85))
-    box.set_extend(h1_bear_box, extend.none)
-    box.set_right(h1_bear_box, bar_index)
-    h1_bear_box := na
 
 // ==========================================
 // 6. TABLEAU DE BORD (overlay, style LuxAlgo)
 // ==========================================
-var table dash = table.new(position.top_right, 2, 6, border_color=color_panel_bd, border_width=2, frame_color=color_panel_bd, frame_width=2)
+var table dash = table.new(position.top_right, 2, 7, border_color=color_panel_bd, border_width=2, frame_color=color_panel_bd, frame_width=2)
 
 if show_dashboard and barstate.islast
     bias_txt = h1_bias_bull ? "🟢 HAUSSIER" : h1_bias_bear ? "🔴 BAISSIER" : "⚪ NEUTRE"
@@ -887,3 +1168,5 @@ if show_dashboard and barstate.islast
     table.cell(dash, 1, 4, "  " + pos_txt + "  ", text_color=pos_col, text_size=size.normal, bgcolor=color_panel_bg, text_halign=text.align_right)
     table.cell(dash, 0, 5, "  Grade min.  ", text_color=color_lux_level, text_size=size.normal, bgcolor=color_panel_bg, text_halign=text.align_left)
     table.cell(dash, 1, 5, "  " + min_grade_in + "  ", text_color=color_lux_gold, text_size=size.normal, bgcolor=color_panel_bg, text_halign=text.align_right)
+    table.cell(dash, 0, 6, "  Version  ", text_color=color_lux_level, text_size=size.normal, bgcolor=color_panel_bg, text_halign=text.align_left)
+    table.cell(dash, 1, 6, "  " + SCRIPT_VERSION + "  ", text_color=color.white, text_size=size.normal, bgcolor=color_panel_bg, text_halign=text.align_right)

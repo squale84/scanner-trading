@@ -2,7 +2,13 @@
 // NB Pine v5 : commission_value / slippage doivent être des constantes fixes
 // (impossible d'utiliser input.float ici). Modifie les 2 chiffres ci-dessous
 // directement si tu veux tester d'autres hypothèses de coûts.
-strategy("ICT 2022 Scanner Engine — BACKTEST [MTF H1-M5]", overlay=true,
+// VERSION DU SCRIPT — à comparer avec ce que Claude annonce à chaque envoi de fichier.
+// Visible en permanence dans le titre sur le graphique. Change ce numéro à CHAQUE
+// modification envoyée par Claude. Numérotée séparément du Radar (fichiers indépendants).
+SCRIPT_VERSION = "B7.1-DEBUG"
+
+// Version EN TÊTE du nom : la liste « Mes scripts » de TradingView coupe les noms trop longs.
+strategy("Backtest ICT B7.1 — MTF H1-M5 (debug)", shorttitle="Backtest ICT B7.1", overlay=true,
      initial_capital=10000,
      default_qty_type=strategy.percent_of_equity,
      default_qty_value=100,
@@ -32,6 +38,11 @@ atr_floor_mult = input.float(0.5, title="Plancher Stop-Loss (x ATR M5)", minval=
 risk_pct_in   = input.float(1.0, title="Risque par trade (% équité)", minval=0.1, step=0.1, group=grp_radar)
 zone_window_in   = input.int(20, title="Fenêtre de validité contexte H1 (barres M5)", minval=5, maxval=50, group=grp_radar)
 cooldown_bars_in = input.int(10, title="Cooldown entre signaux (barres M5)", minval=1, maxval=50, group=grp_radar)
+causal_fvg_window_in = input.int(3, title="Fenêtre de formation FVG causale après displacement (barres M5)", minval=1, maxval=10, group=grp_radar)
+disp_body_ratio_min_in = input.float(0.60, title="Displacement : ratio corps/range minimum", minval=0.3, maxval=0.9, step=0.05, group=grp_radar)
+disp_atr_mult_min_in   = input.float(1.0, title="Displacement : corps minimum (x ATR M5)", minval=0.3, maxval=2.0, step=0.05, group=grp_radar)
+sweep_to_mss_window_in  = input.int(18, title="Fenêtre sweep -> displacement (barres M5)", minval=6, maxval=40, group=grp_radar)
+fvg_to_retest_window_in = input.int(20, title="Fenêtre FVG causale -> retest (barres M5)", minval=5, maxval=50, group=grp_radar)
 fvg_mitigation_mode = input.string("Mèche", title="Mode de mitigation FVG/OB", options=["Mèche", "Corps", "Clôture"], group=grp_radar)
 
 grp_ui        = "Affichage Graphique ICT"
@@ -158,7 +169,11 @@ var float current_dl = na
 var int   current_dh_bar = na
 var int   current_dl_bar = na
 
-if ta.change(time("D", "America/New_York"))
+// Alignement sur le Radar (PATCH 1) : "America/New_York" était passé en paramètre `session`,
+// pas `timezone` -> la journée ne commençait pas à minuit New York. Même PDH / PDL que le Radar.
+is_new_ny_day = ta.change(time("D", "", "America/New_York"))
+
+if is_new_ny_day
     pdh := current_dh
     pdl := current_dl
     pdh_bar := current_dh_bar
@@ -176,10 +191,10 @@ else
         current_dl_bar := bar_index
 
 var float midnight_open = na
-if ta.change(time("D", "America/New_York"))
+if is_new_ny_day
     midnight_open := open
 
-if ta.change(time("D", "America/New_York")) and show_levels
+if is_new_ny_day and show_levels
     if not na(pdh)
         line.new(pdh_bar, pdh, bar_index + 288, pdh, color=color_lux_level, width=1, style=line.style_dotted)
         label.new(bar_index + 5, pdh, "PDH", color=color.new(color.white, 100), textcolor=color_lux_level, style=label.style_none, size=size.small)
@@ -187,7 +202,7 @@ if ta.change(time("D", "America/New_York")) and show_levels
         line.new(pdl_bar, pdl, bar_index + 288, pdl, color=color_lux_level, width=1, style=line.style_dotted)
         label.new(bar_index + 5, pdl, "PDL", color=color.new(color.white, 100), textcolor=color_lux_level, style=label.style_none, size=size.small)
 
-if ta.change(time("D", "America/New_York")) and show_levels
+if is_new_ny_day and show_levels
     line.new(bar_index, open, bar_index + 288, open, color=color.new(#FFD600, 20), width=1, style=line.style_dashed)
     label.new(bar_index + 5, open, "NY Open", color=color.new(color.white, 100), textcolor=color.new(#FFD600, 0), style=label.style_none, size=size.small)
 
@@ -267,13 +282,32 @@ c_range = high - low
 c_body  = math.abs(close - open)
 is_disp = c_range > 0 and ((c_body / c_range) >= 0.50)
 
+// --- Pivots persistants indépendants — JAMAIS réinitialisés par les événements MSS du moteur
+// (contrairement à last_ph/last_pl, consommés/remis à na dès que la détection d'affichage
+// mss_bull/mss_bear les utilise, laquelle a un seuil bien plus permissif — is_disp 50% —
+// que le moteur causal — is_disp_quant 65% + 1,25x ATR). Sans cette copie séparée, le moteur
+// causal capturait souvent un buy_mss_level/sell_mss_level déjà à na au moment du sweep,
+// bloquant silencieusement la détection de displacement. BUG CORRIGÉ : le sweep et le niveau
+// de cassure du moteur causal utilisent maintenant CES pivots, pas last_ph/last_pl.
+var float vis_last_ph = na
+var float vis_prev_ph = na
+var float vis_last_pl = na
+var float vis_prev_pl = na
+
+if not na(ph)
+    vis_prev_ph := vis_last_ph
+    vis_last_ph := ph
+if not na(pl)
+    vis_prev_pl := vis_last_pl
+    vis_last_pl := pl
+
 wick_top = high - math.max(open, close)
 wick_bot = math.min(open, close) - low
 rej_buy  = c_range > 0 and (wick_bot / c_range) >= 0.35 and close > open
 rej_sell = c_range > 0 and (wick_top / c_range) >= 0.35 and close < open
 
-sweep_l = not na(last_pl) and low < last_pl and close > last_pl and rej_buy
-sweep_h = not na(last_ph) and high > last_ph and close < last_ph and rej_sell
+sweep_l = not na(vis_last_pl) and low < vis_last_pl and close > vis_last_pl and rej_buy
+sweep_h = not na(vis_last_ph) and high > vis_last_ph and close < vis_last_ph and rej_sell
 
 bars_in_h1_bull = ta.barssince(in_h1_bull_zone)
 bars_in_h1_bear = ta.barssince(in_h1_bear_zone)
@@ -405,6 +439,226 @@ if is_fvg_bear_active and bar_index > current_fvg_bear_m5_start and mit_probe_be
         current_fvg_bear_m5 := na
 
 // ==========================================
+// 3.9 CIBLES DE LIQUIDITÉ (TP STRUCTURELS) — R6 / B7
+// ==========================================
+// Les TP ne sont plus des multiples fixes du risque : on vise la liquidité suivante dans le sens
+// du trade (buy-side au-dessus pour un achat, sell-side en dessous pour une vente) : pivots M5,
+// equal highs / equal lows, swing H1, plus haut / bas des sessions Asie et Londres, PDH / PDL,
+// FVG opposées non comblées (M5 et H1). Un trade n'est pris que s'il existe au moins une cible à
+// min_rr_in R ou plus. Bloc IDENTIQUE dans le Radar et le Backtest, indépendant des options
+// d'affichage (les FVG / EQH dessinées ne sont pas lues ici).
+grp_tp        = "Cibles de profit (liquidité)"
+tp_mode_in    = input.string("Liquidité", title="Mode des TP", options=["Liquidité", "Fixe (R:R)"], group=grp_tp)
+min_rr_in     = input.float(1.5, title="R:R minimum exigé pour prendre le trade", minval=0.5, step=0.1, group=grp_tp)
+min_tp_r_in   = input.float(1.0, title="Distance minimale d'un TP (en R)", minval=0.3, step=0.1, group=grp_tp)
+max_tp_in     = input.int(4, title="Nombre maximum de TP", minval=1, maxval=6, group=grp_tp)
+LIQ_MAX       = 40   // niveaux de liquidité mémorisés par côté
+FVG_MAX       = 30   // FVG M5 mémorisées par côté
+
+var float[]  liq_up_px    = array.new_float()   // buy-side : niveaux au-dessus du prix
+var string[] liq_up_ty    = array.new_string()
+var float[]  liq_dn_px    = array.new_float()   // sell-side : niveaux en dessous du prix
+var string[] liq_dn_ty    = array.new_string()
+var float[]  fvg_bear_bot = array.new_float()   // FVG baissières M5 (cible d'un achat = bord bas)
+var float[]  fvg_bull_top = array.new_float()   // FVG haussières M5 (cible d'une vente = bord haut)
+
+// Ajoute un niveau ; un niveau déjà présent à moins de `tol` est la même liquidité : on fusionne
+// (deux pivots M5 proches = equal highs / equal lows ; un type plus fort remplace « Pivot M5 »).
+f_liq_add(px_arr, ty_arr, price, typ, tol, is_up) =>
+    merged = false
+    n = array.size(px_arr)
+    if n > 0
+        for i = 0 to n - 1
+            p = array.get(px_arr, i)
+            if not merged and math.abs(p - price) <= tol
+                merged := true
+                old_ty = array.get(ty_arr, i)
+                if typ == "Pivot M5"
+                    if old_ty == "Pivot M5"
+                        array.set(ty_arr, i, is_up ? "Equal highs" : "Equal lows")
+                else if old_ty == "Pivot M5" or old_ty == "Equal highs" or old_ty == "Equal lows"
+                    array.set(ty_arr, i, typ)
+                array.set(px_arr, i, is_up ? math.max(p, price) : math.min(p, price))
+    if not merged
+        array.push(px_arr, price)
+        array.push(ty_arr, typ)
+        if array.size(px_arr) > LIQ_MAX
+            array.shift(px_arr)
+            array.shift(ty_arr)
+
+// Un niveau traversé par le prix est consommé (la liquidité a été prise) : il ne sert plus de cible.
+f_liq_sweep(px_arr, ty_arr, is_up) =>
+    n = array.size(px_arr)
+    if n > 0
+        for i = n - 1 to 0
+            p = array.get(px_arr, i)
+            if (is_up and high > p) or (not is_up and low < p)
+                array.remove(px_arr, i)
+                array.remove(ty_arr, i)
+
+f_fvg_mitigate(arr, is_bear_zone) =>
+    n = array.size(arr)
+    if n > 0
+        for i = n - 1 to 0
+            p = array.get(arr, i)
+            if (is_bear_zone and high >= p) or (not is_bear_zone and low <= p)
+                array.remove(arr, i)
+
+liq_tol = atr_val * 0.10
+
+// 1) Consommation des niveaux déjà pris par la bougie courante
+f_liq_sweep(liq_up_px, liq_up_ty, true)
+f_liq_sweep(liq_dn_px, liq_dn_ty, false)
+f_fvg_mitigate(fvg_bear_bot, true)
+f_fvg_mitigate(fvg_bull_top, false)
+
+// 2) Nouveaux niveaux : pivots M5 (confirmés 5 bougies plus tard, donc sous le prix actuel)
+if not na(ph)
+    f_liq_add(liq_up_px, liq_up_ty, ph, "Pivot M5", liq_tol, true)
+if not na(pl)
+    f_liq_add(liq_dn_px, liq_dn_ty, pl, "Pivot M5", liq_tol, false)
+
+// Swing H1 (une seule fois par heure)
+if ta.change(time("60"))
+    if not na(h1_ph)
+        f_liq_add(liq_up_px, liq_up_ty, h1_ph, "Swing H1", liq_tol, true)
+    if not na(h1_pl)
+        f_liq_add(liq_dn_px, liq_dn_ty, h1_pl, "Swing H1", liq_tol, false)
+
+// PDH / PDL (au changement de journée New York)
+if is_new_ny_day
+    if not na(pdh)
+        f_liq_add(liq_up_px, liq_up_ty, pdh, "PDH", liq_tol, true)
+    if not na(pdl)
+        f_liq_add(liq_dn_px, liq_dn_ty, pdl, "PDL", liq_tol, false)
+
+// Plus haut / plus bas des sessions Asie (19h-minuit NY) et Londres, ajoutés à la fin de la session
+in_asia_sess = not na(time(timeframe.period, "1900-2359:1234567", "America/New_York"))
+var float asia_run_hi = na
+var float asia_run_lo = na
+if in_asia_sess
+    asia_run_hi := not in_asia_sess[1] or na(asia_run_hi) ? high : math.max(asia_run_hi, high)
+    asia_run_lo := not in_asia_sess[1] or na(asia_run_lo) ? low : math.min(asia_run_lo, low)
+else if in_asia_sess[1] and not na(asia_run_hi)
+    f_liq_add(liq_up_px, liq_up_ty, asia_run_hi, "Haut Asie", liq_tol, true)
+    f_liq_add(liq_dn_px, liq_dn_ty, asia_run_lo, "Bas Asie", liq_tol, false)
+
+var float lon_run_hi = na
+var float lon_run_lo = na
+if in_london
+    lon_run_hi := not in_london[1] or na(lon_run_hi) ? high : math.max(lon_run_hi, high)
+    lon_run_lo := not in_london[1] or na(lon_run_lo) ? low : math.min(lon_run_lo, low)
+else if in_london[1] and not na(lon_run_hi)
+    f_liq_add(liq_up_px, liq_up_ty, lon_run_hi, "Haut Londres", liq_tol, true)
+    f_liq_add(liq_dn_px, liq_dn_ty, lon_run_lo, "Bas Londres", liq_tol, false)
+
+// FVG M5 (même seuil de taille que la FVG causale : 0,15 x ATR)
+if high < low[2] and (low[2] - high) >= atr_val * 0.15
+    array.push(fvg_bear_bot, high)
+    if array.size(fvg_bear_bot) > FVG_MAX
+        array.shift(fvg_bear_bot)
+if low > high[2] and (low - high[2]) >= atr_val * 0.15
+    array.push(fvg_bull_top, low)
+    if array.size(fvg_bull_top) > FVG_MAX
+        array.shift(fvg_bull_top)
+
+// Sélection des TP pour une entrée : cibles dans le sens du trade, triées par distance,
+// à min_tp_r_in R minimum, fusionnées si trop proches (< 0,15 R). ok = au moins une cible
+// à min_rr_in R ou plus ; elle est toujours conservée, même au-delà de max_tp_in.
+f_select_targets(is_buy, entry, risk) =>
+    c_px = array.new_float()
+    c_ty = array.new_string()
+    if is_buy
+        if array.size(liq_up_px) > 0
+            for i = 0 to array.size(liq_up_px) - 1
+                if array.get(liq_up_px, i) > entry
+                    array.push(c_px, array.get(liq_up_px, i))
+                    array.push(c_ty, array.get(liq_up_ty, i))
+        if array.size(fvg_bear_bot) > 0
+            for i = 0 to array.size(fvg_bear_bot) - 1
+                if array.get(fvg_bear_bot, i) > entry
+                    array.push(c_px, array.get(fvg_bear_bot, i))
+                    array.push(c_ty, "FVG M5")
+        if not h1_bear_consumed and not na(h1_bear_zone_bot) and h1_bear_zone_bot > entry
+            array.push(c_px, h1_bear_zone_bot)
+            array.push(c_ty, "FVG H1")
+    else
+        if array.size(liq_dn_px) > 0
+            for i = 0 to array.size(liq_dn_px) - 1
+                if array.get(liq_dn_px, i) < entry
+                    array.push(c_px, array.get(liq_dn_px, i))
+                    array.push(c_ty, array.get(liq_dn_ty, i))
+        if array.size(fvg_bull_top) > 0
+            for i = 0 to array.size(fvg_bull_top) - 1
+                if array.get(fvg_bull_top, i) < entry
+                    array.push(c_px, array.get(fvg_bull_top, i))
+                    array.push(c_ty, "FVG M5")
+        if not h1_bull_consumed and not na(h1_bull_zone_top) and h1_bull_zone_top < entry
+            array.push(c_px, h1_bull_zone_top)
+            array.push(c_ty, "FVG H1")
+
+    c_r = array.new_float()
+    if array.size(c_px) > 0
+        for i = 0 to array.size(c_px) - 1
+            array.push(c_r, risk > 0 ? math.abs(array.get(c_px, i) - entry) / risk : 0.0)
+
+    m_px = array.new_float()
+    m_ty = array.new_string()
+    m_r  = array.new_float()
+    if array.size(c_r) > 0
+        idx = array.sort_indices(c_r, order.ascending)
+        for k = 0 to array.size(idx) - 1
+            i = array.get(idx, k)
+            r = array.get(c_r, i)
+            if r >= min_tp_r_in
+                last = array.size(m_r) - 1
+                // Pine évalue les DEUX côtés d'un « and » : lecture de m_r seulement si elle contient une cible.
+                too_close = false
+                if last >= 0
+                    too_close := r - array.get(m_r, last) < 0.15
+                if too_close
+                    old = array.get(m_ty, last)
+                    if not str.contains(old, array.get(c_ty, i))
+                        array.set(m_ty, last, old + " + " + array.get(c_ty, i))
+                else
+                    array.push(m_px, array.get(c_px, i))
+                    array.push(m_ty, array.get(c_ty, i))
+                    array.push(m_r, r)
+
+    first_ok = -1
+    if array.size(m_r) > 0
+        for k = 0 to array.size(m_r) - 1
+            if first_ok < 0 and array.get(m_r, k) >= min_rr_in
+                first_ok := k
+
+    o_px = array.new_float()
+    o_ty = array.new_string()
+    o_r  = array.new_float()
+    if first_ok >= 0
+        keep = math.min(array.size(m_r), max_tp_in)
+        for k = 0 to keep - 1
+            // Si la 1re cible valable (>= min_rr_in) est au-delà de max_tp_in, elle prend la dernière place.
+            src = (k == keep - 1 and first_ok > keep - 1) ? first_ok : k
+            array.push(o_px, array.get(m_px, src))
+            array.push(o_ty, array.get(m_ty, src))
+            array.push(o_r, array.get(m_r, src))
+    [o_px, o_ty, o_r, first_ok >= 0]
+
+// TP retenus pour le trade : cibles de liquidité, ou un TP unique à rr_ratio en mode « Fixe (R:R) »
+// (comportement du R5). ok = false -> pas de cible de liquidité à min_rr_in R : trade abandonné.
+f_trade_targets(is_buy, entry, risk) =>
+    [t_px, t_ty, t_r, t_ok] = f_select_targets(is_buy, entry, risk)
+    fixed = tp_mode_in != "Liquidité"
+    if fixed
+        array.clear(t_px)
+        array.clear(t_ty)
+        array.clear(t_r)
+        array.push(t_px, entry + (is_buy ? 1 : -1) * risk * rr_ratio)
+        array.push(t_ty, "R:R fixe")
+        array.push(t_r, rr_ratio)
+    [t_px, t_ty, t_r, fixed or t_ok]
+
+// ==========================================
 // 4. LOGIQUE CAUSALE ICT 2022 (MACHINE D'ETATS) & ENTREE
 // ==========================================
 // États de la séquence ICT 2022 :
@@ -422,6 +676,7 @@ var int   buy_sweep_bar        = na
 var float buy_sweep_low        = na
 var float buy_mss_level        = na
 var int   buy_displacement_bar = na
+var float buy_pre_disp_high    = na  // haut de la bougie AVANT le displacement — ancre fixe de la FVG causale
 var float buy_fvg_top          = na
 var float buy_fvg_bottom       = na
 var int   buy_fvg_bar          = na
@@ -432,18 +687,34 @@ var int   sell_sweep_bar        = na
 var float sell_sweep_high       = na
 var float sell_mss_level        = na
 var int   sell_displacement_bar = na
+var float sell_pre_disp_low     = na  // bas de la bougie AVANT le displacement — ancre fixe de la FVG causale
 var float sell_fvg_top          = na
 var float sell_fvg_bottom       = na
 var int   sell_fvg_bar          = na
 
-// Définition quantitative du Displacement (M5)
+// --- Compteurs de diagnostic (DEBUG) — pour localiser précisément où la séquence perd ses
+// candidats. Purement additif, aucun effet sur la logique de trading. À retirer une fois le
+// diagnostic terminé.
+var int cnt_sweep_l    = 0
+var int cnt_sweep_h    = 0
+var int cnt_buy_mss    = 0
+var int cnt_sell_mss   = 0
+var int cnt_buy_fvg    = 0
+var int cnt_sell_fvg   = 0
+var int cnt_buy_ready  = 0
+var int cnt_sell_ready = 0
+var int cnt_buy_no_target  = 0 // setups READY abandonnés : aucune cible de liquidité >= min_rr_in
+var int cnt_sell_no_target = 0
+
+// Définition quantitative du Displacement (M5) — seuils réglables (diagnostic du 18/09 : ce
+// filtre éliminait plus de 90% des sweeps à lui seul, goulot d'étranglement principal du moteur).
 // Référence ATR : atr_val[1]
 disp_body_ratio = c_range > 0 ? (c_body / c_range) : 0.0
-is_disp_quant   = (disp_body_ratio >= 0.65) and (c_body >= 1.25 * atr_val[1])
+is_disp_quant   = (disp_body_ratio >= disp_body_ratio_min_in) and (c_body >= disp_atr_mult_min_in * atr_val[1])
 
-// Timeouts maximaux (en barres M5)
-MAX_BARS_SWEEP_TO_MSS = 12
-MAX_BARS_FVG_TO_RETEST = 20
+// Timeouts maximaux (en barres M5) — réglables
+MAX_BARS_SWEEP_TO_MSS = sweep_to_mss_window_in
+MAX_BARS_FVG_TO_RETEST = fvg_to_retest_window_in
 
 // -------------------------------------------------------------
 // ÉVOLUTION MACHINE D'ÉTATS : BUY
@@ -473,34 +744,40 @@ if buy_state == STATE_IDLE
         buy_state            := STATE_SWEEP_ARMED
         buy_sweep_bar        := bar_index
         buy_sweep_low        := low
-        buy_mss_level        := last_ph
+        buy_mss_level        := vis_last_ph
         buy_displacement_bar := na
         buy_fvg_top          := na
         buy_fvg_bottom       := na
         buy_fvg_bar          := na
+        cnt_sweep_l += 1
 else if buy_state == STATE_SWEEP_ARMED
     // Si un nouveau sweep de même direction survient avant MSS : réarmer avec le sweep le plus récent
     if sweep_l
         buy_sweep_bar := bar_index
         buy_sweep_low := low
-        buy_mss_level := last_ph
+        buy_mss_level := vis_last_ph
     // Recherche du Displacement + MSS haussier cassant buy_mss_level
     else if bar_confirmed and not na(buy_mss_level) and close > buy_mss_level and close > open and is_disp_quant
         buy_state            := STATE_MSS_CONFIRMED
         buy_displacement_bar := bar_index
+        buy_pre_disp_high    := high[1] // ancre fixe : haut de la bougie juste avant le displacement
+        cnt_buy_mss += 1
 else if buy_state == STATE_MSS_CONFIRMED
-    // La FVG causale 3 bougies a la bougie de displacement comme bougie centrale (bar_index - 1)
-    // À bar_index (bougie 3 fermée), la condition FVG haussière 3 bougies est: low > high[2]
-    if bar_index == buy_displacement_bar + 1 and bar_confirmed
-        has_causal_fvg = (low > high[2]) and ((low - high[2]) >= atr_val[1] * 0.15)
+    // La FVG causale doit se former dans une fenêtre de `causal_fvg_window_in` bougies après le
+    // displacement (pas uniquement sur la bougie n+1 — trop fragile au timing exact). L'ancre
+    // basse reste la bougie juste avant le displacement (buy_pre_disp_high), fixe quelle que soit
+    // la bougie où le gap se referme.
+    if bar_confirmed and bar_index >= buy_displacement_bar + 1 and bar_index <= buy_displacement_bar + causal_fvg_window_in
+        has_causal_fvg = (low > buy_pre_disp_high) and ((low - buy_pre_disp_high) >= atr_val[1] * 0.15)
         if has_causal_fvg
             buy_fvg_top    := low
-            buy_fvg_bottom := high[2]
+            buy_fvg_bottom := buy_pre_disp_high
             buy_fvg_bar    := bar_index
             buy_state      := STATE_CAUSAL_FVG_CONFIRMED
-        else
-            buy_state := STATE_IDLE // Pas de FVG causale créée par le displacement -> Reset
-    else if bar_index > buy_displacement_bar + 1
+            cnt_buy_fvg += 1
+        else if bar_index == buy_displacement_bar + causal_fvg_window_in
+            buy_state := STATE_IDLE // Fenêtre épuisée sans FVG causale valide -> Reset
+    else if bar_index > buy_displacement_bar + causal_fvg_window_in
         buy_state := STATE_IDLE
 else if buy_state == STATE_CAUSAL_FVG_CONFIRMED
     // Passage formel dans l'attente du retest
@@ -509,6 +786,7 @@ else if buy_state == STATE_WAIT_RETEST
     // Retest causal : le prix pénètre la FVG causale sans clôturer en dessous
     if mit_probe_bull <= buy_fvg_top and close >= buy_fvg_bottom
         buy_state := STATE_READY
+        cnt_buy_ready += 1
 
 // -------------------------------------------------------------
 // ÉVOLUTION MACHINE D'ÉTATS : SELL
@@ -538,34 +816,38 @@ if sell_state == STATE_IDLE
         sell_state            := STATE_SWEEP_ARMED
         sell_sweep_bar        := bar_index
         sell_sweep_high       := high
-        sell_mss_level        := last_pl
+        sell_mss_level        := vis_last_pl
         sell_displacement_bar := na
         sell_fvg_top          := na
         sell_fvg_bottom       := na
         sell_fvg_bar          := na
+        cnt_sweep_h += 1
 else if sell_state == STATE_SWEEP_ARMED
     // Si un nouveau sweep de même direction survient avant MSS : réarmer avec le sweep le plus récent
     if sweep_h
         sell_sweep_bar := bar_index
         sell_sweep_high := high
-        sell_mss_level := last_pl
+        sell_mss_level := vis_last_pl
     // Recherche du Displacement + MSS baissier cassant sell_mss_level
     else if bar_confirmed and not na(sell_mss_level) and close < sell_mss_level and close < open and is_disp_quant
         sell_state            := STATE_MSS_CONFIRMED
         sell_displacement_bar := bar_index
+        sell_pre_disp_low     := low[1] // ancre fixe : bas de la bougie juste avant le displacement
+        cnt_sell_mss += 1
 else if sell_state == STATE_MSS_CONFIRMED
-    // La FVG causale 3 bougies a la bougie de displacement comme bougie centrale (bar_index - 1)
-    // À bar_index (bougie 3 fermée), la condition FVG baissière 3 bougies est: high < low[2]
-    if bar_index == sell_displacement_bar + 1 and bar_confirmed
-        has_causal_fvg = (high < low[2]) and ((low[2] - high) >= atr_val[1] * 0.15)
+    // La FVG causale doit se former dans une fenêtre de `causal_fvg_window_in` bougies après le
+    // displacement (pas uniquement sur la bougie n+1). Ancre haute fixe : sell_pre_disp_low.
+    if bar_confirmed and bar_index >= sell_displacement_bar + 1 and bar_index <= sell_displacement_bar + causal_fvg_window_in
+        has_causal_fvg = (high < sell_pre_disp_low) and ((sell_pre_disp_low - high) >= atr_val[1] * 0.15)
         if has_causal_fvg
-            sell_fvg_top    := low[2]
+            sell_fvg_top    := sell_pre_disp_low
             sell_fvg_bottom := high
             sell_fvg_bar    := bar_index
             sell_state      := STATE_CAUSAL_FVG_CONFIRMED
-        else
-            sell_state := STATE_IDLE // Pas de FVG causale créée par le displacement -> Reset
-    else if bar_index > sell_displacement_bar + 1
+            cnt_sell_fvg += 1
+        else if bar_index == sell_displacement_bar + causal_fvg_window_in
+            sell_state := STATE_IDLE // Fenêtre épuisée sans FVG causale valide -> Reset
+    else if bar_index > sell_displacement_bar + causal_fvg_window_in
         sell_state := STATE_IDLE
 else if sell_state == STATE_CAUSAL_FVG_CONFIRMED
     // Passage formel dans l'attente du retest
@@ -574,6 +856,7 @@ else if sell_state == STATE_WAIT_RETEST
     // Retest causal : le prix pénètre la FVG causale sans clôturer au-dessus
     if mit_probe_bear >= sell_fvg_bottom and close <= sell_fvg_top
         sell_state := STATE_READY
+        cnt_sell_ready += 1
 
 var bool   in_pos       = false
 var float  pos_entry    = 0.0
@@ -604,31 +887,38 @@ if raw_buy
     grade_ok = (min_grade_in == "B") or (min_grade_in == "A" and score >= 2) or (min_grade_in == "A+" and score == 3)
 
     if grade_ok
-        setup_name   = tested_h1_bull ? "MTF FVG BUY" : "ICT 2022 BUY"
-        pos_entry    := close
-        
+        b_entry  = close
         // SL Structurel ancré sur le bas du sweep d'origine, plafonné/planché par ATR M5
-        raw_sl       = not na(buy_sweep_low) ? (buy_sweep_low - syminfo.mintick * 10) : (ta.lowest(low, 15) - syminfo.mintick * 10)
-        raw_risk     = pos_entry - raw_sl
-        risk         = math.max(math.min(raw_risk, atr_val * atr_cap_mult), atr_val * atr_floor_mult)
-        pos_sl       := pos_entry - risk
-        pos_tp       := pos_entry + (risk * rr_ratio)
-        pos_dir      := "BUY"
-        in_pos       := true
-        last_sig_bar := bar_index
+        b_raw_sl = not na(buy_sweep_low) ? (buy_sweep_low - syminfo.mintick * 10) : (ta.lowest(low, 15) - syminfo.mintick * 10)
+        b_risk   = math.max(math.min(b_entry - b_raw_sl, atr_val * atr_cap_mult), atr_val * atr_floor_mult)
+        [t_px, t_ty, t_r, t_ok] = f_trade_targets(true, b_entry, b_risk)
 
-        // Reset de la machine d'état après entrée exécutée
-        buy_state := STATE_IDLE
+        if not t_ok
+            // Setup valide mais aucune cible de liquidité à min_rr_in R : trade abandonné (identique au Radar R6)
+            buy_state := STATE_IDLE
+            cnt_buy_no_target += 1
+            label.new(bar_index, low - (syminfo.mintick * 5), "✖ sans cible", color=color.new(color.gray, 55), textcolor=color.white, style=label.style_label_up, size=size.tiny)
+        else
+            setup_name   = tested_h1_bull ? "MTF FVG BUY" : "ICT 2022 BUY"
+            pos_entry    := b_entry
+            pos_sl       := b_entry - b_risk
+            pos_tp       := array.get(t_px, array.size(t_px) - 1)
+            pos_dir      := "BUY"
+            in_pos       := true
+            last_sig_bar := bar_index
 
-        h1_bull_consumed := true
+            // Reset de la machine d'état après entrée exécutée
+            buy_state := STATE_IDLE
 
-        lbl_text = stars_txt + " " + setup_name
-        label.new(bar_index, low - (syminfo.mintick * 5), lbl_text, color=color.new(color_lux_bull, 80), textcolor=color.black, style=label.style_label_up, size=size.tiny)
+            h1_bull_consumed := true
 
-        // Sizing par risque fixe : qty calculée pour risquer risk_pct_in% de l'équité
-        qty = (strategy.equity * (risk_pct_in / 100)) / risk
-        strategy.entry("Long", strategy.long, qty=qty, comment=setup_name)
-        strategy.exit("Exit Long", "Long", stop=pos_sl, limit=pos_tp)
+            lbl_text = stars_txt + " " + setup_name + " · TP " + str.tostring(array.get(t_r, array.size(t_r) - 1), "#.#") + "R"
+            label.new(bar_index, low - (syminfo.mintick * 5), lbl_text, color=color.new(color_lux_bull, 80), textcolor=color.black, style=label.style_label_up, size=size.tiny)
+
+            // Sizing par risque fixe : qty calculée pour risquer risk_pct_in% de l'équité
+            qty = (strategy.equity * (risk_pct_in / 100)) / b_risk
+            strategy.entry("Long", strategy.long, qty=qty, comment=setup_name)
+            strategy.exit("Exit Long", "Long", stop=pos_sl, limit=pos_tp)
 
 // ---- ENTREE SHORT (remplace l'alert() par un vrai ordre pour le backtest) ----
 if raw_sell
@@ -636,31 +926,38 @@ if raw_sell
     grade_ok = (min_grade_in == "B") or (min_grade_in == "A" and score >= 2) or (min_grade_in == "A+" and score == 3)
 
     if grade_ok
-        setup_name   = tested_h1_bear ? "MTF FVG SELL" : "ICT 2022 SELL"
-        pos_entry    := close
-        
+        s_entry  = close
         // SL Structurel ancré sur le haut du sweep d'origine, plafonné/planché par ATR M5
-        raw_sl       = not na(sell_sweep_high) ? (sell_sweep_high + syminfo.mintick * 10) : (ta.highest(high, 15) + syminfo.mintick * 10)
-        raw_risk     = raw_sl - pos_entry
-        risk         = math.max(math.min(raw_risk, atr_val * atr_cap_mult), atr_val * atr_floor_mult)
-        pos_sl       := pos_entry + risk
-        pos_tp       := pos_entry - (risk * rr_ratio)
-        pos_dir      := "SELL"
-        in_pos       := true
-        last_sig_bar := bar_index
+        s_raw_sl = not na(sell_sweep_high) ? (sell_sweep_high + syminfo.mintick * 10) : (ta.highest(high, 15) + syminfo.mintick * 10)
+        s_risk   = math.max(math.min(s_raw_sl - s_entry, atr_val * atr_cap_mult), atr_val * atr_floor_mult)
+        [t_px, t_ty, t_r, t_ok] = f_trade_targets(false, s_entry, s_risk)
 
-        // Reset de la machine d'état après entrée exécutée
-        sell_state := STATE_IDLE
+        if not t_ok
+            // Setup valide mais aucune cible de liquidité à min_rr_in R : trade abandonné (identique au Radar R6)
+            sell_state := STATE_IDLE
+            cnt_sell_no_target += 1
+            label.new(bar_index, high + (syminfo.mintick * 5), "✖ sans cible", color=color.new(color.gray, 55), textcolor=color.white, style=label.style_label_down, size=size.tiny)
+        else
+            setup_name   = tested_h1_bear ? "MTF FVG SELL" : "ICT 2022 SELL"
+            pos_entry    := s_entry
+            pos_sl       := s_entry + s_risk
+            pos_tp       := array.get(t_px, array.size(t_px) - 1)
+            pos_dir      := "SELL"
+            in_pos       := true
+            last_sig_bar := bar_index
 
-        h1_bear_consumed := true
+            // Reset de la machine d'état après entrée exécutée
+            sell_state := STATE_IDLE
 
-        lbl_text = stars_txt + " " + setup_name
-        label.new(bar_index, high + (syminfo.mintick * 5), lbl_text, color=color.new(color_lux_bear, 80), textcolor=color.black, style=label.style_label_down, size=size.tiny)
+            h1_bear_consumed := true
 
-        // Sizing par risque fixe : qty calculée pour risquer risk_pct_in% de l'équité
-        qty = (strategy.equity * (risk_pct_in / 100)) / risk
-        strategy.entry("Short", strategy.short, qty=qty, comment=setup_name)
-        strategy.exit("Exit Short", "Short", stop=pos_sl, limit=pos_tp)
+            lbl_text = stars_txt + " " + setup_name + " · TP " + str.tostring(array.get(t_r, array.size(t_r) - 1), "#.#") + "R"
+            label.new(bar_index, high + (syminfo.mintick * 5), lbl_text, color=color.new(color_lux_bear, 80), textcolor=color.black, style=label.style_label_down, size=size.tiny)
+
+            // Sizing par risque fixe : qty calculée pour risquer risk_pct_in% de l'équité
+            qty = (strategy.equity * (risk_pct_in / 100)) / s_risk
+            strategy.entry("Short", strategy.short, qty=qty, comment=setup_name)
+            strategy.exit("Exit Short", "Short", stop=pos_sl, limit=pos_tp)
 
 // ==========================================
 // 5. SORTIES : timeout 30 barres + resynchro de in_pos avec le broker
@@ -671,10 +968,44 @@ if in_pos
         strategy.close(pos_dir == "BUY" ? "Long" : "Short", comment="EXPIRED")
 
 // Resynchronise notre état interne (in_pos) avec le vrai état du broker emulator
-// (que la sortie vienne du TP, du SL ou du timeout ci-dessus)
-if in_pos and strategy.opentrades == 0
+// (que la sortie vienne du TP, du SL ou du timeout ci-dessus).
+// BUG CORRIGÉ (revue ChatGPT du 18/09) : strategy.opentrades ne reflète le fill d'un ordre
+// qu'à partir de la bougie SUIVANTE (comportement documenté de Pine), pas immédiatement dans
+// la même exécution que strategy.entry(). Sans le garde-fou bar_index > last_sig_bar, ce bloc
+// repassait in_pos à false dès la bougie d'entrée elle-même — cassant la garde "not in_pos" et
+// laissant la machine à états se réarmer ou déclencher un retournement sur une position réelle.
+if in_pos and strategy.opentrades == 0 and bar_index > last_sig_bar
     in_pos  := false
     pos_dir := "NONE"
+
+// ==========================================
+// 6. TABLEAU DE DIAGNOSTIC (DEBUG) — funnel de la séquence causale sur toute la période testée.
+// Purement informatif, à retirer une fois le diagnostic terminé.
+// ==========================================
+var table dbg = table.new(position.bottom_right, 2, 11, border_color=color.gray, border_width=1, bgcolor=color.new(color.black, 15))
+if barstate.islast
+    table.cell(dbg, 0, 0, "DIAGNOSTIC SÉQUENCE", text_color=color.yellow, text_size=size.small, text_halign=text.align_left)
+    table.cell(dbg, 1, 0, "", bgcolor=color.new(color.black,15))
+    table.cell(dbg, 0, 1, "Sweep SSL (BUY armé)", text_color=color.white, text_size=size.small, text_halign=text.align_left)
+    table.cell(dbg, 1, 1, str.tostring(cnt_sweep_l), text_color=color.white, text_size=size.small, text_halign=text.align_right)
+    table.cell(dbg, 0, 2, "→ MSS confirmé (BUY)", text_color=color.white, text_size=size.small, text_halign=text.align_left)
+    table.cell(dbg, 1, 2, str.tostring(cnt_buy_mss), text_color=color.white, text_size=size.small, text_halign=text.align_right)
+    table.cell(dbg, 0, 3, "→ FVG causale (BUY)", text_color=color.white, text_size=size.small, text_halign=text.align_left)
+    table.cell(dbg, 1, 3, str.tostring(cnt_buy_fvg), text_color=color.white, text_size=size.small, text_halign=text.align_right)
+    table.cell(dbg, 0, 4, "→ READY / entrée (BUY)", text_color=color.lime, text_size=size.small, text_halign=text.align_left)
+    table.cell(dbg, 1, 4, str.tostring(cnt_buy_ready), text_color=color.lime, text_size=size.small, text_halign=text.align_right)
+    table.cell(dbg, 0, 5, "Sweep BSL (SELL armé)", text_color=color.white, text_size=size.small, text_halign=text.align_left)
+    table.cell(dbg, 1, 5, str.tostring(cnt_sweep_h), text_color=color.white, text_size=size.small, text_halign=text.align_right)
+    table.cell(dbg, 0, 6, "→ MSS confirmé (SELL)", text_color=color.white, text_size=size.small, text_halign=text.align_left)
+    table.cell(dbg, 1, 6, str.tostring(cnt_sell_mss), text_color=color.white, text_size=size.small, text_halign=text.align_right)
+    table.cell(dbg, 0, 7, "→ FVG causale (SELL)", text_color=color.white, text_size=size.small, text_halign=text.align_left)
+    table.cell(dbg, 1, 7, str.tostring(cnt_sell_fvg), text_color=color.white, text_size=size.small, text_halign=text.align_right)
+    table.cell(dbg, 0, 8, "→ READY / entrée (SELL)", text_color=color.lime, text_size=size.small, text_halign=text.align_left)
+    table.cell(dbg, 1, 8, str.tostring(cnt_sell_ready), text_color=color.lime, text_size=size.small, text_halign=text.align_right)
+    table.cell(dbg, 0, 9, "✖ Abandonné : pas de cible ≥ " + str.tostring(min_rr_in, "#.#") + "R (BUY)", text_color=color.gray, text_size=size.small, text_halign=text.align_left)
+    table.cell(dbg, 1, 9, str.tostring(cnt_buy_no_target), text_color=color.gray, text_size=size.small, text_halign=text.align_right)
+    table.cell(dbg, 0, 10, "✖ Abandonné : pas de cible ≥ " + str.tostring(min_rr_in, "#.#") + "R (SELL)", text_color=color.gray, text_size=size.small, text_halign=text.align_left)
+    table.cell(dbg, 1, 10, str.tostring(cnt_sell_no_target), text_color=color.gray, text_size=size.small, text_halign=text.align_right)
 
 if h1_bull_consumed and not na(h1_bull_box)
     box.set_extend(h1_bull_box, extend.none)
