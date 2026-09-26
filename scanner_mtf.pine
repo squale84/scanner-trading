@@ -4,8 +4,12 @@
 // besoin d'ouvrir l'éditeur. Change ce numéro à CHAQUE modification envoyée par Claude.
 SCRIPT_VERSION = "R6.1"
 
+// VIS1 : version de l'AFFICHAGE seulement (zones OB / FVG). Le moteur reste R6.1 : SCRIPT_VERSION est la seule
+// chaîne envoyée dans les payloads et elle ne change pas.
+DISPLAY_VERSION = "VIS1"
+
 // Version EN TÊTE du nom : la liste « Mes scripts » de TradingView coupe les noms trop longs.
-indicator("Radar ICT R6.1 — Terminal Pro MTF H1-M5", shorttitle="Radar ICT R6.1", overlay=true, max_boxes_count=200, max_lines_count=200, max_labels_count=200, max_bars_back=1000)
+indicator("Radar ICT R6.1 · VIS1 — Terminal Pro MTF H1-M5", shorttitle="Radar ICT R6.1 · VIS1", overlay=true, max_boxes_count=200, max_lines_count=200, max_labels_count=200, max_bars_back=1000)
 
 // ==========================================
 // 1. CONFIGURATION GÉNÉRALE & PARAMÈTRES
@@ -39,7 +43,13 @@ ob_filter_dp  = input.bool(false, title="N'afficher que les OB en discount/premi
 show_ote      = input.bool(false, title="Afficher zone OTE (Fibo 61.8%-79%)", group=grp_ui)
 range_lookback = input.int(100, title="Range Discount/Premium (barres M5)", minval=20, maxval=500, group=grp_ui)
 fvg_mitigation_mode = input.string("Mèche", title="Mode de mitigation FVG/OB", options=["Mèche", "Corps", "Clôture"], group=grp_ui)
-max_zones_in  = input.int(3, title="Nombre max de zones actives par catégorie (OB/FVG)", minval=1, maxval=30, group=grp_ui)
+max_zones_in  = input.int(5, title="Nombre max de zones actives par catégorie (OB/FVG)", minval=1, maxval=10, group=grp_ui)
+
+grp_vz          = "Zones OB / FVG (VIS1, affichage seulement)"
+vis_right_pad   = input.int(5, title="Marge du bord droit des zones (barres devant la bougie courante)", minval=0, maxval=20, group=grp_vz)
+vis_partial_pct = input.float(50.0, title="Seuil PARTIAL : part de la zone comblée (%)", minval=10.0, maxval=90.0, step=5.0, group=grp_vz)
+vis_grace_bars  = input.int(12, title="Délai de grâce après remplissage complet des Order Blocks (barres)", minval=0, maxval=500, group=grp_vz)
+vis_fvg_fill_mode = input.string("Mèche", title="Mode de remplissage visuel FVG", options=["Mèche", "Corps"], group=grp_vz)
 
 grp_dash      = "Tableau de Bord"
 show_dashboard = input.bool(true, title="Afficher le tableau de bord", group=grp_dash)
@@ -109,6 +119,28 @@ var float[] zn_ob_bear_top   = array.new_float()
 var float[] zn_ob_bear_bot   = array.new_float()
 var int[]   zn_ob_bear_birth = array.new_int()
 
+// VIS1 — état visuel par zone : 0 ACTIVE, 1 CONTACTED, 2 PARTIAL, 3 MITIGATED ; pénétration maximale (0 à 1) ;
+// barre de passage en MITIGATED (-1 = jamais) ; pour une FVG en état 4 (IFVG), ce même tableau contient la bougie de
+// conversion (ifvg_birth_bar). Exclusivement visuel : jamais lu par le moteur.
+var int[]   zn_h1fvg_bull_st  = array.new_int()
+var float[] zn_h1fvg_bull_pen = array.new_float()
+var int[]   zn_h1fvg_bull_mit = array.new_int()
+var int[]   zn_h1fvg_bear_st  = array.new_int()
+var float[] zn_h1fvg_bear_pen = array.new_float()
+var int[]   zn_h1fvg_bear_mit = array.new_int()
+var int[]   zn_m5fvg_bull_st  = array.new_int()
+var float[] zn_m5fvg_bull_pen = array.new_float()
+var int[]   zn_m5fvg_bull_mit = array.new_int()
+var int[]   zn_m5fvg_bear_st  = array.new_int()
+var float[] zn_m5fvg_bear_pen = array.new_float()
+var int[]   zn_m5fvg_bear_mit = array.new_int()
+var int[]   zn_ob_bull_st  = array.new_int()
+var float[] zn_ob_bull_pen = array.new_float()
+var int[]   zn_ob_bull_mit = array.new_int()
+var int[]   zn_ob_bear_st  = array.new_int()
+var float[] zn_ob_bear_pen = array.new_float()
+var int[]   zn_ob_bear_mit = array.new_int()
+
 // FVG en jaune (demande explicite de longue date) — bordure plus marquée en H1, plus légère en M5.
 // Bull/bear ne sont pas distingués par teinte ici : la direction se lit sur les OB (bleu/rose)
 // et sur le sens du prix ; jaune reste la couleur d'identification unique de la FVG.
@@ -126,48 +158,162 @@ color_ob_bull_bd = color.new(color_ob_bull, 30)
 color_ob_bear_bg = color.new(color_ob_bear, 72)
 color_ob_bear_bd = color.new(color_ob_bear, 30)
 
-// Ajoute une zone (jusqu'à max_zones_in ; au-delà, la plus ancienne est retirée et sa boîte supprimée)
-f_zone_push(box_arr, top_arr, bot_arr, birth_arr, new_box, new_top, new_bot, maxN) =>
+// VIS1 — cycle de vie VISUEL des zones OB / FVG M5 / FVG H1 (affichage seulement : aucun de ces tableaux ni de ces
+// états n'est lu par le moteur, le retest, les cibles, les entrées/sorties, les alertes, les payloads ou le Backtest).
+// États : 0 ACTIVE (jamais touchée), 1 CONTACTED (touchée), 2 PARTIAL (comblée à vis_partial_pct % ou plus),
+//         3 MITIGATED (OB seulement : comblé à 100 %, grisé pendant vis_grace_bars barres, puis supprimé),
+//         4 IFVG (FVG seulement : traversée par une clôture confirmée au-delà de sa limite distale).
+// Zone de demande (BUY : OB / FVG haussiers) : bord proche = top, limite distale = bot.
+// Zone d'offre (SELL : OB / FVG baissiers)   : bord proche = bot, limite distale = top.
+// OB : clôture confirmée au-delà de la limite distale = suppression immédiate (comportement inchangé).
+// FVG : les limites d'origine (tableaux top / bot) ne changent jamais ; la box est RÉDUITE à chaque bougie confirmée pour
+//   ne garder que la portion non comblée (bord proche qui recule avec la pénétration, limite distale fixe).
+//   - remplie à 100 % sans clôture confirmée au-delà de la limite distale : suppression immédiate ;
+//   - clôture confirmée au-delà de la limite distale : limites d'origine restaurées, la zone devient une IFVG (FVG
+//     haussière traversée = IFVG baissière, et inversement), en gris clair, prolongée vers la droite. La bougie de
+//     conversion (ifvg_birth_bar) n'est jamais retraitée : la mitigation de l'IFVG ne commence qu'à la bougie suivante.
+//   - IFVG : mitigation progressive avec la même base de remplissage (Mèche : high / low ; Corps : max / min de open et
+//     close). IFVG issue d'une FVG haussière (retest par le dessous) : le bord inférieur monte, le bord supérieur
+//     d'origine reste fixe. IFVG issue d'une FVG baissière (retest par le dessus) : le bord supérieur descend, le bord
+//     inférieur d'origine reste fixe. Supprimée dès qu'elle est remplie à 100 % ou dès qu'une clôture confirmée dépasse sa
+//     limite d'origine opposée (top pour une IFVG baissière, bot pour une IFVG haussière). Aucune expiration en barres,
+//     aucun délai de grâce pour les IFVG.
+//   Base de remplissage : vis_fvg_fill_mode (Mèche / Corps), indépendante de fvg_mitigation_mode (lu par le moteur).
+// Les transitions ne sont évaluées que sur bougie confirmée ; le bord droit suit la bougie courante (pas d'extend.right).
+
+// Ajoute une zone (jusqu'à max_zones_in par catégorie ; au-delà on retire d'abord la plus ancienne zone MITIGATED,
+// sinon la plus ancienne tout court, et sa boîte est supprimée)
+f_zone_push(box_arr, top_arr, bot_arr, birth_arr, st_arr, pen_arr, mit_arr, new_box, new_top, new_bot, maxN) =>
     array.push(box_arr, new_box)
     array.push(top_arr, new_top)
     array.push(bot_arr, new_bot)
     array.push(birth_arr, bar_index)
-    if array.size(box_arr) > maxN
-        old_box = array.shift(box_arr)
-        array.shift(top_arr)
-        array.shift(bot_arr)
-        array.shift(birth_arr)
+    array.push(st_arr, 0)
+    array.push(pen_arr, 0.0)
+    array.push(mit_arr, -1)
+    while array.size(box_arr) > maxN
+        pick = -1
+        for j = 0 to array.size(st_arr) - 1
+            if pick < 0 and array.get(st_arr, j) == 3
+                pick := j
+        idx = pick >= 0 ? pick : 0
+        old_box = array.get(box_arr, idx)
         if not na(old_box)
             box.delete(old_box)
+        array.remove(box_arr, idx)
+        array.remove(top_arr, idx)
+        array.remove(bot_arr, idx)
+        array.remove(birth_arr, idx)
+        array.remove(st_arr, idx)
+        array.remove(pen_arr, idx)
+        array.remove(mit_arr, idx)
 
-// Mitigation = premier retour dans la zone selon la sonde Mèche/Corps/Clôture (mit_probe_bull/bear),
-// jamais testée sur la barre de naissance. À mitigation : suppression complète de la boîte (le
-// gris de diagnostic a confirmé que la détection se déclenche correctement — plus besoin de le
-// garder affiché). Seules les zones non mitigées restent visibles à l'écran.
-f_mitigate_bull_zones(box_arr, top_arr, bot_arr, birth_arr, probe) =>
+// Style d'une zone selon son état (teinte d'origine de plus en plus atténuée ; MITIGATED en gris ; IFVG en gris clair)
+f_vz_style(bx, st, hue, bg_t, bd_t) =>
+    if not na(bx)
+        if st == 0
+            box.set_bgcolor(bx, color.new(hue, bg_t))
+            box.set_border_color(bx, color.new(hue, bd_t))
+            box.set_border_style(bx, line.style_solid)
+        else if st == 1
+            box.set_bgcolor(bx, color.new(hue, math.min(100, bg_t + 10)))
+            box.set_border_color(bx, color.new(hue, math.min(100, bd_t + 10)))
+            box.set_border_style(bx, line.style_dashed)
+        else if st == 2
+            box.set_bgcolor(bx, color.new(hue, math.min(100, bg_t + 18)))
+            box.set_border_color(bx, color.new(hue, math.min(100, bd_t + 18)))
+            box.set_border_style(bx, line.style_dotted)
+        else if st == 3
+            box.set_bgcolor(bx, color.new(#8B96A5, 92))
+            box.set_border_color(bx, color.new(#8B96A5, 70))
+            box.set_border_style(bx, line.style_dotted)
+        else
+            box.set_bgcolor(bx, color.new(#C7CED9, 55))
+            box.set_border_color(bx, color.new(#9AA5B4, 30))
+            box.set_border_style(bx, line.style_solid)
+
+// Mise à jour d'une catégorie de zones à chaque bougie (même code pour BUY et SELL : is_demand = true pour les zones
+// haussières ; is_fvg = true pour les FVG). Sondes visuelles propres : fill_lo / fill_hi = bas / haut de remplissage
+// (mèche ou corps pour les FVG, low / high pour les OB) ; close pour la traversée. Jamais mit_probe_* ni fvg_mitigation_mode.
+f_vz_update(box_arr, top_arr, bot_arr, birth_arr, st_arr, pen_arr, mit_arr, is_demand, is_fvg, fill_lo, fill_hi, hue, bg_t, bd_t) =>
     i = array.size(box_arr) - 1
     while i >= 0
-        if bar_index > array.get(birth_arr, i) and probe <= array.get(top_arr, i)
-            bx = array.get(box_arr, i)
+        zt = array.get(top_arr, i)
+        zb = array.get(bot_arr, i)
+        bx = array.get(box_arr, i)
+        drop = false
+        if barstate.isconfirmed and bar_index > array.get(birth_arr, i)
+            st = array.get(st_arr, i)
+            if st == 4
+                // IFVG (FVG traversée) : mit_arr contient la bougie de conversion ; sa mitigation ne commence qu'à la
+                // bougie SUIVANTE. Rôle inversé : l'IFVG d'une FVG haussière est une zone d'offre (retest par le dessous),
+                // celle d'une FVG baissière une zone de demande (retest par le dessus). Limites d'origine jamais modifiées.
+                ifvg_birth_bar = array.get(mit_arr, i)
+                if bar_index > ifvg_birth_bar
+                    ifvg_demand = not is_demand
+                    ifvg_rng = zt - zb
+                    ifvg_pen = array.get(pen_arr, i)
+                    if (ifvg_demand and fill_lo <= zt) or (not ifvg_demand and fill_hi >= zb)
+                        ifvg_depth = ifvg_demand ? zt - fill_lo : fill_hi - zb
+                        ifvg_pen_now = ifvg_rng > 0 ? math.min(1.0, math.max(0.0, ifvg_depth / ifvg_rng)) : 1.0
+                        ifvg_pen := math.max(ifvg_pen, ifvg_pen_now)
+                        array.set(pen_arr, i, ifvg_pen)
+                    ifvg_beyond = is_demand ? close > zt : close < zb
+                    if ifvg_beyond or ifvg_pen >= 1.0
+                        drop := true
+                    else if ifvg_pen > 0.0 and not na(bx)
+                        if ifvg_demand
+                            box.set_top(bx, zt - ifvg_pen * ifvg_rng)
+                        else
+                            box.set_bottom(bx, zb + ifvg_pen * ifvg_rng)
+            else
+                new_st = st
+                if (is_demand and fill_lo <= zt) or (not is_demand and fill_hi >= zb)
+                    rng = zt - zb
+                    depth = is_demand ? zt - fill_lo : fill_hi - zb
+                    pen_now = rng > 0 ? math.min(1.0, math.max(0.0, depth / rng)) : 1.0
+                    pen = math.max(array.get(pen_arr, i), pen_now)
+                    array.set(pen_arr, i, pen)
+                    cand = pen >= 1.0 ? 3 : (pen * 100 >= vis_partial_pct ? 2 : 1)
+                    new_st := math.max(st, cand)
+                if new_st == 3 and st != 3
+                    array.set(mit_arr, i, bar_index)
+                crossed = is_demand ? close < zb : close > zt
+                if crossed and is_fvg
+                    // FVG traversée par une clôture confirmée : limites d'origine restaurées, la zone devient une IFVG
+                    array.set(st_arr, i, 4)
+                    array.set(pen_arr, i, 0.0)
+                    array.set(mit_arr, i, bar_index)
+                    if not na(bx)
+                        box.set_top(bx, zt)
+                        box.set_bottom(bx, zb)
+                    f_vz_style(bx, 4, hue, bg_t, bd_t)
+                else if crossed
+                    drop := true
+                else if new_st == 3 and (is_fvg or bar_index - array.get(mit_arr, i) >= vis_grace_bars)
+                    drop := true
+                else
+                    if new_st != st
+                        array.set(st_arr, i, new_st)
+                        f_vz_style(bx, new_st, hue, bg_t, bd_t)
+                    if is_fvg and not na(bx)
+                        pen_v = array.get(pen_arr, i)
+                        if is_demand
+                            box.set_top(bx, zt - pen_v * (zt - zb))
+                        else
+                            box.set_bottom(bx, zb + pen_v * (zt - zb))
+        if drop
             if not na(bx)
                 box.delete(bx)
             array.remove(box_arr, i)
             array.remove(top_arr, i)
             array.remove(bot_arr, i)
             array.remove(birth_arr, i)
-        i -= 1
-
-f_mitigate_bear_zones(box_arr, top_arr, bot_arr, birth_arr, probe) =>
-    i = array.size(box_arr) - 1
-    while i >= 0
-        if bar_index > array.get(birth_arr, i) and probe >= array.get(bot_arr, i)
-            bx = array.get(box_arr, i)
-            if not na(bx)
-                box.delete(bx)
-            array.remove(box_arr, i)
-            array.remove(top_arr, i)
-            array.remove(bot_arr, i)
-            array.remove(birth_arr, i)
+            array.remove(st_arr, i)
+            array.remove(pen_arr, i)
+            array.remove(mit_arr, i)
+        else if not na(bx)
+            box.set_right(bx, bar_index + vis_right_pad)
         i -= 1
 
 // ==========================================
@@ -232,9 +378,10 @@ if ta.change(time("60"))
             h1_bull_zone_bot := h1_high2
             h1_bull_consumed := false
         // Dessin (multi-zones, indépendant du suivi moteur ci-dessus)
+        box new_h1_box = na
         if show_fvg
-            new_h1_box = box.new(bar_index, h1_low, bar_index + 1, h1_high2, border_color=color_fvg_bull_h1_bd, bgcolor=color_fvg_bull_h1_bg, extend=extend.right)
-            f_zone_push(zn_h1fvg_bull_box, zn_h1fvg_bull_top, zn_h1fvg_bull_bot, zn_h1fvg_bull_birth, new_h1_box, h1_low, h1_high2, max_zones_in)
+            new_h1_box := box.new(bar_index, h1_low, bar_index + vis_right_pad, h1_high2, border_color=color_fvg_bull_h1_bd, bgcolor=color_fvg_bull_h1_bg)
+        f_zone_push(zn_h1fvg_bull_box, zn_h1fvg_bull_top, zn_h1fvg_bull_bot, zn_h1fvg_bull_birth, zn_h1fvg_bull_st, zn_h1fvg_bull_pen, zn_h1fvg_bull_mit, new_h1_box, h1_low, h1_high2, max_zones_in)
 
     // Bear Zone (suivi moteur — inchangé)
     if h1_fvg_bear
@@ -244,9 +391,10 @@ if ta.change(time("60"))
             h1_bear_zone_bot := h1_high
             h1_bear_consumed := false
         // Dessin (multi-zones, indépendant du suivi moteur ci-dessus)
+        box new_h1_box = na
         if show_fvg
-            new_h1_box = box.new(bar_index, h1_low2, bar_index + 1, h1_high, border_color=color_fvg_bear_h1_bd, bgcolor=color_fvg_bear_h1_bg, extend=extend.right)
-            f_zone_push(zn_h1fvg_bear_box, zn_h1fvg_bear_top, zn_h1fvg_bear_bot, zn_h1fvg_bear_birth, new_h1_box, h1_low2, h1_high, max_zones_in)
+            new_h1_box := box.new(bar_index, h1_low2, bar_index + vis_right_pad, h1_high, border_color=color_fvg_bear_h1_bd, bgcolor=color_fvg_bear_h1_bg)
+        f_zone_push(zn_h1fvg_bear_box, zn_h1fvg_bear_top, zn_h1fvg_bear_bot, zn_h1fvg_bear_birth, zn_h1fvg_bear_st, zn_h1fvg_bear_pen, zn_h1fvg_bear_mit, new_h1_box, h1_low2, h1_high, max_zones_in)
 
 in_h1_bull_zone = not h1_bull_consumed and not na(h1_bull_zone_top) and (high >= h1_bull_zone_bot and low <= h1_bull_zone_top)
 in_h1_bear_zone = not h1_bear_consumed and not na(h1_bear_zone_top) and (high >= h1_bear_zone_bot and low <= h1_bear_zone_top)
@@ -510,9 +658,11 @@ if mss_bull
     // (avant : le slot "officiel" nécessitait tested_h1_bull et écrasait le précédent)
     if not na(ob_bull_bot)
         ob_bull_relevant = not ob_filter_dp or na(eq_level) or (ob_bull_top <= eq_level)
-        if show_ob and ob_bull_relevant
-            new_ob_box = box.new(ob_bull_bar, ob_bull_top, bar_index, ob_bull_bot, border_color=color_ob_bull_bd, bgcolor=color_ob_bull_bg, extend=extend.right)
-            f_zone_push(zn_ob_bull_box, zn_ob_bull_top, zn_ob_bull_bot, zn_ob_bull_birth, new_ob_box, ob_bull_top, ob_bull_bot, max_zones_in)
+        if ob_bull_relevant
+            box new_ob_box = na
+            if show_ob
+                new_ob_box := box.new(ob_bull_bar, ob_bull_top, bar_index + vis_right_pad, ob_bull_bot, border_color=color_ob_bull_bd, bgcolor=color_ob_bull_bg)
+            f_zone_push(zn_ob_bull_box, zn_ob_bull_top, zn_ob_bull_bot, zn_ob_bull_birth, zn_ob_bull_st, zn_ob_bull_pen, zn_ob_bull_mit, new_ob_box, ob_bull_top, ob_bull_bot, max_zones_in)
     last_ph := na
     last_struct_dir := 1
 
@@ -528,32 +678,43 @@ if mss_bear
     // Order Block vendeur : un seul gestionnaire, plusieurs zones peuvent coexister
     if not na(ob_bear_top)
         ob_bear_relevant = not ob_filter_dp or na(eq_level) or (ob_bear_bot >= eq_level)
-        if show_ob and ob_bear_relevant
-            new_ob_box = box.new(ob_bear_bar, ob_bear_top, bar_index, ob_bear_bot, border_color=color_ob_bear_bd, bgcolor=color_ob_bear_bg, extend=extend.right)
-            f_zone_push(zn_ob_bear_box, zn_ob_bear_top, zn_ob_bear_bot, zn_ob_bear_birth, new_ob_box, ob_bear_top, ob_bear_bot, max_zones_in)
+        if ob_bear_relevant
+            box new_ob_box = na
+            if show_ob
+                new_ob_box := box.new(ob_bear_bar, ob_bear_top, bar_index + vis_right_pad, ob_bear_bot, border_color=color_ob_bear_bd, bgcolor=color_ob_bear_bg)
+            f_zone_push(zn_ob_bear_box, zn_ob_bear_top, zn_ob_bear_bot, zn_ob_bear_birth, zn_ob_bear_st, zn_ob_bear_pen, zn_ob_bear_mit, new_ob_box, ob_bear_top, ob_bear_bot, max_zones_in)
     last_pl := na
     last_struct_dir := -1
 
 // FVG en M5 — zones multiples, plus de distinction "officiel/extra". valid_ctx_* retiré du
 // filtre par défaut (n'empêche plus l'affichage) ; show_fvg_m5 reste le seul interrupteur.
 fvg_bull_m5 = (low > high[2]) and (low - high[2] >= atr_val * 0.15)
-if fvg_bull_m5 and show_fvg_m5
-    new_fvg_box = box.new(bar_index - 2, low, bar_index, high[2], border_color=color_fvg_bull_m5_bd, bgcolor=color_fvg_bull_m5_bg, extend=extend.right)
-    f_zone_push(zn_m5fvg_bull_box, zn_m5fvg_bull_top, zn_m5fvg_bull_bot, zn_m5fvg_bull_birth, new_fvg_box, low, high[2], max_zones_in)
+if fvg_bull_m5
+    box new_fvg_box = na
+    if show_fvg_m5
+        new_fvg_box := box.new(bar_index - 2, low, bar_index + vis_right_pad, high[2], border_color=color_fvg_bull_m5_bd, bgcolor=color_fvg_bull_m5_bg)
+    f_zone_push(zn_m5fvg_bull_box, zn_m5fvg_bull_top, zn_m5fvg_bull_bot, zn_m5fvg_bull_birth, zn_m5fvg_bull_st, zn_m5fvg_bull_pen, zn_m5fvg_bull_mit, new_fvg_box, low, high[2], max_zones_in)
 
 fvg_bear_m5 = (high < low[2]) and (low[2] - high >= atr_val * 0.15)
-if fvg_bear_m5 and show_fvg_m5
-    new_fvg_box = box.new(bar_index - 2, low[2], bar_index, high, border_color=color_fvg_bear_m5_bd, bgcolor=color_fvg_bear_m5_bg, extend=extend.right)
-    f_zone_push(zn_m5fvg_bear_box, zn_m5fvg_bear_top, zn_m5fvg_bear_bot, zn_m5fvg_bear_birth, new_fvg_box, low[2], high, max_zones_in)
+if fvg_bear_m5
+    box new_fvg_box = na
+    if show_fvg_m5
+        new_fvg_box := box.new(bar_index - 2, low[2], bar_index + vis_right_pad, high, border_color=color_fvg_bear_m5_bd, bgcolor=color_fvg_bear_m5_bg)
+    f_zone_push(zn_m5fvg_bear_box, zn_m5fvg_bear_top, zn_m5fvg_bear_bot, zn_m5fvg_bear_birth, zn_m5fvg_bear_st, zn_m5fvg_bear_pen, zn_m5fvg_bear_mit, new_fvg_box, low[2], high, max_zones_in)
 
-// Mitigation de toutes les zones (premier retour dans la zone) — suppression complète, OB et
-// FVG traités à l'identique : seules les zones non mitigées restent affichées.
-f_mitigate_bull_zones(zn_ob_bull_box, zn_ob_bull_top, zn_ob_bull_bot, zn_ob_bull_birth, mit_probe_bull)
-f_mitigate_bear_zones(zn_ob_bear_box, zn_ob_bear_top, zn_ob_bear_bot, zn_ob_bear_birth, mit_probe_bear)
-f_mitigate_bull_zones(zn_m5fvg_bull_box, zn_m5fvg_bull_top, zn_m5fvg_bull_bot, zn_m5fvg_bull_birth, mit_probe_bull)
-f_mitigate_bear_zones(zn_m5fvg_bear_box, zn_m5fvg_bear_top, zn_m5fvg_bear_bot, zn_m5fvg_bear_birth, mit_probe_bear)
-f_mitigate_bull_zones(zn_h1fvg_bull_box, zn_h1fvg_bull_top, zn_h1fvg_bull_bot, zn_h1fvg_bull_birth, mit_probe_bull)
-f_mitigate_bear_zones(zn_h1fvg_bear_box, zn_h1fvg_bear_top, zn_h1fvg_bear_bot, zn_h1fvg_bear_birth, mit_probe_bear)
+// VIS1 — cycle de vie visuel de toutes les zones. OB : contact conservé (atténué), partiel, remplissage complet grisé puis
+// supprimé après vis_grace_bars barres, suppression immédiate sur clôture confirmée au-delà de la limite distale.
+// FVG : box réduite à la portion non comblée dès le premier contact, supprimée à 100 % de remplissage sans clôture au-delà,
+// convertie en IFVG (limites d'origine, gris clair) sur clôture confirmée au-delà de la limite distale.
+// Aucune lecture par le moteur ; sondes de remplissage FVG propres (vis_fvg_fill_mode), jamais fvg_mitigation_mode.
+vz_fill_lo = vis_fvg_fill_mode == "Corps" ? math.min(open, close) : low
+vz_fill_hi = vis_fvg_fill_mode == "Corps" ? math.max(open, close) : high
+f_vz_update(zn_ob_bull_box, zn_ob_bull_top, zn_ob_bull_bot, zn_ob_bull_birth, zn_ob_bull_st, zn_ob_bull_pen, zn_ob_bull_mit, true, false, low, high, color_ob_bull, 72, 30)
+f_vz_update(zn_ob_bear_box, zn_ob_bear_top, zn_ob_bear_bot, zn_ob_bear_birth, zn_ob_bear_st, zn_ob_bear_pen, zn_ob_bear_mit, false, false, low, high, color_ob_bear, 72, 30)
+f_vz_update(zn_m5fvg_bull_box, zn_m5fvg_bull_top, zn_m5fvg_bull_bot, zn_m5fvg_bull_birth, zn_m5fvg_bull_st, zn_m5fvg_bull_pen, zn_m5fvg_bull_mit, true, true, vz_fill_lo, vz_fill_hi, color_fvg_yellow, 78, 55)
+f_vz_update(zn_m5fvg_bear_box, zn_m5fvg_bear_top, zn_m5fvg_bear_bot, zn_m5fvg_bear_birth, zn_m5fvg_bear_st, zn_m5fvg_bear_pen, zn_m5fvg_bear_mit, false, true, vz_fill_lo, vz_fill_hi, color_fvg_yellow, 78, 55)
+f_vz_update(zn_h1fvg_bull_box, zn_h1fvg_bull_top, zn_h1fvg_bull_bot, zn_h1fvg_bull_birth, zn_h1fvg_bull_st, zn_h1fvg_bull_pen, zn_h1fvg_bull_mit, true, true, vz_fill_lo, vz_fill_hi, color_fvg_yellow, 55, 20)
+f_vz_update(zn_h1fvg_bear_box, zn_h1fvg_bear_top, zn_h1fvg_bear_bot, zn_h1fvg_bear_birth, zn_h1fvg_bear_st, zn_h1fvg_bear_pen, zn_h1fvg_bear_mit, false, true, vz_fill_lo, vz_fill_hi, color_fvg_yellow, 55, 20)
 
 // ==========================================
 // 3.9 CIBLES DE LIQUIDITÉ (TP STRUCTURELS) — R6 / B7
@@ -1169,4 +1330,4 @@ if show_dashboard and barstate.islast
     table.cell(dash, 0, 5, "  Grade min.  ", text_color=color_lux_level, text_size=size.normal, bgcolor=color_panel_bg, text_halign=text.align_left)
     table.cell(dash, 1, 5, "  " + min_grade_in + "  ", text_color=color_lux_gold, text_size=size.normal, bgcolor=color_panel_bg, text_halign=text.align_right)
     table.cell(dash, 0, 6, "  Version  ", text_color=color_lux_level, text_size=size.normal, bgcolor=color_panel_bg, text_halign=text.align_left)
-    table.cell(dash, 1, 6, "  " + SCRIPT_VERSION + "  ", text_color=color.white, text_size=size.normal, bgcolor=color_panel_bg, text_halign=text.align_right)
+    table.cell(dash, 1, 6, "  " + SCRIPT_VERSION + " · " + DISPLAY_VERSION + "  ", text_color=color.white, text_size=size.normal, bgcolor=color_panel_bg, text_halign=text.align_right)
