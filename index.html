@@ -12,18 +12,18 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <style>
     :root {
-        --bg-body: #05070b;
+        --bg-body: #030406;
         --bg-elevated: #0d1117;
         --bg-card: #0f141c;
         --bg-card-hover: #141b26;
         --bg-inset: #080a10;
-        --border-color: #1c2430;
+        --border-color: #2a2414;
         --border-soft: #161d28;
         --text-main: #f2f5f8;
         --text-muted: #8b96a5;
         --text-faint: #5b6674;
-        --accent-blue: #2f6bff;
-        --accent-blue-soft: rgba(47, 107, 255, 0.14);
+        --accent-blue: #ffc73c;
+        --accent-blue-soft: rgba(255, 199, 60, 0.14);
         --accent-green: #00e08a;
         --accent-green-soft: rgba(0, 224, 138, 0.13);
         --accent-red: #ff4569;
@@ -48,10 +48,10 @@
 
     body {
         background:
-            linear-gradient(rgba(55, 214, 255, 0.025) 1px, transparent 1px) 0 0 / 48px 48px,
-            linear-gradient(90deg, rgba(55, 214, 255, 0.025) 1px, transparent 1px) 0 0 / 48px 48px,
-            radial-gradient(circle at 15% -10%, rgba(47, 107, 255, 0.10), transparent 45%),
-            radial-gradient(circle at 85% 0%, rgba(0, 224, 138, 0.07), transparent 40%),
+            repeating-linear-gradient(90deg, transparent 0 119px, rgba(255, 199, 60, 0.07) 119px 120px),
+            repeating-linear-gradient(0deg, transparent 0 159px, rgba(255, 199, 60, 0.05) 159px 160px),
+            radial-gradient(circle at 15% -10%, rgba(255, 199, 60, 0.08), transparent 45%),
+            radial-gradient(circle at 85% 0%, rgba(55, 214, 255, 0.05), transparent 40%),
             var(--bg-body);
         color: var(--text-main);
         font-family: var(--font-ui);
