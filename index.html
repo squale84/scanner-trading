@@ -977,6 +977,7 @@
             <span class="log-title">📔 Journal de trading (TradingView Webhooks)</span>
             <span id="log-count" style="font-family: var(--font-mono); font-size: 11px; color: var(--text-muted);">0 signal reçu</span>
         </div>
+        <div class="period-tabs" id="journal-assets" style="padding: 12px 18px 0; flex-wrap: wrap;"></div>
         <div style="overflow-x: auto;">
             <table class="log-table">
                 <thead>
@@ -2310,12 +2311,41 @@
         </tr>`;
     }
 
+    // Filtre d'affichage par actif sur le journal (n'affecte pas les compteurs globaux).
+    let journalAssetFilter = 'ALL';
+    function renderJournalAssetTabs(symbols, all) {
+        const box = document.getElementById('journal-assets');
+        if (!box) return;
+        const counts = {};
+        all.forEach(s => { if (s) counts[s] = (counts[s] || 0) + 1; });
+        box.innerHTML = ['ALL', ...symbols].map(s => {
+            const label = s === 'ALL' ? `Tous (${all.length})` : `${escHtml(s)} (${counts[s]})`;
+            return `<button class="period-tab${s === journalAssetFilter ? ' active' : ''}" data-asset="${escHtml(s)}">${label}</button>`;
+        }).join('');
+    }
+    document.getElementById('journal-assets').addEventListener('click', e => {
+        const btn = e.target.closest('button[data-asset]');
+        if (!btn) return;
+        journalAssetFilter = btn.dataset.asset;
+        renderJournalTable();
+    });
+
     function renderJournalTable() {
-        const { trades, orphans } = buildJournalTrades(journalRows);
-        document.getElementById('log-body').innerHTML = trades.map(tradeRowHtml).join('');
-        document.getElementById('log-empty').style.display = trades.length || orphans.length ? 'none' : '';
+        const { trades: allTrades, orphans: allOrphans } = buildJournalTrades(journalRows);
+        const symOf = x => (x.entry ? x.entry.symbol : x.symbol) || '';
+        const everything = [...allTrades, ...allOrphans].map(symOf).filter(Boolean);
+        const symbols = [...new Set(everything)].sort();
+        if (journalAssetFilter !== 'ALL' && !symbols.includes(journalAssetFilter)) journalAssetFilter = 'ALL';
+        renderJournalAssetTabs(symbols, everything);
+        const keep = x => journalAssetFilter === 'ALL' || symOf(x) === journalAssetFilter;
+        const trades = allTrades.filter(keep);
+        const orphans = allOrphans.filter(keep);
+        document.getElementById('log-body').innerHTML = trades.length || journalAssetFilter === 'ALL'
+            ? trades.map(tradeRowHtml).join('')
+            : `<tr><td colspan="11" style="text-align:center; color: var(--text-muted); padding: 18px;">Aucun trade sur ${escHtml(journalAssetFilter)}</td></tr>`;
+        document.getElementById('log-empty').style.display = allTrades.length || allOrphans.length ? 'none' : '';
         hasLogRows = journalRows.length > 0;
-        journalOrphanCount = orphans.length;
+        journalOrphanCount = allOrphans.length;
         const box = document.getElementById('journal-orphans');
         box.style.display = orphans.length ? '' : 'none';
         document.getElementById('journal-orphans-count').textContent = `${orphans.length} sortie(s)`;
