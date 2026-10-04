@@ -1118,6 +1118,8 @@
 </div>
 
 <script>
+    // Échappement HTML : toute donnée reçue (webhook, calendrier) doit passer par là avant innerHTML.
+    const escHtml = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
     /* ===================== CONFIG ===================== */
     const ASSETS = {
         TRAD: [
@@ -1676,7 +1678,7 @@
             const hit = m.r > 0 && bestR >= m.r - 1e-9;
             const edge = x <= 0.5 ? ' edge-l' : (x >= 99.5 ? ' edge-r' : '');
             html += `<div class="gauge-tick ${m.cls}${hit ? ' hit' : ''}" style="left:${x.toFixed(2)}%;"></div>`;
-            html += `<div class="gauge-lbl${edge}${hit ? ' hit' : ''}" style="left:${x.toFixed(2)}%;"${m.type ? ` title="${m.type}"` : ''}>${m.name}${m.rTxt ? `<span class="gauge-rtxt"> ${m.rTxt}</span>` : ''}${hit ? ' ✓' : ''}</div>`;
+            html += `<div class="gauge-lbl${edge}${hit ? ' hit' : ''}" style="left:${x.toFixed(2)}%;"${m.type ? ` title="${escHtml(m.type)}"` : ''}>${m.name}${m.rTxt ? `<span class="gauge-rtxt"> ${m.rTxt}</span>` : ''}${hit ? ' ✓' : ''}</div>`;
             html += `<div class="gauge-px${edge}${m.cls === 'mid' ? ' mid' : ''}" style="left:${x.toFixed(2)}%;">${formatDisplay(m.price)}</div>`;
         });
         const outside = fracOfR(prog.r) < 0 || fracOfR(prog.r) > 1;
@@ -1684,7 +1686,7 @@
         html += '</div>';
         // Écran étroit : les prix intermédiaires se chevaucheraient sur la jauge, on les liste ici.
         // Liste des TP : toujours affichée quand ce sont des cibles de liquidité (le type n'est pas sur la jauge).
-        html += `<div class="pos-note pos-levels${compact || targets.length ? ' show' : ''}">${marks.filter(m => m.rTxt).map(m => `${m.name}${m.type ? ' · ' + m.type : ''} (${m.rTxt}) ${formatDisplay(m.price)}`).join(' · ')}</div>`;
+        html += `<div class="pos-note pos-levels${compact || targets.length ? ' show' : ''}">${marks.filter(m => m.rTxt).map(m => `${m.name}${m.type ? ' · ' + escHtml(m.type) : ''} (${m.rTxt}) ${formatDisplay(m.price)}`).join(' · ')}</div>`;
         if (bestR > Math.max(prog.r, 0) + 1e-9) {
             const fmtR = r => `${r >= 0 ? '+' : ''}${r.toFixed(2).replace('.', ',')}R`;
             html += `<div class="pos-note">Meilleur moment : <span style="color:var(--accent-green);">${fmtR(bestR)}</span> → ${pos.closed ? 'résultat final' : 'actuellement'} : <span style="color:${prog.r >= 0 ? 'var(--accent-green)' : 'var(--accent-red)'};">${fmtR(prog.r)}</span></div>`;
@@ -1810,10 +1812,10 @@
             return `
             <div class="pos-card ${dirCls}">
                 <div class="pos-head">
-                    <span class="pos-sym">${pos.symbol}</span>
-                    <span class="pos-dir ${dirCls}">${pos.direction}</span>
-                    <span>${setupIctLabel(pos.status)}</span>
-                    ${pos.quality && pos.quality !== '--' ? `<span class="tag-chip ${qualityClass(pos.quality)}">${pos.quality}</span>` : ''}
+                    <span class="pos-sym">${escHtml(pos.symbol)}</span>
+                    <span class="pos-dir ${dirCls}">${escHtml(pos.direction)}</span>
+                    <span>${escHtml(setupIctLabel(pos.status))}</span>
+                    ${pos.quality && pos.quality !== '--' ? `<span class="tag-chip ${qualityClass(pos.quality)}">${escHtml(pos.quality)}</span>` : ''}
                     ${pos.isTest ? '<span class="tag-chip">TEST</span>' : ''}
                     <span>Ouverte ${pos.recovered ? '(reprise en cours de trade)' : 'à ' + opened}</span>
                     <span class="pos-r" style="color:${rColor};">${rTxt}${prog.valid ? ` · ${prog.pct}% vers TP` : ''}</span>
@@ -2213,7 +2215,7 @@
 
     const EXIT_LABELS_FR = { TP_HIT: 'TP atteint', SL_HIT: 'SL touché', EXPIRED: 'Expiration', REPLACED: 'Remplacée' };
     function statusCellHtml(status) {
-        return `<td><span class="badge-status ${status}">${EXIT_LABELS_FR[status] || status}</span></td>`;
+        return `<td><span class="badge-status ${escHtml(status)}">${escHtml(EXIT_LABELS_FR[status] || status)}</span></td>`;
     }
 
     // Le risque par trade peut changer : on recalcule les montants déjà affichés.
@@ -2289,11 +2291,11 @@
         return `<tr>
             ${dateCellHtml(utcDate(e.time))}
             ${closeCell}
-            <td style="font-weight: 700; color: #fff;">${e.symbol}${test}</td>
-            <td style="color: ${dirColor}; font-weight: 700;">${dir || '--'}</td>
-            <td style="color: #cbd5e1;">${setupIctLabel(e.status)}</td>
+            <td style="font-weight: 700; color: #fff;">${escHtml(e.symbol)}${test}</td>
+            <td style="color: ${dirColor}; font-weight: 700;">${escHtml(dir || '--')}</td>
+            <td style="color: #cbd5e1;">${escHtml(setupIctLabel(e.status))}</td>
             ${sessionCellHtml(e.session || (x && x.session_at_entry))}
-            <td>${quality && quality !== '--' ? `<span class="tag-chip ${qualityClass(quality)}">${quality}</span>` : '--'}</td>
+            <td>${quality && quality !== '--' ? `<span class="tag-chip ${qualityClass(quality)}">${escHtml(quality)}</span>` : '--'}</td>
             <td style="color: #fff;">${formatDisplay(e.entry_price)}</td>
             ${x ? exitPriceCellHtml(true, x.exit_price) : '<td style="color: var(--text-faint);">—</td>'}
             ${motif}
@@ -2312,7 +2314,7 @@
         document.getElementById('journal-orphans-count').textContent = `${orphans.length} sortie(s)`;
         document.getElementById('journal-orphans-body').innerHTML = orphans.map(o => `<tr>
             ${dateCellHtml(utcDate(o.time))}
-            <td style="font-weight: 700; color: #fff;">${o.symbol}</td>
+            <td style="font-weight: 700; color: #fff;">${escHtml(o.symbol)}</td>
             ${statusCellHtml(o.status)}
             ${resultCellHtml(null, null, unavailableReason(o))}
         </tr>`).join('');
@@ -2397,14 +2399,14 @@
         let msg = '';
         if (kind === 'entry') {
             cls += data.direction === 'BUY' ? ' buy' : ' sell';
-            msg = `${data.status} — ${data.direction} ${data.quality && data.quality !== '--' ? '(' + data.quality + ')' : ''}`;
+            msg = `${escHtml(data.status)} — ${escHtml(data.direction)} ${data.quality && data.quality !== '--' ? '(' + escHtml(data.quality) + ')' : ''}`;
         } else {
             cls += data.status === 'TP_HIT' ? ' tp' : ' sl';
             msg = data.status === 'TP_HIT' ? 'Take Profit atteint' : (data.status === 'SL_HIT' ? 'Stop Loss touché' : 'Position expirée');
         }
         toast.className = cls;
         toast.innerHTML = `
-            <div class="toast-top"><span class="toast-sym">${sym}</span><span class="toast-time">${formatTime()}</span></div>
+            <div class="toast-top"><span class="toast-sym">${escHtml(sym)}</span><span class="toast-time">${formatTime()}</span></div>
             <div class="toast-msg">${msg}</div>
             <div class="toast-hint">Cliquer pour ouvrir le graphique →</div>
         `;
@@ -2488,8 +2490,8 @@
                 if (tp && data.tp_price !== undefined) tp.textContent = formatDisplay(data.tp_price);
                 if (tags) {
                     let html = "";
-                    if (data.quality && data.quality !== "--") html += `<span class="tag-chip ${qualityClass(data.quality)}">GRADE ${data.quality}</span>`;
-                    if (data.grade && data.grade !== "--") html += `<span class="tag-chip stars">${data.grade}</span>`;
+                    if (data.quality && data.quality !== "--") html += `<span class="tag-chip ${qualityClass(data.quality)}">GRADE ${escHtml(data.quality)}</span>`;
+                    if (data.grade && data.grade !== "--") html += `<span class="tag-chip stars">${escHtml(data.grade)}</span>`;
                     if (data.rr && data.rr !== "0.0") html += `<span class="tag-chip">R:R ${data.rr}:1</span>`;
                     tags.innerHTML = html;
                 }
@@ -2599,8 +2601,8 @@
 
         if (tags) {
             let html = "";
-            if (data.quality && data.quality !== "--") html += `<span class="tag-chip ${qualityClass(data.quality)}">GRADE ${data.quality}</span>`;
-            if (data.grade && data.grade !== "--") html += `<span class="tag-chip stars">${data.grade}</span>`;
+            if (data.quality && data.quality !== "--") html += `<span class="tag-chip ${qualityClass(data.quality)}">GRADE ${escHtml(data.quality)}</span>`;
+            if (data.grade && data.grade !== "--") html += `<span class="tag-chip stars">${escHtml(data.grade)}</span>`;
             if (data.rr && data.rr !== "0.0") html += `<span class="tag-chip">R:R ${data.rr}:1</span>`;
             tags.innerHTML = html;
         }
@@ -3157,11 +3159,11 @@
             return `
                 <tr class="${rowClass}">
                     <td style="color: #cbd5e1; white-space:nowrap;">${localTime}<span style="display:block; color: var(--text-faint); font-size:10px;">New York ${nyTime}</span></td>
-                    <td style="font-weight:700; color:#fff;" title="${CAL_COUNTRY_FR[ev.country] || ''}">${ev.country || '--'}</td>
-                    <td><span class="impact-badge impact-${ev.impact}">${CAL_IMPACT_FR[ev.impact] || ev.impact || '--'}</span></td>
-                    <td style="color:#cbd5e1;" title="${(ev.title || '').replace(/"/g, '&quot;')}">${translateEventTitle(ev.title)}</td>
-                    <td style="color:#fff;">${ev.forecast || '--'}</td>
-                    <td style="color: var(--text-muted);">${ev.previous || '--'}</td>
+                    <td style="font-weight:700; color:#fff;" title="${CAL_COUNTRY_FR[ev.country] || ''}">${escHtml(ev.country || '--')}</td>
+                    <td><span class="impact-badge impact-${escHtml(ev.impact)}">${escHtml(CAL_IMPACT_FR[ev.impact] || ev.impact || '--')}</span></td>
+                    <td style="color:#cbd5e1;" title="${escHtml(ev.title || '')}">${escHtml(translateEventTitle(ev.title))}</td>
+                    <td style="color:#fff;">${escHtml(ev.forecast || '--')}</td>
+                    <td style="color: var(--text-muted);">${escHtml(ev.previous || '--')}</td>
                 </tr>
             `;
         }).join('');
@@ -3172,9 +3174,9 @@
         const toast = document.createElement('div');
         toast.className = 'toast sl'; // style ambre/alerte réutilisé pour l'avertissement
         toast.innerHTML = `
-            <div class="toast-top"><span class="toast-sym">📅 ${ev.country}</span><span class="toast-time">dans ${Math.round(minsLeft)} min</span></div>
-            <div class="toast-msg">${translateEventTitle(ev.title)} (impact ${(CAL_IMPACT_FR[ev.impact] || ev.impact || '').toLowerCase()})</div>
-            <div class="toast-hint">Prévision : ${ev.forecast || '--'} · Précédent : ${ev.previous || '--'}</div>
+            <div class="toast-top"><span class="toast-sym">📅 ${escHtml(ev.country)}</span><span class="toast-time">dans ${Math.round(minsLeft)} min</span></div>
+            <div class="toast-msg">${escHtml(translateEventTitle(ev.title))} (impact ${escHtml((CAL_IMPACT_FR[ev.impact] || ev.impact || '').toLowerCase())})</div>
+            <div class="toast-hint">Prévision : ${escHtml(ev.forecast || '--')} · Précédent : ${escHtml(ev.previous || '--')}</div>
         `;
         stack.appendChild(toast);
         setTimeout(() => { toast.classList.add('closing'); setTimeout(() => toast.remove(), 250); }, 9000);
