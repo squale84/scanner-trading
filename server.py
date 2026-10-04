@@ -10,6 +10,7 @@ import os
 import secrets
 import sys
 import asyncio
+import re
 import time
 import httpx
 from datetime import datetime
@@ -704,6 +705,23 @@ async def reset_card(data: ResetRequest, request: Request):
     print(f"🔄 [{sym}] Carte remise en STANDBY.")
     return _persistence_response(sym, persisted)
 
+# Validation minimale des charges utiles du Radar : on refuse ce qui ne peut pas être un signal
+# (objet non JSON, symbole hors format, champ démesuré) SANS restreindre les valeurs légitimes
+# (statuts et noms de setup ne sont pas énumérés : le Radar peut en ajouter).
+SYMBOL_RE = re.compile(r"^[A-Z0-9][A-Z0-9._:/!-]{0,19}$")  # ! : contrats continus (NQ1!), ticker TradingView
+MAX_FIELD_LENGTH = 60
+
+def _payload_error(data):
+    """Renvoie le motif du refus, ou None si la charge utile est acceptable."""
+    if not isinstance(data, dict):
+        return "objet JSON attendu"
+    if not SYMBOL_RE.match(str(data.get("symbol", "UNKNOWN")).upper()):
+        return "symbole hors format"
+    for key, value in data.items():
+        if isinstance(value, str) and len(value) > MAX_FIELD_LENGTH:
+            return f"champ « {key} » trop long"
+    return None
+
 @app.post("/webhook")
 async def receive_webhook(request: Request):
     try:
@@ -716,6 +734,11 @@ async def receive_webhook(request: Request):
         except Exception as e:
             print(f"❌ Erreur lecture payload webhook : {e}")
             return JSONResponse(status_code=400, content={"error": "JSON invalide"})
+
+    error = _payload_error(data)
+    if error:
+        print(f"⛔ Charge utile webhook refusée : {error}")
+        return JSONResponse(status_code=400, content={"error": f"Charge utile refusée : {error}"})
 
     _sync_storage()
     symbol = data.get("symbol", "UNKNOWN").upper()
