@@ -86,6 +86,32 @@ class JournalTests(BackendTestCase):
         self.assertFalse(r.json()["persisted"])
 
 
+class PayloadTests(BackendTestCase):
+    def test_charge_utile_non_objet_refusee_en_400(self):
+        r = self.client.post("/webhook", json=[1, 2, 3])
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(server.open_positions, {})
+
+    def test_symbole_hostile_refuse_sans_rien_enregistrer(self):
+        r = self.post(entry(symbol="<img src=x onerror=alert(1)>"))
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(server.open_positions, {})
+        self.assertEqual(server.journal_log, [])
+
+    def test_symbole_avec_point_accepte(self):
+        # Les actifs du Radar peuvent porter un point (ex. CRVUSDC.P) : ne pas les refuser.
+        self.assertEqual(self.post(entry(symbol="CRVUSDC.P")).status_code, 200)
+        self.assertIn("CRVUSDC.P", server.open_positions)
+
+    def test_contrat_continu_tradingview_accepte(self):
+        # syminfo.ticker peut donner « NQ1! » (contrat continu) : le symbole ne doit pas être refusé.
+        self.assertEqual(self.post(entry(symbol="NQ1!")).status_code, 200)
+
+    def test_champ_trop_long_refuse(self):
+        r = self.post(entry(status="X" * 500))
+        self.assertEqual(r.status_code, 400)
+
+
 class AdminTests(BackendTestCase):
     def setUp(self):
         super().setUp()
