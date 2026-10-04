@@ -723,6 +723,15 @@ def _payload_error(data):
             return f"champ « {key} » trop long"
     return None
 
+# Secret partagé entre le Radar et le serveur (variable WEBHOOK_SECRET sur Render). Tant qu'elle
+# n'est pas définie, le webhook accepte les alertes sans secret (transition : anciennes alertes R6.1).
+def _webhook_authorized(data):
+    expected = os.environ.get("WEBHOOK_SECRET", "").strip()
+    if not expected:
+        return True
+    supplied = str(data.get("secret", ""))
+    return hmac.compare_digest(supplied.encode(), expected.encode())
+
 @app.post("/webhook")
 async def receive_webhook(request: Request):
     try:
@@ -740,6 +749,12 @@ async def receive_webhook(request: Request):
     if error:
         print(f"⛔ Charge utile webhook refusée : {error}")
         return JSONResponse(status_code=400, content={"error": f"Charge utile refusée : {error}"})
+    if not _webhook_authorized(data):
+        print("⛔ Webhook refusé : secret absent ou incorrect")  # jamais la valeur reçue
+        return JSONResponse(status_code=401, content={"error": "Secret webhook absent ou incorrect"})
+    # Le secret ne doit JAMAIS être stocké, journalisé ni diffusé aux dashboards (WebSocket) :
+    # on le retire dès la vérification, avant tout autre traitement.
+    data.pop("secret", None)
 
     _sync_storage()
     symbol = data.get("symbol", "UNKNOWN").upper()

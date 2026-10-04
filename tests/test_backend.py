@@ -1,4 +1,5 @@
 """Tests ciblés du backend (webhook, calcul du R, admin). Aucune écriture réelle : voir fake_storage."""
+import json
 import os
 import sys
 import unittest
@@ -24,6 +25,7 @@ def entry(**over):
 
 class BackendTestCase(unittest.TestCase):
     def setUp(self):
+        os.environ.pop("WEBHOOK_SECRET", None)  # isolation : aucun test ne doit hériter d'un secret réel
         FAKE.JOURNAL.clear()
         FAKE.STATE.clear()
         FAKE.fail_writes = False
@@ -110,6 +112,47 @@ class PayloadTests(BackendTestCase):
     def test_champ_trop_long_refuse(self):
         r = self.post(entry(status="X" * 500))
         self.assertEqual(r.status_code, 400)
+
+
+class WebhookSecretTests(BackendTestCase):
+    SECRET = "s3cret-de-test-9"
+
+    def setUp(self):
+        super().setUp()
+        self.env = mock.patch.dict(os.environ, {"WEBHOOK_SECRET": self.SECRET})
+        self.env.start()
+
+    def tearDown(self):
+        self.env.stop()
+
+    def test_sans_secret_refuse_en_401(self):
+        self.assertEqual(self.post(entry()).status_code, 401)
+        self.assertEqual(server.open_positions, {})
+
+    def test_mauvais_secret_refuse_sans_le_renvoyer(self):
+        r = self.post(entry(secret="mauvais"))
+        self.assertEqual(r.status_code, 401)
+        self.assertNotIn(self.SECRET, r.text)
+
+    def test_bon_secret_accepte(self):
+        self.assertEqual(self.post(entry(secret=self.SECRET)).status_code, 200)
+        self.assertIn("GOLD", server.open_positions)
+
+    def test_secret_jamais_stocke_ni_diffuse(self):
+        self.post(entry(secret=self.SECRET))
+        self.post({"symbol": "GOLD", "status": "TP_HIT", "direction": "NONE", "current_price": "103",
+                   "secret": self.SECRET})
+        state = json.dumps([server.market_state, server.last_alerts, server.open_positions,
+                            server.journal_log, FAKE.STATE, FAKE.JOURNAL], default=str)
+        self.assertNotIn(self.SECRET, state)
+        self.assertNotIn('"secret"', state)
+
+    def test_sans_secret_configure_le_webhook_reste_ouvert(self):
+        self.env.stop()
+        try:
+            self.assertEqual(self.post(entry()).status_code, 200)
+        finally:
+            self.env.start()
 
 
 class AdminTests(BackendTestCase):
