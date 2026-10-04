@@ -14,7 +14,7 @@
     :root {
         --bg-body: #030406;
         --bg-elevated: #0d1117;
-        --bg-card: #0f141c;
+        --bg-card: rgba(12, 15, 21, 0.80);
         --bg-card-hover: #141b26;
         --bg-inset: #080a10;
         --border-color: #2a2414;
@@ -760,6 +760,8 @@
 </style>
 </head>
 <body>
+<!-- Fond décoratif : bougies générées au hasard, sans aucune donnée de marché réelle -->
+<canvas id="bg-candles" aria-hidden="true" style="position:fixed;inset:0;width:100%;height:100%;z-index:-1;pointer-events:none;opacity:.45"></canvas>
 
 <header class="navbar">
     <div class="brand-section">
@@ -3256,6 +3258,77 @@
     connectWebSocket();
     // Secours : si la connexion en direct ne s'ouvre pas, l'historique est quand même chargé.
     setTimeout(() => { if (!wsHasConnectedOnce) loadSnapshotsWithBuffer(); }, 4000);
+</script>
+
+<script>
+// Fond décoratif uniquement : bougies aléatoires qui se forment (aucune donnée réelle, aucun appel réseau).
+(() => {
+  const cv = document.getElementById('bg-candles');
+  if (!cv) return;
+  const ctx = cv.getContext('2d');
+  const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const SPACING = 22, BODY_W = 11;
+  let W = 0, H = 0, price = 0.5, candles = [];
+  const clamp = v => Math.min(0.95, Math.max(0.05, v));
+
+  function resize() {
+    const d = window.devicePixelRatio || 1;
+    W = cv.clientWidth; H = cv.clientHeight;
+    cv.width = W * d; cv.height = H * d;
+    ctx.setTransform(d, 0, 0, d, 0, 0);
+  }
+  function makeCandle() {
+    const o = price;
+    const c = clamp(o + (Math.random() - 0.5) * 0.07);
+    const h = Math.max(o, c) + Math.random() * 0.025;
+    const l = Math.min(o, c) - Math.random() * 0.025;
+    price = c;
+    return { o, c, h: Math.min(0.98, h), l: Math.max(0.02, l) };
+  }
+  function draw() {
+    ctx.clearRect(0, 0, W, H);
+    const yOf = v => H * (0.92 - v * 0.8);
+    const maxN = Math.ceil(W / SPACING) + 1;
+    const start = Math.max(0, candles.length - maxN);
+    for (let i = start; i < candles.length; i++) {
+      const k = candles[i];
+      const x = W - (candles.length - i) * SPACING;
+      const up = k.c >= k.o;
+      const col = up ? '255,199,60' : '255,77,109';
+      ctx.strokeStyle = `rgba(${col},0.9)`;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(x + BODY_W / 2, yOf(k.h));
+      ctx.lineTo(x + BODY_W / 2, yOf(k.l));
+      ctx.stroke();
+      const top = yOf(Math.max(k.o, k.c)), bot = yOf(Math.min(k.o, k.c));
+      ctx.fillStyle = `rgba(${col},${up ? 0.55 : 0.75})`;
+      ctx.fillRect(x, top, BODY_W, Math.max(2, bot - top));
+    }
+  }
+  function init() {
+    resize();
+    candles = [];
+    for (let i = 0; i < Math.ceil(W / SPACING) + 10; i++) candles.push(makeCandle());
+    draw();
+    if (reduce) return;
+    // une nouvelle bougie toutes les 1,6 s ; la dernière « se forme » en continu
+    setInterval(() => { candles.push(makeCandle()); if (candles.length > 400) candles.shift(); }, 1600);
+    setInterval(() => {
+      const last = candles[candles.length - 1];
+      if (!last) return;
+      const c = clamp(last.o + (Math.random() - 0.5) * 0.09);
+      last.c = c;
+      last.h = Math.min(0.98, Math.max(last.o, c) + Math.random() * 0.02);
+      last.l = Math.max(0.02, Math.min(last.o, c) - Math.random() * 0.02);
+      price = c;
+      draw();
+    }, 220);
+    setInterval(draw, 400);
+  }
+  window.addEventListener('resize', () => { resize(); draw(); });
+  init();
+})();
 </script>
 </body>
 </html>
