@@ -203,7 +203,7 @@ def _compute_r_multiple(entry, exit_data):
         return None
     status = exit_data.get("status")
     if status == "TP_HIT":
-        return _parse_num(entry.get("rr")) or 2
+        return _r_at_price(entry, entry.get("tp_price"))
     if status == "SL_HIT":
         return -1
     if status == "EXPIRED":

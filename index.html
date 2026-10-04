@@ -1579,7 +1579,14 @@
     // et de l'événement de sortie reçu (qui ne contient que le prix courant, pas entry/sl/tp).
     function computeRMultiple(entryData, exitData) {
         if (!entryData) return null;
-        if (exitData.status === 'TP_HIT') return parseNum(entryData.rr) || 2;
+        if (exitData.status === 'TP_HIT') {
+            // R du TP calculé depuis les niveaux (miroir de _compute_r_multiple côté serveur) : jamais de 2R par défaut.
+            const ep = parseNum(entryData.entry_price), slp = parseNum(entryData.sl_price), tpP = parseNum(entryData.tp_price);
+            if (ep === null || slp === null || tpP === null) return null;
+            const risk = Math.abs(ep - slp);
+            if (risk === 0) return null;
+            return entryData.direction === 'BUY' ? (tpP - ep) / risk : (ep - tpP) / risk;
+        }
         if (exitData.status === 'SL_HIT') return -1;
         if (exitData.status === 'EXPIRED') {
             const ep = parseNum(entryData.entry_price);
