@@ -106,6 +106,14 @@ class AdminTests(BackendTestCase):
             self.login("faux")
         self.assertEqual(self.login("code-de-test-123").status_code, 429)
 
+    def test_en_tete_x_forwarded_for_falsifie_ne_contourne_pas_le_verrou(self):
+        # Le client peut écrire ce qu'il veut en TÊTE de X-Forwarded-For ; seule l'adresse ajoutée
+        # par le proxy (en fin de liste) est fiable. Changer la tête ne doit pas réinitialiser le compteur.
+        for i in range(5):
+            self.login("faux", ip=f"1.1.1.{i}, 10.0.0.9")
+        r = self.login("code-de-test-123", ip="9.9.9.9, 10.0.0.9")
+        self.assertEqual(r.status_code, 429)
+
     def test_bon_code_pose_un_cookie_durci(self):
         r = self.login("code-de-test-123")
         self.assertEqual(r.status_code, 200)

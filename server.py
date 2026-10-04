@@ -626,9 +626,10 @@ def _admin_session_valid(request: Request):
     return hmac.compare_digest(sig, _sign(f"{expiry}.{nonce}", secret)) and int(expiry) > time.time()
 
 def _client_ip(request: Request):
-    # Derrière le proxy Render, l'adresse réelle est la première de X-Forwarded-For.
+    # Chaque proxy AJOUTE en fin de X-Forwarded-For l'adresse qu'il voit : la dernière valeur est la
+    # sienne (fiable). La première est écrite par le client lui-même et peut être falsifiée à chaque essai.
     fwd = request.headers.get("x-forwarded-for", "")
-    return fwd.split(",")[0].strip() if fwd else (request.client.host if request.client else "?")
+    return fwd.split(",")[-1].strip() if fwd else (request.client.host if request.client else "?")
 
 class AdminLogin(BaseModel):
     code: str
