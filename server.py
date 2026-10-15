@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
@@ -12,9 +12,9 @@ import sys
 import asyncio
 import time
 import httpx
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
-from typing import List
+from typing import List, Optional, Dict, Any
 from starlette.websockets import WebSocket, WebSocketDisconnect
 from dotenv import load_dotenv
 
@@ -206,6 +206,8 @@ def _compute_r_multiple(entry, exit_data):
         return _parse_num(entry.get("rr")) or 2
     if status == "SL_HIT":
         return -1
+    if status == "BE_HIT":
+        return 0.0
     if status == "EXPIRED":
         return _r_at_price(entry, exit_data.get("current_price"))
     return None
@@ -217,6 +219,8 @@ def _exit_price(entry, status, exit_data):
         return entry.get("tp_price")
     if entry and status == "SL_HIT":
         return entry.get("sl_price")
+    if entry and status == "BE_HIT":
+        return entry.get("entry_price")
     return exit_data.get("current_price")
 
 def _levels_valid(data):
@@ -268,6 +272,13 @@ def _new_position(symbol, status, data, now, recovered=False):
         "recovered": recovered,
         "version": data.get("version"),
         "trade_id": data.get("trade_id"),
+        "pd_zone": data.get("pd_zone", "--"),
+        "pd_pct": data.get("pd_pct"),
+        "sweep_lvl": data.get("sweep_lvl"),
+        "sweep_type": data.get("sweep_type", "--"),
+        "htf_aligned": data.get("htf_aligned"),
+        "auto_filtered": data.get("auto_filtered", False),
+        "auto_reason": data.get("auto_reason"),
         "targets": _clean_targets(data),
     }
 
@@ -308,7 +319,101 @@ def _record_journal_event(symbol, status, direction, data):
         return []
 
     added = []
-    if direction in ("BUY", "SELL"):
+    if status in ("TP_HIT", "SL_HIT", "EXPIRED", "BE_HIT"):
+        pos = open_positions.pop(symbol, None)
+        trade_id = data.get("trade_id")
+        if pos is None:
+            # 1. Vérification anti-doublon si la sortie a déjà été enregistrée
+            if trade_id:
+                already_exited = any(
+                    r.get("kind") == "exit" and r.get("trade_id") == trade_id
+                    for r in reversed(journal_log)
+                )
+                if already_exited:
+                    return []
+            else:
+                last = next((r for r in reversed(journal_log) if r.get("symbol") == symbol), None)
+                if last is not None and last.get("kind") == "exit":
+                    return []  # sortie déjà enregistrée, aucune position ouverte : doublon
+
+            # 2. Cherche d'abord dans journal_log s'il existe une ligne kind == "entry"
+            # correspondant au même trade_id (s'il est non vide) ou au même symbol
+            candidate_entry = None
+            for r in reversed(journal_log):
+                if r.get("symbol") == symbol and r.get("kind") == "entry":
+                    if trade_id and r.get("trade_id"):
+                        if r.get("trade_id") == trade_id:
+                            candidate_entry = r
+                            break
+                    elif not trade_id:
+                        candidate_entry = r
+                        break
+
+            if candidate_entry:
+                pos = {
+                    "symbol": symbol,
+                    "direction": candidate_entry.get("direction"),
+                    "status": candidate_entry.get("status"),
+                    "quality": candidate_entry.get("quality", "--"),
+                    "grade": candidate_entry.get("grade", "--"),
+                    "rr": candidate_entry.get("rr", "0.0"),
+                    "entry_price": candidate_entry.get("entry_price"),
+                    "sl_price": candidate_entry.get("sl_price"),
+                    "tp_price": candidate_entry.get("tp_price"),
+                    "last_price": data.get("current_price") or candidate_entry.get("entry_price"),
+                    "best_r": candidate_entry.get("best_r") or 0.0,
+                    "session": candidate_entry.get("session") or _session_label_now(),
+                    "opened_at": candidate_entry.get("time"),
+                    "last_update": now,
+                    "recovered": True,
+                    "version": candidate_entry.get("version"),
+                    "trade_id": candidate_entry.get("trade_id"),
+                    "pd_zone": candidate_entry.get("pd_zone", data.get("pd_zone", "--")),
+                    "pd_pct": candidate_entry.get("pd_pct", data.get("pd_pct")),
+                    "sweep_lvl": candidate_entry.get("sweep_lvl", data.get("sweep_lvl")),
+                    "sweep_type": candidate_entry.get("sweep_type", data.get("sweep_type", "--")),
+                    "htf_aligned": candidate_entry.get("htf_aligned", data.get("htf_aligned")),
+                    "auto_filtered": candidate_entry.get("auto_filtered", data.get("auto_filtered", False)),
+                    "auto_reason": candidate_entry.get("auto_reason", data.get("auto_reason")),
+                    "targets": candidate_entry.get("targets") or [],
+                }
+            else:
+                # 3. Si aucune entrée dans journal_log, reconstruire à partir des champs du webhook
+                ep = _parse_num(data.get("entry_price"))
+                if ep is not None and ep > 0:
+                    pos = {
+                        "symbol": symbol,
+                        "direction": data.get("direction") if data.get("direction") in ("BUY", "SELL") else None,
+                        "status": "RECOVERED",
+                        "quality": data.get("quality", "--"),
+                        "grade": data.get("grade", "--"),
+                        "rr": data.get("rr", "0.0"),
+                        "entry_price": data.get("entry_price"),
+                        "sl_price": data.get("sl_price"),
+                        "tp_price": data.get("tp_price"),
+                        "last_price": data.get("current_price") or data.get("entry_price"),
+                        "best_r": 0.0,
+                        "session": _session_label_now(),
+                        "opened_at": None,
+                        "last_update": now,
+                        "recovered": True,
+                        "version": data.get("version"),
+                        "trade_id": trade_id,
+                        "pd_zone": data.get("pd_zone", "--"),
+                        "pd_pct": data.get("pd_pct"),
+                        "sweep_lvl": data.get("sweep_lvl"),
+                        "sweep_type": data.get("sweep_type", "--"),
+                        "htf_aligned": data.get("htf_aligned"),
+                        "auto_filtered": data.get("auto_filtered", False),
+                        "auto_reason": data.get("auto_reason"),
+                        "targets": _clean_targets(data),
+                    }
+        else:
+            _save_positions_to_disk(symbol)
+        row = _exit_row(symbol, status, pos, data, now)
+        _append_journal(row)
+        added.append(row)
+    elif direction in ("BUY", "SELL"):
         pos = open_positions.get(symbol)
         if pos is not None and _same_levels(pos, data):
             return []  # même entrée renvoyée deux fois (retry webhook) : pas de doublon
@@ -335,19 +440,15 @@ def _record_journal_event(symbol, status, direction, data):
             "tp_price": data.get("tp_price"),
             "version": data.get("version"),
             "trade_id": data.get("trade_id"),
+            "pd_zone": data.get("pd_zone", "--"),
+            "pd_pct": data.get("pd_pct"),
+            "sweep_lvl": data.get("sweep_lvl"),
+            "sweep_type": data.get("sweep_type", "--"),
+            "htf_aligned": data.get("htf_aligned"),
+            "auto_filtered": data.get("auto_filtered", False),
+            "auto_reason": data.get("auto_reason"),
             "targets": open_positions[symbol]["targets"],
         }
-        _append_journal(row)
-        added.append(row)
-    elif status in ("TP_HIT", "SL_HIT", "EXPIRED"):
-        pos = open_positions.pop(symbol, None)
-        if pos is None:
-            last = next((r for r in reversed(journal_log) if r.get("symbol") == symbol), None)
-            if last is not None and last.get("kind") == "exit":
-                return []  # sortie déjà enregistrée, aucune position ouverte : doublon
-        else:
-            _save_positions_to_disk(symbol)
-        row = _exit_row(symbol, status, pos, data, now)
         _append_journal(row)
         added.append(row)
     return added
@@ -373,8 +474,343 @@ def _exit_row(symbol, status, pos, data, now):
         "r_multiple": _compute_r_multiple(pos, data) if status != "REPLACED" else None,
         "version": (pos.get("version") if pos else None) or data.get("version"),
         "trade_id": (pos.get("trade_id") if pos else None) or data.get("trade_id"),
+        "pd_zone": (pos.get("pd_zone") if pos else None) or data.get("pd_zone", "--"),
+        "pd_pct": (pos.get("pd_pct") if pos else None) or data.get("pd_pct"),
+        "sweep_lvl": (pos.get("sweep_lvl") if pos else None) or data.get("sweep_lvl"),
+        "sweep_type": (pos.get("sweep_type") if pos else None) or data.get("sweep_type", "--"),
+        "htf_aligned": (pos.get("htf_aligned") if pos and pos.get("htf_aligned") is not None else None) if pos else data.get("htf_aligned"),
+        "auto_filtered": (pos.get("auto_filtered") if pos else None) or data.get("auto_filtered", False),
+        "auto_reason": (pos.get("auto_reason") if pos else None) or data.get("auto_reason"),
         "targets": pos.get("targets") if pos else [],
         "targets_reached": _targets_reached(pos, status) if pos else None,
+    }
+
+# --- Module d'Auto-Correction & Auto-Tuner ---
+def _compute_autotune_rules():
+    """Analyse journal_log par combinaison (symbol, pattern, session, pd_zone).
+    Si une combinaison totalise >= 5 trades clôturés et présente Winrate < 35% ou R cumulé < -2.5R,
+    marque cette règle comme pénalisée / auto-filtrée."""
+    stats = {}
+    for r in journal_log:
+        if r.get("kind") != "exit":
+            continue
+        r_mult = r.get("r_multiple")
+        if r_mult is None or r.get("status") == "REPLACED":
+            continue
+        sym = (r.get("symbol") or "UNKNOWN").upper()
+        pat = r.get("entry_status") or r.get("status") or "UNKNOWN"
+        sess = r.get("session_at_entry") or r.get("session") or "UNKNOWN"
+        pdz = r.get("pd_zone") or "--"
+        key = (sym, pat, sess, pdz)
+        if key not in stats:
+            stats[key] = []
+        stats[key].append(float(r_mult))
+
+    rules = []
+    penalized_map = {}
+    total_closed = sum(len(v) for v in stats.values())
+
+    for (sym, pat, sess, pdz), r_list in stats.items():
+        n = len(r_list)
+        wins = sum(1 for x in r_list if x > 0)
+        losses = sum(1 for x in r_list if x <= 0)
+        wr = round((wins / n) * 100, 1) if n > 0 else 0.0
+        r_sum = round(sum(r_list), 2)
+        penalized = n >= 5 and (wr < 35.0 or r_sum < -2.5)
+        reason = None
+        if penalized:
+            reasons = []
+            if wr < 35.0:
+                reasons.append(f"Winrate faible ({wr}% < 35%)")
+            if r_sum < -2.5:
+                reasons.append(f"R cumulé négatif ({r_sum:+.1f}R < -2.5R)")
+            reason = " & ".join(reasons) + f" sur {n} trades"
+            penalized_map[(sym, pat, sess, pdz)] = reason
+
+        rules.append({
+            "symbol": sym,
+            "pattern": pat,
+            "session": sess,
+            "pd_zone": pdz,
+            "trades_count": n,
+            "wins": wins,
+            "losses": losses,
+            "win_rate": wr,
+            "r_sum": r_sum,
+            "penalized": penalized,
+            "reason": reason
+        })
+
+    rules.sort(key=lambda x: (not x["penalized"], -x["trades_count"]))
+    return {
+        "total_closed_trades": total_closed,
+        "penalized_rules_count": len(penalized_map),
+        "rules": rules,
+        "penalized_map": penalized_map
+    }
+
+@app.get("/api/autotune")
+async def get_autotune():
+    _sync_storage()
+    tuning = _compute_autotune_rules()
+    return {
+        "total_closed_trades": tuning["total_closed_trades"],
+        "penalized_rules_count": tuning["penalized_rules_count"],
+        "rules": tuning["rules"]
+    }
+
+# --- Module Bougies Historiques (GET /api/candles) ---
+YF_MAPPING = {
+    "GOLD": "GC=F",
+    "XAUUSD": "GC=F",
+    "EURUSD": "EURUSD=X",
+    "GBPUSD": "GBPUSD=X",
+    "USDJPY": "USDJPY=X",
+    "AUDUSD": "AUDUSD=X",
+    "USDCAD": "USDCAD=X",
+    "USDCHF": "USDCHF=X",
+    "NZDUSD": "NZDUSD=X",
+    "BTCUSD": "BTC-USD",
+    "BTC": "BTC-USD",
+    "ETHUSD": "ETH-USD",
+    "ETH": "ETH-USD",
+    "SOLUSD": "SOL-USD",
+    "US100": "NQ=F",
+    "NAS100": "NQ=F",
+    "US500": "ES=F",
+    "SPX500": "ES=F",
+    "US30": "YM=F",
+    "GER40": "^GDAXI",
+    "DAX": "^GDAXI",
+}
+
+def _parse_ts(ts_val):
+    if not ts_val:
+        return None
+    try:
+        val = float(ts_val)
+        if val > 1e11:
+            val /= 1000.0
+        return datetime.fromtimestamp(val, timezone.utc)
+    except (ValueError, TypeError):
+        pass
+    try:
+        clean_str = str(ts_val).replace("Z", "+00:00")
+        dt = datetime.fromisoformat(clean_str)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+    except Exception:
+        return None
+
+def _generate_synthetic_candles(
+    symbol: str,
+    start_dt: datetime,
+    end_dt: datetime,
+    entry_dt: datetime,
+    exit_dt: datetime,
+    entry_price: Optional[float],
+    sl_price: Optional[float],
+    tp_price: Optional[float],
+    exit_price: Optional[float],
+    best_r: Optional[float],
+    direction: str
+) -> List[dict]:
+    defaults = {
+        "GOLD": (2650.0, 2),
+        "XAUUSD": (2650.0, 2),
+        "EURUSD": (1.0850, 5),
+        "GBPUSD": (1.3050, 5),
+        "USDJPY": (152.0, 3),
+        "AUDUSD": (0.6650, 5),
+        "USDCAD": (1.3850, 5),
+        "BTCUSD": (67000.0, 2),
+        "BTC": (67000.0, 2),
+        "ETHUSD": (2600.0, 2),
+        "ETH": (2600.0, 2),
+        "US100": (20400.0, 2),
+        "NAS100": (20400.0, 2),
+        "US500": (5850.0, 2),
+        "US30": (43000.0, 2),
+        "GER40": (19500.0, 2),
+    }
+    default_price, decimals = defaults.get(symbol, (100.0, 2))
+    ep = entry_price if (entry_price is not None and entry_price > 0) else default_price
+    is_buy = (direction or "BUY").upper() == "BUY"
+
+    if sl_price is not None and sl_price > 0:
+        sl = sl_price
+        risk = abs(ep - sl)
+    else:
+        risk = ep * 0.003
+        sl = (ep - risk) if is_buy else (ep + risk)
+
+    if risk <= 0:
+        risk = ep * 0.003
+
+    if tp_price is not None and tp_price > 0:
+        tp = tp_price
+    else:
+        tp = (ep + 2.0 * risk) if is_buy else (ep - 2.0 * risk)
+
+    if exit_price is not None and exit_price > 0:
+        xp = exit_price
+    else:
+        if best_r is not None and best_r >= 1.8:
+            xp = tp
+        else:
+            xp = sl
+
+    b_r = best_r if best_r is not None else (2.0 if xp == tp else 0.5)
+    favorable_peak = (ep + b_r * risk) if is_buy else (ep - b_r * risk)
+
+    candles = []
+    cur_dt = start_dt
+    cur_price = ep - (risk * 0.4 if is_buy else -risk * 0.4)
+    step_minutes = 5
+    total_duration = max(timedelta(minutes=step_minutes), exit_dt - entry_dt)
+
+    while cur_dt <= end_dt:
+        ts_sec = int(cur_dt.timestamp())
+        open_p = cur_price
+
+        if cur_dt < entry_dt:
+            pre_f = max(0.0, min(1.0, (cur_dt - start_dt).total_seconds() / max(1.0, (entry_dt - start_dt).total_seconds())))
+            if 0.75 <= pre_f <= 0.90:
+                target_p = sl + (risk * 0.05 if is_buy else -risk * 0.05)
+            else:
+                target_p = ep + (risk * 0.3 * (1.0 - pre_f) * (-1 if is_buy else 1))
+        elif cur_dt <= exit_dt:
+            trade_f = max(0.0, min(1.0, (cur_dt - entry_dt).total_seconds() / total_duration.total_seconds()))
+            if trade_f < 0.6:
+                sub_f = trade_f / 0.6
+                target_p = ep + (favorable_peak - ep) * sub_f
+            else:
+                sub_f = (trade_f - 0.6) / 0.4
+                target_p = favorable_peak + (xp - favorable_peak) * sub_f
+        else:
+            target_p = xp
+
+        seed = int(ts_sec) % 10000
+        noise = ((seed % 100) / 100.0 - 0.5) * (risk * 0.15)
+        close_p = target_p + noise
+
+        wick_up = abs(((seed * 7) % 50) / 100.0) * (risk * 0.12)
+        wick_dn = abs(((seed * 13) % 50) / 100.0) * (risk * 0.12)
+
+        high_p = max(open_p, close_p) + wick_up
+        low_p = min(open_p, close_p) - wick_dn
+        vol = 200 + (seed % 800)
+
+        candles.append({
+            "time": ts_sec,
+            "open": round(open_p, decimals),
+            "high": round(high_p, decimals),
+            "low": round(low_p, decimals),
+            "close": round(close_p, decimals),
+            "volume": vol
+        })
+
+        cur_price = close_p
+        cur_dt += timedelta(minutes=step_minutes)
+
+    return candles
+
+@app.get("/api/candles")
+async def get_candles(
+    symbol: str = Query(..., description="Symbole de l'actif (ex: GOLD, EURUSD, BTCUSD)"),
+    entry_ts: str = Query(..., description="Date/heure ISO ou timestamp de l'entrée"),
+    exit_ts: Optional[str] = Query(None, description="Date/heure ISO ou timestamp de la sortie"),
+    entry_price: Optional[float] = Query(None),
+    sl_price: Optional[float] = Query(None),
+    tp_price: Optional[float] = Query(None),
+    exit_price: Optional[float] = Query(None),
+    best_r: Optional[float] = Query(None),
+    direction: Optional[str] = Query(None)
+):
+    _sync_storage()
+    sym = symbol.upper()
+    entry_dt = _parse_ts(entry_ts) or datetime.now(timezone.utc)
+    exit_dt = _parse_ts(exit_ts) or (entry_dt + timedelta(minutes=150))
+    if exit_dt < entry_dt:
+        exit_dt = entry_dt + timedelta(minutes=30)
+
+    # Récupérer les prix manquants depuis le journal si possible
+    if entry_price is None or exit_price is None:
+        for r in reversed(journal_log):
+            if (r.get("symbol") or "").upper() == sym:
+                if entry_price is None and _parse_num(r.get("entry_price")) is not None:
+                    entry_price = _parse_num(r.get("entry_price"))
+                if sl_price is None and _parse_num(r.get("sl_price")) is not None:
+                    sl_price = _parse_num(r.get("sl_price"))
+                if tp_price is None and _parse_num(r.get("tp_price")) is not None:
+                    tp_price = _parse_num(r.get("tp_price"))
+                if exit_price is None and _parse_num(r.get("exit_price")) is not None:
+                    exit_price = _parse_num(r.get("exit_price"))
+                if best_r is None and _parse_num(r.get("best_r")) is not None:
+                    best_r = _parse_num(r.get("best_r"))
+                if direction is None and r.get("direction"):
+                    direction = r.get("direction")
+                if entry_price is not None and exit_price is not None:
+                    break
+
+    # Fenêtre : 30 bougies M5 avant entrée (150 min) à 15 bougies après sortie (75 min)
+    start_dt = entry_dt - timedelta(minutes=150)
+    end_dt = exit_dt + timedelta(minutes=75)
+
+    candles = []
+    source = "synthetic"
+
+    yf_ticker = YF_MAPPING.get(sym, sym)
+    try:
+        import yfinance as yf
+        df = yf.download(
+            yf_ticker,
+            start=start_dt.strftime("%Y-%m-%d"),
+            end=(end_dt + timedelta(days=1)).strftime("%Y-%m-%d"),
+            interval="5m",
+            progress=False
+        )
+        if df is not None and not df.empty:
+            if hasattr(df.columns, "levels") and len(df.columns.levels) > 1:
+                df.columns = df.columns.get_level_values(0)
+            df_filtered = df[(df.index >= start_dt) & (df.index <= end_dt)]
+            if len(df_filtered) >= 10:
+                for idx, row in df_filtered.iterrows():
+                    candles.append({
+                        "time": int(idx.timestamp()),
+                        "open": round(float(row["Open"]), 5),
+                        "high": round(float(row["High"]), 5),
+                        "low": round(float(row["Low"]), 5),
+                        "close": round(float(row["Close"]), 5),
+                        "volume": int(row.get("Volume", 0) or 0)
+                    })
+                source = "yfinance"
+    except Exception as e:
+        print(f"ℹ️ [{sym}] yfinance non utilisé ({e}), passage en mode synthétique.")
+
+    if not candles:
+        candles = _generate_synthetic_candles(
+            symbol=sym,
+            start_dt=start_dt,
+            end_dt=end_dt,
+            entry_dt=entry_dt,
+            exit_dt=exit_dt,
+            entry_price=entry_price,
+            sl_price=sl_price,
+            tp_price=tp_price,
+            exit_price=exit_price,
+            best_r=best_r,
+            direction=direction or "BUY"
+        )
+        source = "synthetic"
+
+    return {
+        "status": "success",
+        "symbol": sym,
+        "source": source,
+        "count": len(candles),
+        "candles": candles
     }
 
 @app.get("/api/journal")
@@ -721,6 +1157,20 @@ async def receive_webhook(request: Request):
     symbol = data.get("symbol", "UNKNOWN").upper()
     status = data.get("status", "INFO")
     direction = data.get("direction", "NONE")
+
+    # Moteur d'Auto-Correction si nouveau trade d'entrée
+    if direction in ("BUY", "SELL"):
+        tuning = _compute_autotune_rules()
+        current_sess = _session_label_now()
+        cand_key = (symbol, status, current_sess, data.get("pd_zone", "--"))
+        penalized_reason = tuning["penalized_map"].get(cand_key)
+        if penalized_reason:
+            data["auto_filtered"] = True
+            data["auto_reason"] = penalized_reason
+            print(f"🛡️ [{symbol}] Signal auto-filtré par règle d'auto-tuner : {penalized_reason}")
+        else:
+            data["auto_filtered"] = False
+            data["auto_reason"] = None
 
     print(f"⚡ [{symbol}] {status} | Dir: {direction} | Entree: {data.get('entry_price')} | SL: {data.get('sl_price')} | TP: {data.get('tp_price')}")
 

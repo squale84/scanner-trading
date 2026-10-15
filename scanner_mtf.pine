@@ -2,14 +2,14 @@
 // VERSION DU SCRIPT — à comparer avec ce que Claude annonce à chaque envoi de fichier.
 // Visible en permanence dans le titre sur le graphique (légende en haut à gauche), sans avoir
 // besoin d'ouvrir l'éditeur. Change ce numéro à CHAQUE modification envoyée par Claude.
-SCRIPT_VERSION = "R6.1"
+SCRIPT_VERSION = "R6.2"
 
-// VIS1 : version de l'AFFICHAGE seulement (zones OB / FVG). Le moteur reste R6.1 : SCRIPT_VERSION est la seule
+// VIS1 : version de l'AFFICHAGE seulement (zones OB / FVG). Le moteur reste R6.2 : SCRIPT_VERSION est la seule
 // chaîne envoyée dans les payloads et elle ne change pas.
 DISPLAY_VERSION = "VIS1"
 
 // Version EN TÊTE du nom : la liste « Mes scripts » de TradingView coupe les noms trop longs.
-indicator("Radar ICT R6.1 · VIS1 — Terminal Pro MTF H1-M5", shorttitle="Radar ICT R6.1 · VIS1", overlay=true, max_boxes_count=200, max_lines_count=200, max_labels_count=200, max_bars_back=1000)
+indicator("Radar ICT R6.2 · VIS1 — Terminal Pro MTF H1-M5", shorttitle="Radar ICT R6.2 · VIS1", overlay=true, max_boxes_count=200, max_lines_count=200, max_labels_count=200, max_bars_back=1000)
 
 // ==========================================
 // 1. CONFIGURATION GÉNÉRALE & PARAMÈTRES
@@ -443,6 +443,9 @@ else
 range_high = ta.highest(high, range_lookback)
 range_low  = ta.lowest(low, range_lookback)
 eq_level = (range_high + range_low) / 2
+pd_range_span = range_high - range_low
+pd_pct = pd_range_span > 0 ? ((close - range_low) / pd_range_span * 100.0) : 50.0
+pd_zone = pd_pct < 50.0 ? "DISCOUNT" : "PREMIUM"
 
 // Rendu PDH / PDL / NY Open : objets persistants, ligne en extend.right, label repositionné
 // chaque barre pour suivre le bord droit (comme un indicateur LuxAlgo).
@@ -948,27 +951,69 @@ int STATE_CAUSAL_FVG_CONFIRMED = 3
 int STATE_WAIT_RETEST         = 4
 int STATE_READY               = 5
 
+// Identification du niveau balayé et du type de liquidité ICT
+f_identify_sweep(is_buy, pivot_lvl, prev_pivot_lvl) =>
+    lvl = pivot_lvl
+    ty  = "PIVOT_M5"
+    if is_buy
+        if not na(pdl) and ((low < pdl and close > pdl) or math.abs(pivot_lvl - pdl) <= atr_val * 0.25)
+            lvl := pdl
+            ty  := "PDH/PDL"
+        else if not na(asia_run_lo) and ((low < asia_run_lo and close > asia_run_lo) or math.abs(pivot_lvl - asia_run_lo) <= atr_val * 0.25)
+            lvl := asia_run_lo
+            ty  := "ASIA_H/L"
+        else if not na(lon_run_lo) and ((low < lon_run_lo and close > lon_run_lo) or math.abs(pivot_lvl - lon_run_lo) <= atr_val * 0.25)
+            lvl := lon_run_lo
+            ty  := "LONDON_H/L"
+        else if not na(prev_pivot_lvl) and math.abs(pivot_lvl - prev_pivot_lvl) <= atr_val * 0.20
+            lvl := pivot_lvl
+            ty  := "EQH/EQL"
+        else
+            lvl := pivot_lvl
+            ty  := "PIVOT_M5"
+    else
+        if not na(pdh) and ((high > pdh and close < pdh) or math.abs(pivot_lvl - pdh) <= atr_val * 0.25)
+            lvl := pdh
+            ty  := "PDH/PDL"
+        else if not na(asia_run_hi) and ((high > asia_run_hi and close < asia_run_hi) or math.abs(pivot_lvl - asia_run_hi) <= atr_val * 0.25)
+            lvl := asia_run_hi
+            ty  := "ASIA_H/L"
+        else if not na(lon_run_hi) and ((high > lon_run_hi and close < lon_run_hi) or math.abs(pivot_lvl - lon_run_hi) <= atr_val * 0.25)
+            lvl := lon_run_hi
+            ty  := "LONDON_H/L"
+        else if not na(prev_pivot_lvl) and math.abs(pivot_lvl - prev_pivot_lvl) <= atr_val * 0.20
+            lvl := pivot_lvl
+            ty  := "EQH/EQL"
+        else
+            lvl := pivot_lvl
+            ty  := "PIVOT_M5"
+    [lvl, ty]
+
 // --- Machine d'état BUY (Long) ---
-var int   buy_state            = STATE_IDLE
-var int   buy_sweep_bar        = na
-var float buy_sweep_low        = na
-var float buy_mss_level        = na
-var int   buy_displacement_bar = na
-var float buy_pre_disp_high    = na  // haut de la bougie AVANT le displacement — ancre fixe de la FVG causale
-var float buy_fvg_top          = na
-var float buy_fvg_bottom       = na
-var int   buy_fvg_bar          = na
+var int    buy_state            = STATE_IDLE
+var int    buy_sweep_bar        = na
+var float  buy_sweep_low        = na
+var float  buy_sweep_lvl        = na
+var string buy_sweep_type       = "PIVOT_M5"
+var float  buy_mss_level        = na
+var int    buy_displacement_bar = na
+var float  buy_pre_disp_high    = na  // haut de la bougie AVANT le displacement — ancre fixe de la FVG causale
+var float  buy_fvg_top          = na
+var float  buy_fvg_bottom       = na
+var int    buy_fvg_bar          = na
 
 // --- Machine d'état SELL (Short) ---
-var int   sell_state            = STATE_IDLE
-var int   sell_sweep_bar        = na
-var float sell_sweep_high       = na
-var float sell_mss_level        = na
-var int   sell_displacement_bar = na
-var float sell_pre_disp_low     = na  // bas de la bougie AVANT le displacement — ancre fixe de la FVG causale
-var float sell_fvg_top          = na
-var float sell_fvg_bottom       = na
-var int   sell_fvg_bar          = na
+var int    sell_state            = STATE_IDLE
+var int    sell_sweep_bar        = na
+var float  sell_sweep_high       = na
+var float  sell_sweep_lvl        = na
+var string sell_sweep_type       = "PIVOT_M5"
+var float  sell_mss_level        = na
+var int    sell_displacement_bar = na
+var float  sell_pre_disp_low     = na  // bas de la bougie AVANT le displacement — ancre fixe de la FVG causale
+var float  sell_fvg_top          = na
+var float  sell_fvg_bottom       = na
+var int    sell_fvg_bar          = na
 
 // Définition quantitative du Displacement (M5) — seuils réglables (diagnostic du 18/09 : ce
 // filtre éliminait plus de 90% des sweeps à lui seul, goulot d'étranglement principal du moteur).
@@ -1009,6 +1054,9 @@ if buy_state == STATE_IDLE
         buy_sweep_bar        := bar_index
         buy_sweep_low        := low
         buy_mss_level        := vis_last_ph
+        [b_slvl, b_sty]       = f_identify_sweep(true, vis_last_pl, vis_prev_pl)
+        buy_sweep_lvl        := b_slvl
+        buy_sweep_type       := b_sty
         buy_displacement_bar := na
         buy_fvg_top          := na
         buy_fvg_bottom       := na
@@ -1019,6 +1067,9 @@ else if buy_state == STATE_SWEEP_ARMED
         buy_sweep_bar := bar_index
         buy_sweep_low := low
         buy_mss_level := vis_last_ph
+        [b_slvl_r, b_sty_r] = f_identify_sweep(true, vis_last_pl, vis_prev_pl)
+        buy_sweep_lvl  := b_slvl_r
+        buy_sweep_type := b_sty_r
     // Recherche du Displacement + MSS haussier cassant buy_mss_level
     else if bar_confirmed and not na(buy_mss_level) and close > buy_mss_level and close > open and is_disp_quant
         buy_state            := STATE_MSS_CONFIRMED
@@ -1077,6 +1128,9 @@ if sell_state == STATE_IDLE
         sell_sweep_bar        := bar_index
         sell_sweep_high       := high
         sell_mss_level        := vis_last_pl
+        [s_slvl, s_sty]       = f_identify_sweep(false, vis_last_ph, vis_prev_ph)
+        sell_sweep_lvl        := s_slvl
+        sell_sweep_type       := s_sty
         sell_displacement_bar := na
         sell_fvg_top          := na
         sell_fvg_bottom       := na
@@ -1087,6 +1141,9 @@ else if sell_state == STATE_SWEEP_ARMED
         sell_sweep_bar := bar_index
         sell_sweep_high := high
         sell_mss_level := vis_last_pl
+        [s_slvl_r, s_sty_r] = f_identify_sweep(false, vis_last_ph, vis_prev_ph)
+        sell_sweep_lvl  := s_slvl_r
+        sell_sweep_type := s_sty_r
     // Recherche du Displacement + MSS baissier cassant sell_mss_level
     else if bar_confirmed and not na(sell_mss_level) and close < sell_mss_level and close < open and is_disp_quant
         sell_state            := STATE_MSS_CONFIRMED
@@ -1115,20 +1172,25 @@ else if sell_state == STATE_WAIT_RETEST
         sell_state := STATE_READY
 
 // Variables de position
-var bool   in_pos       = false
-var float  pos_entry    = 0.0
-var float  pos_sl       = 0.0
-var float  pos_tp       = 0.0   // TP final suivi pour la sortie : la cible de liquidité la plus lointaine retenue
-var string pos_dir      = "NONE"
-var string pos_quality  = "--"
-var string pos_grade    = "--"
-var string pos_rr_txt   = "0.0" // R du TP final, envoyé au serveur (résultat d'un TP_HIT)
-var string pos_trade_id = ""    // identifiant unique du trade (actif + heure de la bougie d'entrée)
-var int    last_sig_bar = 0
-var box    tp_zone_box  = na
-var box    sl_zone_box  = na
-var line[]  tp_lines    = array.new_line()
-var label[] tp_labels   = array.new_label()
+var bool   in_pos          = false
+var float  pos_entry       = 0.0
+var float  pos_sl          = 0.0
+var float  pos_tp          = 0.0   // TP final suivi pour la sortie : la cible de liquidité la plus lointaine retenue
+var string pos_dir         = "NONE"
+var string pos_quality     = "--"
+var string pos_grade       = "--"
+var string pos_rr_txt      = "0.0" // R du TP final, envoyé au serveur (résultat d'un TP_HIT)
+var string pos_trade_id    = ""    // identifiant unique du trade (actif + heure de la bougie d'entrée)
+var string pos_pd_zone     = "--"
+var float  pos_pd_pct      = 50.0
+var float  pos_sweep_lvl   = 0.0
+var string pos_sweep_type  = "--"
+var bool   pos_htf_aligned = false
+var int    last_sig_bar    = 0
+var box    tp_zone_box     = na
+var box    sl_zone_box     = na
+var line[]  tp_lines       = array.new_line()
+var label[] tp_labels      = array.new_label()
 
 // Timeout de 15 barres M5 entre deux signaux dans la même zone
 cooldown_ok = na(last_sig_bar) or (bar_index - last_sig_bar > cooldown_bars_in)
@@ -1185,17 +1247,22 @@ if raw_buy
             buy_state := STATE_IDLE
             label.new(bar_index, low - (atr_val * 0.8), "✖ BUY sans cible ≥ " + str.tostring(min_rr_in, "#.#") + "R", color=color.new(color.gray, 55), textcolor=color.white, style=label.style_label_up, size=size.tiny)
         else
-            setup_name   = tested_h1_bull ? "RETEST" : "SSL SWEEP"
-            pos_entry    := b_entry
-            pos_sl       := b_entry - b_risk
-            pos_tp       := array.get(t_px, array.size(t_px) - 1)
-            pos_rr_txt   := str.tostring(array.get(t_r, array.size(t_r) - 1), "#.##")
-            pos_trade_id := asset_name + "-" + str.tostring(time)
-            pos_dir      := "BUY"
-            pos_quality  := grade_txt
-            pos_grade    := stars_txt
-            in_pos       := true
-            last_sig_bar := bar_index
+            setup_name      = tested_h1_bull ? "RETEST" : "SSL SWEEP"
+            pos_entry       := b_entry
+            pos_sl          := b_entry - b_risk
+            pos_tp          := array.get(t_px, array.size(t_px) - 1)
+            pos_rr_txt      := str.tostring(array.get(t_r, array.size(t_r) - 1), "#.##")
+            pos_trade_id    := asset_name + "-" + str.tostring(time)
+            pos_dir         := "BUY"
+            pos_quality     := grade_txt
+            pos_grade       := stars_txt
+            pos_pd_pct      := pd_pct
+            pos_pd_zone     := pd_zone
+            pos_sweep_lvl   := not na(buy_sweep_lvl) ? buy_sweep_lvl : (not na(buy_sweep_low) ? buy_sweep_low : close)
+            pos_sweep_type  := buy_sweep_type
+            pos_htf_aligned := h1_bias_bull or tested_h1_bull
+            in_pos          := true
+            last_sig_bar    := bar_index
 
             // Reset de la machine d'état après entrée exécutée
             buy_state := STATE_IDLE
@@ -1216,7 +1283,7 @@ if raw_buy
                 sl_zone_box := box.new(bar_index, pos_entry, bar_index + 30, pos_sl, border_color=na, bgcolor=color.new(color_lux_bear, 88))
             f_draw_targets(t_px, t_ty, t_r)
 
-            payload_entry = '{"symbol":"' + asset_name + '","status":"' + setup_name + '","direction":"BUY","quality":"' + grade_txt + '","grade":"' + stars_txt + '","entry_price":"' + str.tostring(pos_entry, format.mintick) + '","sl_price":"' + str.tostring(pos_sl, format.mintick) + '","tp_price":"' + str.tostring(pos_tp, format.mintick) + '","current_price":"' + str.tostring(close, format.mintick) + '","rr":"' + pos_rr_txt + '","version":"' + SCRIPT_VERSION + '","trade_id":"' + pos_trade_id + '","targets":' + f_targets_json(t_px, t_ty, t_r) + '}'
+            payload_entry = '{"symbol":"' + asset_name + '","status":"' + setup_name + '","direction":"BUY","quality":"' + grade_txt + '","grade":"' + stars_txt + '","entry_price":"' + str.tostring(pos_entry, format.mintick) + '","sl_price":"' + str.tostring(pos_sl, format.mintick) + '","tp_price":"' + str.tostring(pos_tp, format.mintick) + '","current_price":"' + str.tostring(close, format.mintick) + '","rr":"' + pos_rr_txt + '","version":"' + SCRIPT_VERSION + '","trade_id":"' + pos_trade_id + '","pd_zone":"' + pos_pd_zone + '","pd_pct":' + str.tostring(pos_pd_pct, "#.#") + ',"sweep_lvl":"' + str.tostring(pos_sweep_lvl, format.mintick) + '","sweep_type":"' + pos_sweep_type + '","htf_aligned":' + (pos_htf_aligned ? "true" : "false") + ',"targets":' + f_targets_json(t_px, t_ty, t_r) + '}'
             alert(payload_entry, alert.freq_once_per_bar_close)
 
 if raw_sell
@@ -1235,17 +1302,22 @@ if raw_sell
             sell_state := STATE_IDLE
             label.new(bar_index, high + (atr_val * 0.8), "✖ SELL sans cible ≥ " + str.tostring(min_rr_in, "#.#") + "R", color=color.new(color.gray, 55), textcolor=color.white, style=label.style_label_down, size=size.tiny)
         else
-            setup_name   = tested_h1_bear ? "RETEST" : "BSL SWEEP"
-            pos_entry    := s_entry
-            pos_sl       := s_entry + s_risk
-            pos_tp       := array.get(t_px, array.size(t_px) - 1)
-            pos_rr_txt   := str.tostring(array.get(t_r, array.size(t_r) - 1), "#.##")
-            pos_trade_id := asset_name + "-" + str.tostring(time)
-            pos_dir      := "SELL"
-            pos_quality  := grade_txt
-            pos_grade    := stars_txt
-            in_pos       := true
-            last_sig_bar := bar_index
+            setup_name      = tested_h1_bear ? "RETEST" : "BSL SWEEP"
+            pos_entry       := s_entry
+            pos_sl          := s_entry + s_risk
+            pos_tp          := array.get(t_px, array.size(t_px) - 1)
+            pos_rr_txt      := str.tostring(array.get(t_r, array.size(t_r) - 1), "#.##")
+            pos_trade_id    := asset_name + "-" + str.tostring(time)
+            pos_dir         := "SELL"
+            pos_quality     := grade_txt
+            pos_grade       := stars_txt
+            pos_pd_pct      := pd_pct
+            pos_pd_zone     := pd_zone
+            pos_sweep_lvl   := not na(sell_sweep_lvl) ? sell_sweep_lvl : (not na(sell_sweep_high) ? sell_sweep_high : close)
+            pos_sweep_type  := sell_sweep_type
+            pos_htf_aligned := h1_bias_bear or tested_h1_bear
+            in_pos          := true
+            last_sig_bar    := bar_index
 
             // Reset de la machine d'état après entrée exécutée
             sell_state := STATE_IDLE
@@ -1266,7 +1338,7 @@ if raw_sell
                 sl_zone_box := box.new(bar_index, pos_sl, bar_index + 30, pos_entry, border_color=na, bgcolor=color.new(color_lux_bear, 88))
             f_draw_targets(t_px, t_ty, t_r)
 
-            payload_entry = '{"symbol":"' + asset_name + '","status":"' + setup_name + '","direction":"SELL","quality":"' + grade_txt + '","grade":"' + stars_txt + '","entry_price":"' + str.tostring(pos_entry, format.mintick) + '","sl_price":"' + str.tostring(pos_sl, format.mintick) + '","tp_price":"' + str.tostring(pos_tp, format.mintick) + '","current_price":"' + str.tostring(close, format.mintick) + '","rr":"' + pos_rr_txt + '","version":"' + SCRIPT_VERSION + '","trade_id":"' + pos_trade_id + '","targets":' + f_targets_json(t_px, t_ty, t_r) + '}'
+            payload_entry = '{"symbol":"' + asset_name + '","status":"' + setup_name + '","direction":"SELL","quality":"' + grade_txt + '","grade":"' + stars_txt + '","entry_price":"' + str.tostring(pos_entry, format.mintick) + '","sl_price":"' + str.tostring(pos_sl, format.mintick) + '","tp_price":"' + str.tostring(pos_tp, format.mintick) + '","current_price":"' + str.tostring(close, format.mintick) + '","rr":"' + pos_rr_txt + '","version":"' + SCRIPT_VERSION + '","trade_id":"' + pos_trade_id + '","pd_zone":"' + pos_pd_zone + '","pd_pct":' + str.tostring(pos_pd_pct, "#.#") + ',"sweep_lvl":"' + str.tostring(pos_sweep_lvl, format.mintick) + '","sweep_type":"' + pos_sweep_type + '","htf_aligned":' + (pos_htf_aligned ? "true" : "false") + ',"targets":' + f_targets_json(t_px, t_ty, t_r) + '}'
             alert(payload_entry, alert.freq_once_per_bar_close)
 
 // ==========================================
@@ -1284,12 +1356,17 @@ if in_pos
 
     if hit_sl or hit_tp or pos_expired
         exit_status = hit_sl ? "SL_HIT" : (hit_tp ? "TP_HIT" : "EXPIRED")
-        payload_exit = '{"symbol":"' + asset_name + '","status":"' + exit_status + '","direction":"NONE","quality":"--","grade":"--","entry_price":"0.0","sl_price":"0.0","tp_price":"0.0","current_price":"' + str.tostring(close, format.mintick) + '","rr":"0.0","version":"' + SCRIPT_VERSION + '","trade_id":"' + pos_trade_id + '"}'
+        payload_exit = '{"symbol":"' + asset_name + '","status":"' + exit_status + '","direction":"' + pos_dir + '","quality":"' + pos_quality + '","grade":"' + pos_grade + '","entry_price":"' + str.tostring(pos_entry, format.mintick) + '","sl_price":"' + str.tostring(pos_sl, format.mintick) + '","tp_price":"' + str.tostring(pos_tp, format.mintick) + '","current_price":"' + str.tostring(close, format.mintick) + '","rr":"' + pos_rr_txt + '","version":"' + SCRIPT_VERSION + '","trade_id":"' + pos_trade_id + '","pd_zone":"' + pos_pd_zone + '","pd_pct":' + str.tostring(pos_pd_pct, "#.#") + ',"sweep_lvl":"' + str.tostring(pos_sweep_lvl, format.mintick) + '","sweep_type":"' + pos_sweep_type + '","htf_aligned":' + (pos_htf_aligned ? "true" : "false") + '"}'
         alert(payload_exit, alert.freq_once_per_bar_close)
-        in_pos      := false
-        pos_dir     := "NONE"
-        pos_quality := "--"
-        pos_grade   := "--"
+        in_pos          := false
+        pos_dir         := "NONE"
+        pos_quality     := "--"
+        pos_grade       := "--"
+        pos_pd_zone     := "--"
+        pos_pd_pct      := 50.0
+        pos_sweep_lvl   := 0.0
+        pos_sweep_type  := "--"
+        pos_htf_aligned := false
 
         if not na(tp_zone_box)
             box.set_right(tp_zone_box, bar_index)
@@ -1301,7 +1378,7 @@ if in_pos
             label.set_x(lb, bar_index)
     else if bar_index > last_sig_bar
         // Mise à jour de progression à chaque clôture de bougie M5 pendant position active
-        payload_update = '{"symbol":"' + asset_name + '","status":"PRICE_UPDATE","direction":"' + pos_dir + '","quality":"' + pos_quality + '","grade":"' + pos_grade + '","entry_price":"' + str.tostring(pos_entry, format.mintick) + '","sl_price":"' + str.tostring(pos_sl, format.mintick) + '","tp_price":"' + str.tostring(pos_tp, format.mintick) + '","current_price":"' + str.tostring(close, format.mintick) + '","rr":"' + pos_rr_txt + '","version":"' + SCRIPT_VERSION + '","trade_id":"' + pos_trade_id + '"}'
+        payload_update = '{"symbol":"' + asset_name + '","status":"PRICE_UPDATE","direction":"' + pos_dir + '","quality":"' + pos_quality + '","grade":"' + pos_grade + '","entry_price":"' + str.tostring(pos_entry, format.mintick) + '","sl_price":"' + str.tostring(pos_sl, format.mintick) + '","tp_price":"' + str.tostring(pos_tp, format.mintick) + '","current_price":"' + str.tostring(close, format.mintick) + '","rr":"' + pos_rr_txt + '","version":"' + SCRIPT_VERSION + '","trade_id":"' + pos_trade_id + '","pd_zone":"' + pos_pd_zone + '","pd_pct":' + str.tostring(pos_pd_pct, "#.#") + ',"sweep_lvl":"' + str.tostring(pos_sweep_lvl, format.mintick) + '","sweep_type":"' + pos_sweep_type + '","htf_aligned":' + (pos_htf_aligned ? "true" : "false") + '"}'
         alert(payload_update, alert.freq_once_per_bar_close)
 
 // ==========================================

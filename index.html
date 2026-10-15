@@ -10,6 +10,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
 <style>
     :root {
         --bg-body: #05070b;
@@ -870,6 +871,95 @@
     @keyframes flash-green { 0%,100% { background: transparent; } 50% { background: var(--accent-green-soft); } }
     @keyframes flash-red { 0%,100% { background: transparent; } 50% { background: var(--accent-red-soft); } }
 
+    /* --- STYLES REPLAY & COACH ICT --- */
+    .log-table tbody tr.journal-row-clickable {
+        cursor: pointer;
+        transition: background-color 0.15s ease;
+    }
+    .log-table tbody tr.journal-row-clickable:hover {
+        background-color: rgba(47, 107, 255, 0.08) !important;
+    }
+    .btn-replay-action {
+        display: inline-flex; align-items: center; gap: 5px;
+        background: rgba(47, 107, 255, 0.12); border: 1px solid rgba(47, 107, 255, 0.35);
+        color: #60a5fa; font-family: var(--font-ui); font-size: 11px; font-weight: 600;
+        padding: 4px 8px; border-radius: 6px; cursor: pointer; transition: all 0.15s ease;
+        white-space: nowrap;
+    }
+    .btn-replay-action:hover {
+        background: var(--accent-blue); color: #fff; border-color: var(--accent-blue);
+        box-shadow: 0 0 10px rgba(47, 107, 255, 0.4);
+    }
+
+    /* --- STYLES AUTO-TUNER --- */
+    .card-autotune-alert {
+        margin: 6px 0 2px; padding: 6px 10px; border-radius: 6px;
+        background: rgba(169, 123, 255, 0.12); border: 1px solid rgba(169, 123, 255, 0.3);
+        color: #d8b4fe; font-size: 10.5px; font-weight: 600; line-height: 1.35;
+    }
+    .tag-autofiltered {
+        background: rgba(169, 123, 255, 0.18) !important; color: #d8b4fe !important;
+        border: 1px solid rgba(169, 123, 255, 0.4) !important; font-weight: 700;
+    }
+    .autotune-card {
+        background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 8px;
+        padding: 10px 14px; display: flex; justify-content: space-between; align-items: center; gap: 12px;
+    }
+    .autotune-card.penalized {
+        border-color: rgba(255, 69, 105, 0.35); background: rgba(255, 69, 105, 0.04);
+    }
+
+    /* --- MODALE REPLAY & AUDIT ICT --- */
+    #replay-modal-overlay .modal-panel {
+        width: 95vw; max-width: 1400px; height: 90vh; max-height: 900px;
+        display: flex; flex-direction: column;
+    }
+    .replay-layout { flex: 1; display: flex; overflow: hidden; min-height: 0; }
+    .replay-chart-pane {
+        flex: 1; min-width: 0; background: #07090e; display: flex; flex-direction: column; position: relative;
+    }
+    .replay-chart-toolbar {
+        padding: 8px 16px; background: var(--bg-card); border-bottom: 1px solid var(--border-color);
+        display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-shrink: 0;
+    }
+    #replay-chart-container { flex: 1; min-height: 0; width: 100%; height: 100%; position: relative; }
+    .replay-coach-pane {
+        width: 390px; flex-shrink: 0; border-left: 1px solid var(--border-color);
+        background: var(--bg-card); display: flex; flex-direction: column;
+        overflow-y: auto; padding: 18px; gap: 14px;
+    }
+    .coach-section {
+        background: var(--bg-inset); border: 1px solid var(--border-color); border-radius: 8px;
+        padding: 12px 14px; display: flex; flex-direction: column; gap: 10px;
+    }
+    .coach-section-header {
+        font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.6px;
+        color: var(--text-faint); display: flex; justify-content: space-between; align-items: center;
+    }
+    .checklist-item {
+        display: flex; align-items: flex-start; gap: 10px; font-size: 12px; line-height: 1.4;
+        padding: 6px 0; border-bottom: 1px solid var(--border-soft);
+    }
+    .checklist-item:last-child { border-bottom: none; padding-bottom: 0; }
+    .checklist-icon { font-size: 14px; flex-shrink: 0; margin-top: 1px; }
+    .checklist-title { font-weight: 600; color: #fff; }
+    .checklist-desc { color: var(--text-muted); font-size: 11.5px; margin-top: 2px; }
+    .postmortem-box {
+        background: rgba(15, 23, 42, 0.6); border-left: 3px solid var(--accent-blue);
+        border-radius: 0 6px 6px 0; padding: 10px 12px; font-size: 12px; line-height: 1.5; color: #cbd5e1;
+    }
+    .postmortem-box.win { border-left-color: var(--accent-green); background: rgba(0, 224, 138, 0.05); }
+    .postmortem-box.loss { border-left-color: var(--accent-red); background: rgba(255, 69, 105, 0.05); }
+    .advice-box {
+        background: rgba(255, 199, 60, 0.07); border: 1px solid rgba(255, 199, 60, 0.25);
+        border-radius: 6px; padding: 10px 12px; font-size: 12px; line-height: 1.45; color: #fde047;
+    }
+
+    @media (max-width: 900px) {
+        .replay-layout { flex-direction: column; }
+        .replay-coach-pane { width: 100%; border-left: none; border-top: 1px solid var(--border-color); max-height: 280px; }
+    }
+
     @media (max-width: 760px) {
         .modal-body { flex-direction: column; }
         .modal-side { width: 100%; border-left: none; border-top: 1px solid var(--border-color); max-height: 220px; }
@@ -1115,6 +1205,25 @@
         <div class="pos-note" style="padding: 0 18px 12px;">Mois = janvier à décembre, toutes années confondues (saisonnalité). Montants calculés au risque par trade actuellement réglé (champ « Risque max / trade »), identique pour tous les trades. Seuls les trades clôturés avec un résultat en R sont comptés — sur peu de trades, un mois « gagnant » peut être du hasard.</div>
     </div>
 
+    <!-- SECTION 2.8 : AUTO-TUNER ICT -->
+    <div class="log-section" id="autotune-section" style="margin-top: 8px;">
+        <div class="log-header" style="cursor: pointer; user-select: none;" onclick="toggleAutotunePanel()">
+            <div style="display:flex; align-items:center; gap:8px;">
+                <span class="log-title">🧠 Auto-Tuner ICT (Apprentissage actif)</span>
+                <span id="autotune-badge-count" class="tag-chip" style="background: rgba(169, 123, 255, 0.15); color: var(--accent-purple); border-color: rgba(169, 123, 255, 0.3);">0 règle pénalisée</span>
+            </div>
+            <div style="display:flex; align-items:center; gap:10px;">
+                <span id="autotune-summary" style="font-family: var(--font-mono); font-size: 11px; color: var(--text-muted);">Chargement de l'apprentissage...</span>
+                <span id="autotune-toggle-icon" style="font-size:12px; color:var(--text-muted); transition: transform 0.2s;">▼</span>
+            </div>
+        </div>
+        <div id="autotune-body" style="padding: 14px 18px; display: block;">
+            <div id="autotune-rules-container" style="display: flex; flex-direction: column; gap: 8px;">
+                <div style="color: var(--text-muted); font-size: 12px;">Interrogation du moteur d'auto-correction...</div>
+            </div>
+        </div>
+    </div>
+
     <!-- SECTION 3 : LOG -->
     <div class="log-section">
         <div class="log-header">
@@ -1126,7 +1235,7 @@
                 <thead>
                     <tr>
                         <th>Ouverture</th><th>Clôture</th><th>Actif</th><th>Sens</th><th>Pattern ICT</th><th>Session</th>
-                        <th>Qualité</th><th>Prix d'entrée</th><th>Prix de sortie</th><th>Motif</th><th>Résultat</th>
+                        <th>Qualité</th><th>Prix d'entrée</th><th>Prix de sortie</th><th>Motif</th><th>Résultat</th><th>Action</th>
                     </tr>
                 </thead>
                 <tbody id="log-body"></tbody>
@@ -1212,6 +1321,97 @@
                 <button type="submit" class="btn-tv-open" style="border:none; cursor:pointer;">Déverrouiller</button>
             </div>
         </form>
+    </div>
+</div>
+
+<!-- REPLAY & AUDIT ICT MODAL -->
+<div class="modal-overlay" id="replay-modal-overlay" onclick="if(event.target===this) closeReplayModal()">
+    <div class="modal-panel">
+        <div class="modal-header">
+            <div class="modal-header-left" style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+                <span class="modal-symbol" id="rm-symbol" style="font-size: 19px;">--</span>
+                <span class="badge-status" id="rm-dir-badge">--</span>
+                <span class="tag-chip" id="rm-pattern-badge" style="font-weight: 700;">--</span>
+                <span class="tag-chip" id="rm-session-badge">--</span>
+                <span class="tag-chip" id="rm-quality-badge">--</span>
+                <span id="rm-result-badge" class="badge-status" style="font-size: 12.5px;">--</span>
+            </div>
+            <div style="display:flex; align-items:center; gap:10px;">
+                <button class="btn-modal-close" onclick="closeReplayModal()">✕</button>
+            </div>
+        </div>
+        <div class="replay-layout">
+            <!-- ZONE GAUCHE : REPLAY GRAPHIQUE M5 -->
+            <div class="replay-chart-pane">
+                <div class="replay-chart-toolbar">
+                    <div style="display:flex; align-items:center; gap:10px;">
+                        <span style="font-size: 11px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px;">CHANDELIERS M5 • CONTEXTE ICT</span>
+                        <span id="rm-chart-source" class="tag-chip" style="font-size: 10px;">Chargement...</span>
+                    </div>
+                    <div style="display:flex; align-items:center; gap:8px;">
+                        <button class="btn-nav" style="padding: 4px 10px; font-size: 11px;" onclick="reloadReplayCandles()">⟳ Recentrer</button>
+                    </div>
+                </div>
+                <div id="replay-chart-container">
+                    <div id="replay-chart-loading" style="display:flex; align-items:center; justify-content:center; height:100%; color:var(--text-muted); font-size:13px; font-family:var(--font-mono);">
+                        Chargement des bougies M5...
+                    </div>
+                </div>
+            </div>
+
+            <!-- ZONE DROITE : PANNEAU COACH & AUDIT ICT -->
+            <div class="replay-coach-pane">
+                <!-- SCORE GLOBAL -->
+                <div style="display:flex; align-items:center; justify-content:space-between; padding-bottom: 10px; border-bottom: 1px solid var(--border-color);">
+                    <div>
+                        <div style="font-size: 10px; text-transform: uppercase; letter-spacing: 0.6px; color: var(--text-faint); font-weight: 700;">AUDIT CONFORMITÉ ICT</div>
+                        <div id="rm-audit-verdict" style="font-size: 15px; font-weight: 800; color: #fff; margin-top: 2px;">--</div>
+                    </div>
+                    <div id="rm-audit-score-pill" style="font-family: var(--font-mono); font-size: 13.5px; font-weight: 800; padding: 4px 10px; border-radius: 8px; background: var(--bg-inset); border: 1px solid var(--border-color);">--/4</div>
+                </div>
+
+                <!-- SECTION A : CHECKLIST DES RÈGLES ICT -->
+                <div class="coach-section">
+                    <div class="coach-section-header">
+                        <span>CHECKLIST RÈGLES ICT 2022</span>
+                        <span style="font-size: 10px; color: var(--text-muted);">4 CRITÈRES</span>
+                    </div>
+                    <div id="rm-checklist-container" style="display:flex; flex-direction:column;">
+                        <!-- Rempli dynamiquement -->
+                    </div>
+                </div>
+
+                <!-- SECTION B : DIAGNOSTIC POST-MORTEM -->
+                <div class="coach-section">
+                    <div class="coach-section-header">
+                        <span>DIAGNOSTIC POST-MORTEM</span>
+                        <span id="rm-pm-badge" class="tag-chip" style="font-size: 9.5px;">ANALYSE</span>
+                    </div>
+                    <div id="rm-postmortem-text" class="postmortem-box">
+                        <!-- Rempli dynamiquement -->
+                    </div>
+                    <div id="rm-advice-box" class="advice-box">
+                        <!-- Conseil actionnable -->
+                    </div>
+                </div>
+
+                <!-- SECTION C : REPÈRES TECHNIQUES DU TRADE -->
+                <div class="coach-section">
+                    <div class="coach-section-header">
+                        <span>MÉTADONNÉES TECHNIQUES</span>
+                        <span style="font-size: 10px; color: var(--text-muted);">MFE &amp; EXÉCUTION</span>
+                    </div>
+                    <div class="modal-data-row"><span>Entrée</span><span id="rm-meta-entry">--</span></div>
+                    <div class="modal-data-row"><span>Stop-Loss</span><span id="rm-meta-sl" style="color: var(--accent-red);">--</span></div>
+                    <div class="modal-data-row"><span>Take-Profit</span><span id="rm-meta-tp" style="color: var(--accent-green);">--</span></div>
+                    <div class="modal-data-row"><span>Sortie Réelle</span><span id="rm-meta-exit">--</span></div>
+                    <div class="modal-data-row"><span>MFE Max (Best R)</span><span id="rm-meta-bestr" style="color: var(--accent-gold);">--</span></div>
+                    <div class="modal-data-row"><span>Zone P/D</span><span id="rm-meta-pd">--</span></div>
+                    <div class="modal-data-row"><span>Pool Liquidité</span><span id="rm-meta-sweep">--</span></div>
+                    <div class="modal-data-row" id="rm-autofilter-row" style="display:none;"><span style="color:var(--accent-purple);">Statut Auto-Tuner</span><span id="rm-meta-autofilter" style="color:var(--accent-purple); font-weight:700;">--</span></div>
+                </div>
+            </div>
+        </div>
     </div>
 </div>
 
@@ -1329,6 +1529,7 @@
                 </div>
             </div>
             <div class="card-news-alert" id="news-alert-${sym}" style="display:none;"></div>
+            <div class="card-autotune-alert" id="autotune-alert-${sym}" style="display:none;"></div>
             <div class="tags-row" id="tags-${sym}"></div>
             <div class="metrics">
                 <div class="data-row"><span>Entrée Setup</span><span class="val-mono" id="entry-${sym}">--</span></div>
@@ -2609,7 +2810,7 @@
 
     const utcDate = t => t ? new Date(t + 'Z') : null;
 
-    function tradeRowHtml(t) {
+    function tradeRowHtml(t, idx) {
         const e = t.entry, x = t.exit;
         const dir = e.direction || (x && x.direction);
         const dirColor = dir === "BUY" ? "var(--accent-green)" : (dir === "SELL" ? "var(--accent-red)" : "var(--text-muted)");
@@ -2630,7 +2831,7 @@
             motif = '<td><span class="badge-status" title="Une nouvelle entrée est arrivée sur cet actif avant la sortie de celle-ci.">Sortie non enregistrée</span></td>';
             result = '<td style="color: var(--text-muted);" title="Aucune sortie enregistrée pour cette entrée : le résultat ne peut pas être calculé.">résultat indisponible</td>';
         }
-        return `<tr>
+        return `<tr class="journal-row-clickable" onclick="openReplayModalByIndex(${idx})" title="Cliquer pour afficher le Replay Graphique M5 & l'Audit Coach ICT">
             ${dateCellHtml(utcDate(e.time))}
             ${closeCell}
             <td style="font-weight: 700; color: #fff;">${e.symbol}${test}</td>
@@ -2642,12 +2843,14 @@
             ${x ? exitPriceCellHtml(true, x.exit_price) : '<td style="color: var(--text-faint);">—</td>'}
             ${motif}
             ${result}
+            <td><button class="btn-replay-action" onclick="event.stopPropagation(); openReplayModalByIndex(${idx})">🔍 Replay &amp; Audit ICT</button></td>
         </tr>`;
     }
 
     function renderJournalTable() {
         const { trades, orphans } = buildJournalTrades(journalRows);
-        document.getElementById('log-body').innerHTML = trades.map(tradeRowHtml).join('');
+        window._cachedJournalTrades = trades;
+        document.getElementById('log-body').innerHTML = trades.map((t, idx) => tradeRowHtml(t, idx)).join('');
         document.getElementById('log-empty').style.display = trades.length || orphans.length ? 'none' : '';
         hasLogRows = journalRows.length > 0;
         journalOrphanCount = orphans.length;
@@ -2659,8 +2862,10 @@
             <td style="font-weight: 700; color: #fff;">${o.symbol}</td>
             ${statusCellHtml(o.status)}
             ${resultCellHtml(null, null, unavailableReason(o))}
+            <td>—</td>
         </tr>`).join('');
         updateJournalStats();
+        loadAutotuneData();
     }
 
     // Ligne locale (bouton « Signal test ») : même modèle qu'une ligne serveur, jamais enregistrée.
@@ -2774,6 +2979,7 @@
         const pct = document.getElementById("pct-" + sym);
         const tags = document.getElementById("tags-" + sym);
         const sizeRow = document.getElementById("size-row-" + sym);
+        const atAlert = document.getElementById("autotune-alert-" + sym);
 
         card.className = "card";
         badge.className = "badge-status";
@@ -2789,6 +2995,7 @@
         clearNewSignalTag(sym);
         if (tags) tags.innerHTML = "";
         if (sizeRow) sizeRow.style.display = "none";
+        if (atAlert) atAlert.style.display = "none";
     }
 
     /* ===================== MAIN PROCESSOR ===================== */
@@ -2946,7 +3153,18 @@
             if (data.quality && data.quality !== "--") html += `<span class="tag-chip ${qualityClass(data.quality)}">GRADE ${data.quality}</span>`;
             if (data.grade && data.grade !== "--") html += `<span class="tag-chip stars">${data.grade}</span>`;
             if (data.rr && data.rr !== "0.0") html += `<span class="tag-chip">R:R ${data.rr}:1</span>`;
+            if (data.auto_filtered) html += `<span class="tag-chip tag-autofiltered" title="${(data.auto_reason || '').replace(/"/g, '&quot;')}">🛡️ AUTO-FILTRÉ</span>`;
             tags.innerHTML = html;
+        }
+
+        const atAlert = document.getElementById("autotune-alert-" + sym);
+        if (atAlert) {
+            if (data.auto_filtered) {
+                atAlert.style.display = "block";
+                atAlert.innerHTML = `🛡️ <strong>FILTRÉ PAR AUTO-TUNER :</strong> ${(data.auto_reason || 'Configuration historiquement perdante')}`;
+            } else {
+                atAlert.style.display = "none";
+            }
         }
 
         renderPositionSize(sym, data);
@@ -3095,8 +3313,711 @@
     }
 
     document.addEventListener('keydown', (e) => {
-        if (e.key === 'Escape' && currentModalSymbol) closeChartModal();
+        if (e.key === 'Escape') {
+            if (currentModalSymbol) closeChartModal();
+            closeReplayModal();
+        }
     });
+
+    /* ===================== MODULE AUTO-TUNER ===================== */
+    let autotuneData = null;
+    let autotunePanelOpen = true;
+
+    function toggleAutotunePanel() {
+        autotunePanelOpen = !autotunePanelOpen;
+        const body = document.getElementById('autotune-body');
+        const icon = document.getElementById('autotune-toggle-icon');
+        if (body) body.style.display = autotunePanelOpen ? 'block' : 'none';
+        if (icon) icon.style.transform = autotunePanelOpen ? 'rotate(0deg)' : 'rotate(-90deg)';
+    }
+
+    async function loadAutotuneData() {
+        try {
+            const resp = await fetch('/api/autotune');
+            if (!resp.ok) return;
+            autotuneData = await resp.json();
+            renderAutotunePanel();
+        } catch (e) {
+            console.warn('Erreur récupération Auto-Tuner:', e);
+        }
+    }
+
+    function renderAutotunePanel() {
+        if (!autotuneData) return;
+        const countEl = document.getElementById('autotune-badge-count');
+        const summaryEl = document.getElementById('autotune-summary');
+        const container = document.getElementById('autotune-rules-container');
+        if (!container) return;
+
+        const penalized = (autotuneData.rules || []).filter(r => r.penalized);
+        const totalTrades = autotuneData.total_closed_trades || 0;
+
+        if (countEl) countEl.textContent = `${penalized.length} règle(s) pénalisée(s)`;
+        if (summaryEl) summaryEl.textContent = `${totalTrades} trade(s) analysé(s) • ${autotuneData.rules ? autotuneData.rules.length : 0} configuration(s)`;
+
+        if (!autotuneData.rules || autotuneData.rules.length === 0) {
+            container.innerHTML = '<div style="color: var(--text-muted); font-size: 12px;">Aucun trade clôturé analysable pour le moment (nécessite au moins 5 trades par configuration).</div>';
+            return;
+        }
+
+        let html = '';
+        autotuneData.rules.forEach(r => {
+            const isPenalized = r.penalized;
+            const statusBadge = isPenalized 
+                ? `<span class="tag-chip tag-autofiltered">🛡️ AUTO-FILTRÉ</span>` 
+                : `<span class="tag-chip" style="color: var(--accent-green); border-color: rgba(0,224,138,0.3); background: rgba(0,224,138,0.08);">✅ ACTIF</span>`;
+            const rColor = r.r_sum > 0 ? 'var(--accent-green)' : (r.r_sum < 0 ? 'var(--accent-red)' : 'var(--text-muted)');
+            const wrColor = r.win_rate >= 50 ? 'var(--accent-green)' : (r.win_rate >= 35 ? 'var(--accent-gold)' : 'var(--accent-red)');
+
+            html += `
+            <div class="autotune-card ${isPenalized ? 'penalized' : ''}">
+                <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+                    <span style="font-weight:700; color:#fff; font-size:13px;">${r.symbol}</span>
+                    <span class="tag-chip" style="font-weight:600;">${r.pattern}</span>
+                    <span class="tag-chip">${r.session}</span>
+                    <span class="tag-chip" style="font-family:var(--font-mono);">${r.pd_zone}</span>
+                    ${statusBadge}
+                </div>
+                <div style="display:flex; align-items:center; gap:14px; font-family:var(--font-mono); font-size:12px;">
+                    <span>${r.trades_count} trades</span>
+                    <span>WR: <strong style="color:${wrColor};">${r.win_rate}%</strong></span>
+                    <span>R: <strong style="color:${rColor};">${r.r_sum >= 0 ? '+' : ''}${r.r_sum}R</strong></span>
+                </div>
+            </div>`;
+        });
+
+        container.innerHTML = html;
+    }
+
+    /* ===================== MODULE REPLAY & AUDIT ICT ===================== */
+    let currentReplayTrade = null;
+    let replayChartInstance = null;
+    let replayResizeObserver = null;
+
+    function openReplayModalByIndex(index) {
+        const trade = window._cachedJournalTrades && window._cachedJournalTrades[index];
+        if (!trade) return;
+        openReplayModal(trade);
+    }
+
+    function openReplayModal(trade) {
+        if (!trade) return;
+        currentReplayTrade = trade;
+        const e = trade.entry || {};
+        const x = trade.exit || {};
+
+        const sym = e.symbol || x.symbol || '--';
+        const dir = e.direction || x.direction || '--';
+        const pattern = e.status || x.entry_status || x.status || '--';
+        const session = e.session || x.session_at_entry || x.session || '--';
+        const quality = e.quality || x.quality || '--';
+        const grade = e.grade || x.grade || '';
+        const rMult = x.r_multiple !== undefined ? x.r_multiple : null;
+        const bestR = parseNum(x.best_r || e.best_r) || 0;
+        const exitStatus = x.status || (trade.isOpen ? 'EN COURS' : '--');
+
+        const ep = parseNum(e.entry_price || x.entry_price);
+        const sl = parseNum(e.sl_price || x.sl_price);
+        const tp = parseNum(e.tp_price || x.tp_price);
+        const xp = parseNum(x.exit_price || x.last_price);
+
+        const pdZone = e.pd_zone || x.pd_zone || '--';
+        const pdPct = e.pd_pct !== undefined ? e.pd_pct : x.pd_pct;
+        const sweepType = e.sweep_type || x.sweep_type || '--';
+        const sweepLvl = parseNum(e.sweep_lvl || x.sweep_lvl);
+        const htfAligned = e.htf_aligned !== undefined ? e.htf_aligned : x.htf_aligned;
+        const autoFiltered = e.auto_filtered || x.auto_filtered;
+        const autoReason = e.auto_reason || x.auto_reason;
+
+        document.getElementById('rm-symbol').textContent = sym;
+        const dirBadge = document.getElementById('rm-dir-badge');
+        dirBadge.className = 'badge-status ' + dir;
+        dirBadge.textContent = dir;
+
+        document.getElementById('rm-pattern-badge').textContent = setupIctLabel(pattern);
+        document.getElementById('rm-session-badge').textContent = session;
+        document.getElementById('rm-quality-badge').textContent = quality !== '--' ? `GRADE ${quality} ${grade}` : '--';
+
+        const resBadge = document.getElementById('rm-result-badge');
+        if (rMult !== null) {
+            resBadge.textContent = `${rMult >= 0 ? '+' : ''}${rMult.toFixed(2)}R (${exitStatus})`;
+            resBadge.style.background = rMult > 0 ? 'var(--accent-green-soft)' : (rMult < 0 ? 'var(--accent-red-soft)' : 'var(--bg-inset)');
+            resBadge.style.color = rMult > 0 ? 'var(--accent-green)' : (rMult < 0 ? 'var(--accent-red)' : 'var(--text-muted)');
+            resBadge.style.border = '1px solid ' + (rMult > 0 ? 'var(--accent-green)' : (rMult < 0 ? 'var(--accent-red)' : 'var(--border-color)'));
+        } else if (trade.isOpen) {
+            resBadge.textContent = 'POSITION EN COURS';
+            resBadge.style.background = 'rgba(47, 107, 255, 0.15)';
+            resBadge.style.color = 'var(--accent-blue)';
+            resBadge.style.border = '1px solid var(--accent-blue)';
+        } else {
+            resBadge.textContent = exitStatus;
+            resBadge.style.background = 'var(--bg-inset)';
+            resBadge.style.color = 'var(--text-muted)';
+            resBadge.style.border = '1px solid var(--border-color)';
+        }
+
+        document.getElementById('rm-meta-entry').textContent = formatDisplay(ep);
+        document.getElementById('rm-meta-sl').textContent = formatDisplay(sl);
+        document.getElementById('rm-meta-tp').textContent = formatDisplay(tp);
+        document.getElementById('rm-meta-exit').textContent = xp ? formatDisplay(xp) : (trade.isOpen ? 'En cours' : '--');
+        document.getElementById('rm-meta-bestr').textContent = bestR > 0 ? `+${bestR.toFixed(2)}R` : '--';
+        document.getElementById('rm-meta-pd').textContent = pdZone + (pdPct !== null && pdPct !== undefined && !isNaN(parseFloat(pdPct)) ? ` (${parseFloat(pdPct).toFixed(1)}%)` : '');
+        document.getElementById('rm-meta-sweep').textContent = sweepType !== '--' ? `${sweepType} ${sweepLvl ? '• ' + formatDisplay(sweepLvl) : ''}` : '--';
+
+        const afRow = document.getElementById('rm-autofilter-row');
+        const afMeta = document.getElementById('rm-meta-autofilter');
+        if (autoFiltered) {
+            afRow.style.display = 'flex';
+            afMeta.textContent = `PÉNALISÉ : ${autoReason || 'Règle déficitaire'}`;
+        } else {
+            afRow.style.display = 'none';
+        }
+
+        renderCoachAudit({
+            sym, dir, pattern, session, quality, rMult, bestR, exitStatus,
+            pdZone, pdPct, sweepType, sweepLvl, htfAligned, autoFiltered
+        });
+
+        document.getElementById('replay-modal-overlay').classList.add('open');
+
+        fetchAndRenderReplayCandles(sym, {
+            entryPrice: ep,
+            slPrice: sl,
+            tpPrice: tp,
+            exitPrice: xp,
+            bestR: bestR,
+            direction: dir,
+            quality: quality,
+            exitStatus: exitStatus,
+            rMultiple: rMult,
+            sweepLvl: sweepLvl,
+            sweepType: sweepType,
+            entryTime: e.time,
+            exitTime: x.time,
+            entryTimeSec: e.time ? Math.floor(new Date(e.time + (e.time.endsWith('Z') ? '' : 'Z')).getTime() / 1000) : null,
+            exitTimeSec: x.time ? Math.floor(new Date(x.time + (x.time.endsWith('Z') ? '' : 'Z')).getTime() / 1000) : null
+        });
+    }
+
+    function closeReplayModal() {
+        document.getElementById('replay-modal-overlay').classList.remove('open');
+        if (replayResizeObserver) {
+            replayResizeObserver.disconnect();
+            replayResizeObserver = null;
+        }
+        if (replayChartInstance) {
+            try { replayChartInstance.remove(); } catch (e) {}
+            replayChartInstance = null;
+        }
+    }
+
+    function renderCoachAudit(data) {
+        const { dir, rMult, bestR, exitStatus, pdZone, pdPct, sweepType, sweepLvl, htfAligned, session } = data;
+        const isBuy = dir === 'BUY';
+        const pdNum = parseFloat(pdPct);
+
+        let score = 0;
+        const items = [];
+
+        // 1. Prise de Liquidité
+        const isInstLiq = ['PDH/PDL', 'ASIA_H/L', 'LONDON_H/L', 'EQH/EQL'].includes(sweepType);
+        if (isInstLiq) {
+            score++;
+            items.push({
+                icon: '✅',
+                title: `Liquidité Institutionnelle Majeure (${sweepType})`,
+                desc: `Balayage ciblé d'un pool interbancaire ${sweepLvl ? 'à ' + formatDisplay(sweepLvl) : ''}.`
+            });
+        } else if (sweepType === 'PIVOT_M5') {
+            score += 0.5;
+            items.push({
+                icon: '⚠️',
+                title: `Liquidité Locale (Pivot M5)`,
+                desc: `Balayage d'un swing M5 interne. Moins puissant qu'un niveau de session (PDH/PDL/Asie).`
+            });
+        } else {
+            items.push({
+                icon: '❌',
+                title: `Absence de Pool de Liquidité Identifié`,
+                desc: `Aucun balayage de liquidité formellement détecté avant l'inversion.`
+            });
+        }
+
+        // 2. Loi Premium / Discount
+        const pdOk = (isBuy && (pdZone === 'DISCOUNT' || pdNum < 50)) || (!isBuy && (pdZone === 'PREMIUM' || pdNum >= 50));
+        const pdValStr = !isNaN(pdNum) ? `${pdNum.toFixed(1)}%` : pdZone;
+        if (pdOk) {
+            score++;
+            items.push({
+                icon: '✅',
+                title: isBuy ? `Achat en DISCOUNT (${pdValStr})` : `Vente en PREMIUM (${pdValStr})`,
+                desc: `Conforme à l'algorithme interbancaire : entrée à prix avantageux dans le range.`
+            });
+        } else {
+            items.push({
+                icon: '❌',
+                title: isBuy ? `Achat en PREMIUM (${pdValStr})` : `Vente en DISCOUNT (${pdValStr})`,
+                desc: `Entrée défavorable au-delà de l'équilibre. Risque de correction adverse élevé.`
+            });
+        }
+
+        // 3. Alignement Flux H1
+        if (htfAligned === true) {
+            score++;
+            items.push({
+                icon: '✅',
+                title: `Flux H1 Aligné (Order Flow Conforme)`,
+                desc: `Position dans le sens de la tendance institutionnelle supérieure.`
+            });
+        } else if (htfAligned === false) {
+            items.push({
+                icon: '❌',
+                title: `Contre-Flux H1 (Reversal à contre-courant)`,
+                desc: `Signal à contre-tendance de la structure H1 : probabilité statistique réduite.`
+            });
+        } else {
+            items.push({
+                icon: '⚪',
+                title: `Structure H1 Neutre`,
+                desc: `Le flux de fond supérieur est en consolidation indécise.`
+            });
+        }
+
+        // 4. Timing Killzone
+        const inKz = session && (session.includes('Londres') || session.includes('NY AM'));
+        if (inKz) {
+            score++;
+            items.push({
+                icon: '✅',
+                title: `Timing Killzone (${session})`,
+                desc: `Entrée exécutée pendant la fenêtre de forte injection de liquidité.`
+            });
+        } else {
+            items.push({
+                icon: '❌',
+                title: `Hors Killzone Institutionnelle (${session || 'Hors session'})`,
+                desc: `Risque d'absence de momentum institutionnel et de faux déplacements.`
+            });
+        }
+
+        // Verdict & Score
+        const scorePill = document.getElementById('rm-audit-score-pill');
+        const verdictEl = document.getElementById('rm-audit-verdict');
+        const displayScore = Math.floor(score * 10) / 10;
+        scorePill.textContent = `${displayScore}/4`;
+
+        if (score >= 3.5) {
+            scorePill.style.color = 'var(--accent-green)';
+            scorePill.style.borderColor = 'var(--accent-green)';
+            verdictEl.textContent = 'Setup A+ Exemplaire';
+            verdictEl.style.color = 'var(--accent-green)';
+        } else if (score >= 2.5) {
+            scorePill.style.color = 'var(--accent-gold)';
+            scorePill.style.borderColor = 'var(--accent-gold)';
+            verdictEl.textContent = 'Setup Standard Validé';
+            verdictEl.style.color = 'var(--accent-gold)';
+        } else {
+            scorePill.style.color = 'var(--accent-red)';
+            scorePill.style.borderColor = 'var(--accent-red)';
+            verdictEl.textContent = 'Prise de Risque Non-Conforme';
+            verdictEl.style.color = 'var(--accent-red)';
+        }
+
+        // Rendu Checklist
+        const chContainer = document.getElementById('rm-checklist-container');
+        chContainer.innerHTML = items.map(it => `
+            <div class="checklist-item">
+                <span class="checklist-icon">${it.icon}</span>
+                <div style="flex:1;">
+                    <div class="checklist-title">${it.title}</div>
+                    <div class="checklist-desc">${it.desc}</div>
+                </div>
+            </div>
+        `).join('');
+
+        // Post-Mortem & Conseil ICT
+        const pmText = document.getElementById('rm-postmortem-text');
+        const pmBadge = document.getElementById('rm-pm-badge');
+        const adviceBox = document.getElementById('rm-advice-box');
+
+        if (exitStatus === 'TP_HIT' || (rMult !== null && rMult > 0)) {
+            pmBadge.textContent = 'VICTOIRE';
+            pmBadge.style.background = 'var(--accent-green-soft)';
+            pmBadge.style.color = 'var(--accent-green)';
+            pmText.className = 'postmortem-box win';
+            pmText.innerHTML = `<strong>Exécution gagnante (+${rMult !== null ? rMult.toFixed(2) : '2.00'}R) :</strong> Le trade a respecté l'acheminement du prix vers le pool de liquidité opposé. La confluence des facteurs institutionnels a permis de protéger le Stop-Loss et d'atteindre la cible avec précision.`;
+            adviceBox.innerHTML = `💡 <strong>Conseil Actionnable ICT :</strong> Maintiens cette rigueur de sélection. Note ce trade comme exemple de setup modèle dans ton journal de trading.`;
+        } else if (exitStatus === 'SL_HIT' && bestR >= 1.0) {
+            pmBadge.textContent = 'RETOURNEMENT (MFE)';
+            pmBadge.style.background = 'rgba(255, 199, 60, 0.15)';
+            pmBadge.style.color = 'var(--accent-gold)';
+            pmText.className = 'postmortem-box loss';
+            pmText.innerHTML = `<strong>Opportunité manquée (Excursion favorable +${bestR.toFixed(2)}R) :</strong> La lecture directionnelle initiale était correcte et le cours a offert plus de +1.0R d'amplitude favorable. Cependant, l'absence de passage du Stop à Break-Even ou de prise partielle sur le premier palier a transformé un trade initialement vert en perte intégrale lors du retournement institutionnel.`;
+            adviceBox.innerHTML = `💡 <strong>Conseil Actionnable ICT :</strong> Règle systématique : Dès que le cours atteint +1R ou absorbe le premier pivot opposé, remonte impérativement ton Stop à Break-Even (prix d'entrée).`;
+        } else if (exitStatus === 'SL_HIT') {
+            pmBadge.textContent = 'PERTE DIRECTE';
+            pmBadge.style.background = 'var(--accent-red-soft)';
+            pmBadge.style.color = 'var(--accent-red)';
+            pmText.className = 'postmortem-box loss';
+
+            const flaws = [];
+            if (!pdOk) flaws.push(`entrée à contre-courant de la zone ${pdZone}`);
+            if (!isInstLiq) flaws.push('absence de vrai balayage de liquidité institutionnelle');
+            if (!inKz) flaws.push('trade exécuté hors Killzone');
+            if (htfAligned === false) flaws.push('lutte directe contre le flux H1');
+
+            const flawTxt = flaws.length ? flaws.join(', ') : 'invalidation par volatilité de marché';
+            pmText.innerHTML = `<strong>Invalidation rapide :</strong> Le trade n'a jamais développé de momentum favorable (MFE max de ${bestR > 0 ? '+' + bestR.toFixed(2) + 'R' : '0R'}). Faiblesses constatées : <em>${flawTxt}</em>.`;
+            adviceBox.innerHTML = `💡 <strong>Conseil Actionnable ICT :</strong> Ne force jamais un trade si la zone Premium/Discount ou la Killzone ne sont pas validées : la patience est la première qualité d'un trader ICT.`;
+        } else if (exitStatus === 'EXPIRED') {
+            pmBadge.textContent = 'TEMPORISATION';
+            pmBadge.style.background = 'var(--bg-inset)';
+            pmBadge.style.color = 'var(--text-muted)';
+            pmText.className = 'postmortem-box';
+            pmText.innerHTML = `<strong>Sortie automatique (30 bougies M5) :</strong> Le trade n'a touché ni le TP ni le SL dans les 2h30 imparties. Le marché est entré en compression / consolidation horizontale sans direction claire.`;
+            adviceBox.innerHTML = `💡 <strong>Conseil Actionnable ICT :</strong> Clôturer les trades stagnants permet de libérer le capital et d'éviter les pièges de fin de session.`;
+        } else {
+            pmBadge.textContent = 'EN COURS';
+            pmBadge.style.background = 'rgba(47, 107, 255, 0.15)';
+            pmBadge.style.color = 'var(--accent-blue)';
+            pmText.className = 'postmortem-box';
+            pmText.innerHTML = `<strong>Trade actif :</strong> La position est en cours de surveillance. Le cours évolue actuellement avec une excursion favorable maximale observée de +${bestR.toFixed(2)}R.`;
+            adviceBox.innerHTML = `💡 <strong>Conseil Actionnable ICT :</strong> Laisse le plan se dérouler sans couper prématurément avant les cibles définies.`;
+        }
+    }
+
+    async function fetchAndRenderReplayCandles(sym, tradeData) {
+        const loading = document.getElementById('replay-chart-loading');
+        const sourceEl = document.getElementById('rm-chart-source');
+        if (loading) loading.style.display = 'flex';
+
+        try {
+            const ep = tradeData.entryPrice || '';
+            const sl = tradeData.slPrice || '';
+            const tp = tradeData.tpPrice || '';
+            const xp = tradeData.exitPrice || '';
+            const bestR = tradeData.bestR || '';
+            const dir = tradeData.direction || '';
+            const eTs = tradeData.entryTime || '';
+            const xTs = tradeData.exitTime || '';
+
+            const url = `/api/candles?symbol=${encodeURIComponent(sym)}&entry_ts=${encodeURIComponent(eTs)}&exit_ts=${encodeURIComponent(xTs)}&entry_price=${ep}&sl_price=${sl}&tp_price=${tp}&exit_price=${xp}&best_r=${bestR}&direction=${dir}`;
+            const resp = await fetch(url);
+            const data = await resp.json();
+
+            if (data.status === 'success' && data.candles && data.candles.length > 0) {
+                if (loading) loading.style.display = 'none';
+                if (sourceEl) {
+                    if (data.source === 'yfinance') {
+                        sourceEl.textContent = '🟢 BOUGIES RÉELLES M5';
+                        sourceEl.style.color = 'var(--accent-green)';
+                        sourceEl.style.borderColor = 'rgba(0,224,138,0.3)';
+                    } else {
+                        sourceEl.textContent = '🔵 RECONSTITUTION SYNTHÉTIQUE';
+                        sourceEl.style.color = '#60a5fa';
+                        sourceEl.style.borderColor = 'rgba(96,165,250,0.3)';
+                    }
+                }
+                renderReplayChart(data.candles, tradeData);
+            } else {
+                if (loading) loading.textContent = 'Impossible de charger les bougies pour ce trade.';
+            }
+        } catch (e) {
+            console.error('Erreur chargement bougies replay:', e);
+            if (loading) loading.textContent = 'Erreur réseau lors de la récupération des bougies.';
+        }
+    }
+
+    function reloadReplayCandles() {
+        if (currentReplayTrade) {
+            openReplayModal(currentReplayTrade);
+        }
+    }
+
+    function renderReplayChart(candles, tradeData) {
+        const container = document.getElementById('replay-chart-container');
+        if (!container) return;
+        container.innerHTML = '';
+
+        if (typeof LightweightCharts !== 'undefined') {
+            const chart = LightweightCharts.createChart(container, {
+                width: container.clientWidth || 800,
+                height: container.clientHeight || 500,
+                layout: {
+                    background: { type: 'solid', color: '#07090e' },
+                    textColor: '#94a3b8',
+                    fontSize: 11,
+                    fontFamily: 'JetBrains Mono, monospace',
+                },
+                grid: {
+                    vertLines: { color: 'rgba(30, 41, 59, 0.45)' },
+                    horzLines: { color: 'rgba(30, 41, 59, 0.45)' },
+                },
+                crosshair: {
+                    mode: LightweightCharts.CrosshairMode.Normal,
+                },
+                rightPriceScale: {
+                    borderColor: '#1e293b',
+                },
+                timeScale: {
+                    borderColor: '#1e293b',
+                    timeVisible: true,
+                    secondsVisible: false,
+                },
+            });
+
+            const candleSeries = chart.addCandlestickSeries({
+                upColor: '#089981',
+                downColor: '#f23645',
+                borderVisible: false,
+                wickUpColor: '#089981',
+                wickDownColor: '#f23645',
+            });
+
+            candleSeries.setData(candles);
+
+            // Niveaux de prix : Entry, SL, TP, Sweep
+            if (tradeData.entryPrice) {
+                candleSeries.createPriceLine({
+                    price: tradeData.entryPrice,
+                    color: '#38bdf8',
+                    lineWidth: 2,
+                    lineStyle: LightweightCharts.LineStyle.Solid,
+                    axisLabelVisible: true,
+                    title: 'ENTRÉE ' + (tradeData.direction || ''),
+                });
+            }
+            if (tradeData.slPrice) {
+                candleSeries.createPriceLine({
+                    price: tradeData.slPrice,
+                    color: '#f23645',
+                    lineWidth: 2,
+                    lineStyle: LightweightCharts.LineStyle.Dashed,
+                    axisLabelVisible: true,
+                    title: 'STOP LOSS',
+                });
+            }
+            if (tradeData.tpPrice) {
+                candleSeries.createPriceLine({
+                    price: tradeData.tpPrice,
+                    color: '#089981',
+                    lineWidth: 2,
+                    lineStyle: LightweightCharts.LineStyle.Dashed,
+                    axisLabelVisible: true,
+                    title: 'TAKE PROFIT',
+                });
+            }
+            if (tradeData.sweepLvl) {
+                candleSeries.createPriceLine({
+                    price: tradeData.sweepLvl,
+                    color: '#ffd700',
+                    lineWidth: 1,
+                    lineStyle: LightweightCharts.LineStyle.Dotted,
+                    axisLabelVisible: true,
+                    title: 'LIQ ' + (tradeData.sweepType || 'SWEEP'),
+                });
+            }
+
+            // Marqueurs sur chandeliers (Markers)
+            const markers = [];
+            let entryIdx = Math.min(30, Math.floor(candles.length / 3));
+            if (tradeData.entryTimeSec) {
+                const found = candles.findIndex(c => Math.abs(c.time - tradeData.entryTimeSec) <= 300);
+                if (found !== -1) entryIdx = found;
+            }
+
+            let exitIdx = candles.length - 1;
+            if (tradeData.exitTimeSec) {
+                const found = candles.findIndex(c => Math.abs(c.time - tradeData.exitTimeSec) <= 300);
+                if (found !== -1) exitIdx = found;
+            }
+
+            if (candles[entryIdx]) {
+                markers.push({
+                    time: candles[entryIdx].time,
+                    position: tradeData.direction === 'BUY' ? 'belowBar' : 'aboveBar',
+                    color: tradeData.direction === 'BUY' ? '#089981' : '#f23645',
+                    shape: tradeData.direction === 'BUY' ? 'arrowUp' : 'arrowDown',
+                    text: '▶ ENTRÉE ' + tradeData.direction,
+                });
+            }
+
+            // Marqueur MFE Peak
+            if (tradeData.bestR && tradeData.bestR > 0) {
+                let peakIdx = entryIdx;
+                let bestDiff = 0;
+                const ep = tradeData.entryPrice || candles[entryIdx]?.close || 0;
+                const isBuy = tradeData.direction === 'BUY';
+                for (let i = entryIdx; i <= exitIdx; i++) {
+                    const diff = isBuy ? (candles[i].high - ep) : (ep - candles[i].low);
+                    if (diff > bestDiff) {
+                        bestDiff = diff;
+                        peakIdx = i;
+                    }
+                }
+                if (candles[peakIdx] && peakIdx !== entryIdx && peakIdx !== exitIdx) {
+                    markers.push({
+                        time: candles[peakIdx].time,
+                        position: isBuy ? 'aboveBar' : 'belowBar',
+                        color: '#ffc73c',
+                        shape: 'circle',
+                        text: '⭐ MFE +' + tradeData.bestR.toFixed(2) + 'R',
+                    });
+                }
+            }
+
+            // Marqueur de sortie
+            if (candles[exitIdx] && tradeData.exitStatus) {
+                const isTP = tradeData.exitStatus === 'TP_HIT';
+                const isSL = tradeData.exitStatus === 'SL_HIT';
+                const icon = isTP ? '🎯 TP' : (isSL ? '🛑 SL' : '⏱ EXP');
+                const rTxt = tradeData.rMultiple !== null && tradeData.rMultiple !== undefined ? ` (${tradeData.rMultiple >= 0 ? '+' : ''}${tradeData.rMultiple.toFixed(2)}R)` : '';
+                markers.push({
+                    time: candles[exitIdx].time,
+                    position: isTP ? 'aboveBar' : 'belowBar',
+                    color: isTP ? '#089981' : (isSL ? '#f23645' : '#94a3b8'),
+                    shape: 'square',
+                    text: `${icon} ATTEINT${rTxt}`,
+                });
+            }
+
+            markers.sort((a, b) => a.time - b.time);
+            candleSeries.setMarkers(markers);
+            chart.timeScale().fitContent();
+
+            replayChartInstance = chart;
+
+            replayResizeObserver = new ResizeObserver(() => {
+                if (chart && container) {
+                    chart.applyOptions({
+                        width: container.clientWidth,
+                        height: container.clientHeight
+                    });
+                }
+            });
+            replayResizeObserver.observe(container);
+
+        } else {
+            renderCanvasFallbackChart(container, candles, tradeData);
+        }
+    }
+
+    function renderCanvasFallbackChart(container, candles, tradeData) {
+        container.innerHTML = '';
+        const canvas = document.createElement('canvas');
+        canvas.width = container.clientWidth || 800;
+        canvas.height = container.clientHeight || 500;
+        canvas.style.width = '100%';
+        canvas.style.height = '100%';
+        canvas.style.display = 'block';
+        container.appendChild(canvas);
+
+        const ctx = canvas.getContext('2d');
+        if (!ctx || !candles || candles.length === 0) return;
+
+        const w = canvas.width;
+        const h = canvas.height;
+        const padT = 30, padB = 40, padL = 40, padR = 80;
+        const plotW = w - padL - padR;
+        const plotH = h - padT - padB;
+
+        let minP = Infinity, maxP = -Infinity;
+        candles.forEach(c => {
+            if (c.low < minP) minP = c.low;
+            if (c.high > maxP) maxP = c.high;
+        });
+
+        [tradeData.entryPrice, tradeData.slPrice, tradeData.tpPrice, tradeData.sweepLvl].forEach(p => {
+            if (p && p > 0) {
+                if (p < minP) minP = p;
+                if (p > maxP) maxP = p;
+            }
+        });
+
+        const pRange = (maxP - minP) || 1;
+        const toY = p => padT + (maxP - p) / pRange * plotH;
+        const n = candles.length;
+        const barW = Math.max(2, (plotW / n) * 0.7);
+
+        ctx.fillStyle = '#07090e';
+        ctx.fillRect(0, 0, w, h);
+
+        ctx.strokeStyle = 'rgba(30, 41, 59, 0.4)';
+        ctx.lineWidth = 1;
+        for (let i = 0; i <= 5; i++) {
+            const y = padT + (plotH / 5) * i;
+            ctx.beginPath();
+            ctx.moveTo(padL, y);
+            ctx.lineTo(w - padR, y);
+            ctx.stroke();
+
+            const pVal = maxP - (pRange / 5) * i;
+            ctx.fillStyle = '#64748b';
+            ctx.font = '10px JetBrains Mono, monospace';
+            ctx.textAlign = 'left';
+            ctx.fillText(pVal.toFixed(2), w - padR + 6, y + 3);
+        }
+
+        function drawLevel(price, color, label, dashed = true) {
+            if (!price || price <= 0) return;
+            const y = toY(price);
+            ctx.save();
+            ctx.strokeStyle = color;
+            ctx.lineWidth = 1.5;
+            if (dashed) ctx.setLineDash([5, 4]);
+            ctx.beginPath();
+            ctx.moveTo(padL, y);
+            ctx.lineTo(w - padR, y);
+            ctx.stroke();
+            ctx.fillStyle = color;
+            ctx.font = '10.5px Inter, sans-serif';
+            ctx.fillText(label + ' ' + formatDisplay(price), w - padR + 6, y - 4);
+            ctx.restore();
+        }
+
+        drawLevel(tradeData.tpPrice, '#089981', 'TP');
+        drawLevel(tradeData.entryPrice, '#38bdf8', 'ENTRÉE', false);
+        drawLevel(tradeData.slPrice, '#f23645', 'SL');
+        drawLevel(tradeData.sweepLvl, '#ffd700', 'LIQ ' + (tradeData.sweepType || ''));
+
+        candles.forEach((c, i) => {
+            const x = padL + (i + 0.5) * (plotW / n);
+            const yOpen = toY(c.open);
+            const yClose = toY(c.close);
+            const yHigh = toY(c.high);
+            const yLow = toY(c.low);
+            const isUp = c.close >= c.open;
+            const color = isUp ? '#089981' : '#f23645';
+
+            ctx.strokeStyle = color;
+            ctx.lineWidth = 1.2;
+            ctx.beginPath();
+            ctx.moveTo(x, yHigh);
+            ctx.lineTo(x, yLow);
+            ctx.stroke();
+
+            ctx.fillStyle = color;
+            const topY = Math.min(yOpen, yClose);
+            const bH = Math.max(2, Math.abs(yClose - yOpen));
+            ctx.fillRect(x - barW / 2, topY, barW, bH);
+        });
+
+        let entryIdx = Math.min(30, Math.floor(n / 3));
+        const xEntry = padL + (entryIdx + 0.5) * (plotW / n);
+        const yEntry = toY(tradeData.entryPrice || candles[entryIdx]?.close || 0);
+
+        ctx.fillStyle = '#38bdf8';
+        ctx.font = 'bold 11px Inter, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('▶ ENTRÉE ' + (tradeData.direction || ''), xEntry, yEntry - 14);
+
+        const exitIdx = n - 1;
+        const xExit = padL + (exitIdx + 0.5) * (plotW / n);
+        const yExit = toY(tradeData.exitPrice || candles[exitIdx]?.close || 0);
+        const isTP = tradeData.exitStatus === 'TP_HIT';
+        ctx.fillStyle = isTP ? '#089981' : '#f23645';
+        ctx.fillText((isTP ? '🎯 TP' : '🛑 SL') + ' (' + (tradeData.rMultiple !== null && tradeData.rMultiple !== undefined ? tradeData.rMultiple.toFixed(2) + 'R' : '') + ')', xExit, yExit - 14);
+    }
 
     /* ===================== WEBSOCKET ===================== */
     // Bandeau affiché quand la base de données ne sauvegarde plus (ou n'a pas sauvegardé) des alertes.
@@ -3647,9 +4568,11 @@
         if (savedView === 'journal' || savedView === 'calendar') switchView(savedView);
     } catch (e) {}
     loadCalendar();
+    loadAutotuneData();
     updateNewsCardProtection();
     setInterval(updateNewsCardProtection, 30 * 1000); // Protection news vérifiée toutes les 30s
     setInterval(loadCalendar, 15 * 60 * 1000);
+    setInterval(loadAutotuneData, 60 * 1000); // Actualisation des règles Auto-Tuner toutes les minutes
     setInterval(checkUpcomingEvents, 60 * 1000);
     setInterval(renderOpenPositions, 60 * 1000); // rafraîchit l'alerte « aucune mise à jour depuis X min »
     // C5 : la connexion en direct s'ouvre d'abord ; son ouverture lance le chargement de l'historique.
