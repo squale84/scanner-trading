@@ -252,6 +252,93 @@
         box-shadow: 0 0 10px rgba(0, 224, 138, 0.18);
     }
 
+    /* ============ WIDGET MACROS ICT ============ */
+    .metric-tile.macro-tile {
+        background: #131722;
+        border: 1px solid #2a2e39;
+        transition: border-color 0.3s ease, box-shadow 0.3s ease;
+    }
+
+    .metric-tile.macro-tile.active {
+        border-color: #089981;
+        box-shadow: 0 0 12px rgba(8, 153, 129, 0.28);
+        animation: macroPulse 2.4s infinite ease-in-out;
+    }
+
+    @keyframes macroPulse {
+        0%, 100% {
+            border-color: #089981;
+            box-shadow: 0 0 8px rgba(8, 153, 129, 0.22);
+        }
+        50% {
+            border-color: #00e08a;
+            box-shadow: 0 0 16px rgba(0, 224, 138, 0.45);
+        }
+    }
+
+    .macro-timer {
+        font-family: var(--font-mono);
+        font-variant-numeric: tabular-nums;
+        font-size: 15px;
+        font-weight: 700;
+        color: #fff;
+        letter-spacing: 0.5px;
+    }
+
+    .metric-tile.macro-tile.active .macro-timer {
+        color: #00e08a;
+    }
+
+    .macro-badge {
+        font-size: 9px;
+        padding: 2px 6px;
+        margin-top: 0;
+        vertical-align: middle;
+    }
+
+    .macro-badge.active {
+        border-color: #089981;
+        color: #00e08a;
+        background: rgba(8, 153, 129, 0.15);
+        box-shadow: 0 0 8px rgba(8, 153, 129, 0.3);
+    }
+
+    .macro-subtitle {
+        font-size: 10px;
+        color: var(--text-muted);
+        margin-top: 3px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        font-family: var(--font-ui);
+    }
+
+    .macro-audio-btn {
+        background: transparent;
+        border: 1px solid #2a2e39;
+        color: var(--text-muted);
+        font-size: 11px;
+        padding: 1px 5px;
+        border-radius: 4px;
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        transition: all 0.2s ease;
+        line-height: 1.2;
+    }
+
+    .macro-audio-btn:hover {
+        border-color: #4a5568;
+        color: #fff;
+    }
+
+    .macro-audio-btn.is-active {
+        border-color: #089981;
+        color: #00e08a;
+        background: rgba(8, 153, 129, 0.14);
+    }
+
     /* ============ CONTROLS ============ */
     .controls-bar {
         display: flex;
@@ -445,6 +532,49 @@
     .badge-status.SELL, .badge-status.ENTRY_SELL { background-color: var(--accent-red-soft); color: var(--accent-red); border-color: var(--accent-red); }
     .badge-status.TP_HIT { background-color: rgba(0, 224, 138, 0.22); color: var(--accent-green); border-color: var(--accent-green); }
     .badge-status.SL_HIT { background-color: rgba(255, 69, 105, 0.22); color: var(--accent-red); border-color: var(--accent-red); }
+
+    /* ============ CARD NEWS ALERT (PROTECTION NEWS) ============ */
+    .card-news-alert {
+        display: none;
+        align-items: center;
+        justify-content: center;
+        font-family: var(--font-mono);
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.4px;
+        padding: 5px 8px;
+        border-radius: 6px;
+        margin-bottom: 9px;
+        text-align: center;
+        line-height: 1.2;
+        transition: all 0.25s ease;
+    }
+
+    .card-news-alert.warning-orange {
+        background: rgba(255, 199, 60, 0.12);
+        border: 1px solid rgba(255, 199, 60, 0.5);
+        color: var(--accent-gold);
+    }
+
+    .card-news-alert.danger-red {
+        background: rgba(255, 69, 105, 0.16);
+        border: 1px solid var(--accent-red);
+        color: var(--accent-red);
+        animation: newsFlash 1.4s infinite ease-in-out;
+    }
+
+    @keyframes newsFlash {
+        0%, 100% {
+            box-shadow: 0 0 4px rgba(255, 69, 105, 0.25);
+            border-color: rgba(255, 69, 105, 0.5);
+            opacity: 0.92;
+        }
+        50% {
+            box-shadow: 0 0 14px rgba(255, 69, 105, 0.65);
+            border-color: #ff4569;
+            opacity: 1;
+        }
+    }
 
     /* Quality / RR row */
     .tags-row {
@@ -824,6 +954,20 @@
             </div>
             <div class="metric-icon">🇺🇸</div>
         </div>
+        <div class="metric-tile macro-tile" id="macro-widget">
+            <div style="flex: 1; min-width: 0;">
+                <div style="display: flex; align-items: center; justify-content: space-between; gap: 4px;">
+                    <div class="metric-label" id="macro-title">Macro ICT</div>
+                    <button class="macro-audio-btn" id="macro-audio-toggle" onclick="toggleMacroAudio()" title="Activer / Désactiver la voix synthétisée des macros">🔇</button>
+                </div>
+                <div style="display: flex; align-items: baseline; gap: 7px; margin-top: 3px;">
+                    <span class="macro-timer" id="macro-timer">--:--</span>
+                    <span class="session-badge macro-badge" id="macro-badge">ATTENTE</span>
+                </div>
+                <div class="macro-subtitle" id="macro-subtitle">Initialisation...</div>
+            </div>
+            <div class="metric-icon" id="macro-icon">⏳</div>
+        </div>
     </div>
 
     <!-- CONTROLES -->
@@ -1184,6 +1328,7 @@
                     <span class="badge-status" id="badge-${sym}">STANDBY</span>
                 </div>
             </div>
+            <div class="card-news-alert" id="news-alert-${sym}" style="display:none;"></div>
             <div class="tags-row" id="tags-${sym}"></div>
             <div class="metrics">
                 <div class="data-row"><span>Entrée Setup</span><span class="val-mono" id="entry-${sym}">--</span></div>
@@ -1876,9 +2021,208 @@
         const kzNY = document.getElementById("kz-ny");
         kzNY.textContent = inNY ? "ACTIVE" : "FERMÉE";
         kzNY.className = "session-badge " + (inNY ? "active" : "");
+
+        updateIctMacros();
     }
     setInterval(updateClockAndSessions, 1000);
     updateClockAndSessions();
+
+    /* ===================== MACROS ICT & SYNTHÈSE VOCALE ===================== */
+    const ICT_MACROS = [
+        { id: "london_1", name: "Macro Londres 1", start: "02:33", end: "03:00", session: "Londres" },
+        { id: "london_2", name: "Macro Londres 2", start: "04:03", end: "04:30", session: "Londres" },
+        { id: "ny_am_1",  name: "Macro NY AM 1",  start: "08:50", end: "09:10", session: "NY AM" },
+        { id: "ny_am_2",  name: "Macro NY AM 2",  start: "09:50", end: "10:10", session: "NY AM" },
+        { id: "ny_am_3",  name: "Macro NY AM 3",  start: "10:50", end: "11:10", session: "NY AM" },
+        { id: "ny_pm",    name: "Macro NY PM",    start: "13:10", end: "13:40", session: "NY PM" },
+        { id: "ny_close", name: "Macro NY Close", start: "15:15", end: "15:45", session: "NY Close" }
+    ];
+
+    function timeToSeconds(timeStr) {
+        const [h, m] = timeStr.split(":").map(Number);
+        return h * 3600 + m * 60;
+    }
+
+    const ICT_MACROS_PROCESSED = ICT_MACROS.map(m => ({
+        ...m,
+        startSec: timeToSeconds(m.start),
+        endSec: timeToSeconds(m.end)
+    }));
+
+    function getNYTimeComponents(dateObj) {
+        const formatter = new Intl.DateTimeFormat("en-US", {
+            timeZone: "America/New_York",
+            hour12: false,
+            year: "numeric",
+            month: "2-digit",
+            day: "2-digit",
+            hour: "2-digit",
+            minute: "2-digit",
+            second: "2-digit"
+        });
+        const parts = formatter.formatToParts(dateObj);
+        const map = {};
+        for (const p of parts) map[p.type] = p.value;
+        const hour = parseInt(map.hour, 10) % 24;
+        const minute = parseInt(map.minute, 10);
+        const second = parseInt(map.second, 10);
+        const totalSec = hour * 3600 + minute * 60 + second;
+        const dateKey = `${map.year}-${map.month}-${map.day}`;
+        return { hour, minute, second, totalSec, dateKey };
+    }
+
+    function formatDuration(sec) {
+        if (sec < 0) sec = 0;
+        const h = Math.floor(sec / 3600);
+        const m = Math.floor((sec % 3600) / 60);
+        const s = sec % 60;
+        if (h > 0) {
+            return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+        }
+        return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+    }
+
+    let macroVoiceActive = false;
+    try {
+        macroVoiceActive = localStorage.getItem('macroVoiceAudio') === 'true';
+    } catch (e) {
+        macroVoiceActive = false;
+    }
+
+    const macroAnnouncedSet = new Set();
+    let lastMacroDateKey = "";
+    let lastSpokenSecTimestamp = 0;
+
+    function updateMacroAudioBtn() {
+        const btn = document.getElementById("macro-audio-toggle");
+        if (!btn) return;
+        if (macroVoiceActive) {
+            btn.textContent = "🔊";
+            btn.className = "macro-audio-btn is-active";
+            btn.title = "Voix des macros active (cliquer pour couper)";
+        } else {
+            btn.textContent = "🔇";
+            btn.className = "macro-audio-btn";
+            btn.title = "Voix des macros muette (cliquer pour activer)";
+        }
+    }
+
+    function toggleMacroAudio() {
+        macroVoiceActive = !macroVoiceActive;
+        try {
+            localStorage.setItem('macroVoiceAudio', macroVoiceActive ? 'true' : 'false');
+        } catch (e) {}
+        updateMacroAudioBtn();
+        if (macroVoiceActive && 'speechSynthesis' in window) {
+            speakMacro("Synthèse vocale activée pour les Macros ICT.");
+        }
+    }
+
+    function speakMacro(text) {
+        if (!macroVoiceActive || !('speechSynthesis' in window)) return;
+        const nowSec = Math.floor(Date.now() / 1000);
+        if (nowSec === lastSpokenSecTimestamp) return;
+        lastSpokenSecTimestamp = nowSec;
+
+        try {
+            window.speechSynthesis.cancel();
+            const utterance = new SpeechSynthesisUtterance(text);
+            utterance.lang = "fr-FR";
+            utterance.rate = 1.0;
+            utterance.pitch = 1.0;
+            const voices = window.speechSynthesis.getVoices();
+            const frVoice = voices.find(v => v.lang && v.lang.startsWith("fr"));
+            if (frVoice) utterance.voice = frVoice;
+            window.speechSynthesis.speak(utterance);
+        } catch (e) {
+            console.warn("Erreur synthèse vocale:", e);
+        }
+    }
+
+    if ('speechSynthesis' in window) {
+        window.speechSynthesis.onvoiceschanged = () => {
+            try { window.speechSynthesis.getVoices(); } catch (e) {}
+        };
+    }
+
+    function updateIctMacros() {
+        const now = new Date();
+        const { totalSec, dateKey } = getNYTimeComponents(now);
+
+        if (dateKey !== lastMacroDateKey) {
+            macroAnnouncedSet.clear();
+            lastMacroDateKey = dateKey;
+        }
+
+        const widget = document.getElementById("macro-widget");
+        const titleEl = document.getElementById("macro-title");
+        const timerEl = document.getElementById("macro-timer");
+        const badgeEl = document.getElementById("macro-badge");
+        const subtitleEl = document.getElementById("macro-subtitle");
+
+        if (!widget || !titleEl || !timerEl || !badgeEl || !subtitleEl) return;
+
+        let activeMacro = null;
+        for (const m of ICT_MACROS_PROCESSED) {
+            if (totalSec >= m.startSec && totalSec < m.endSec) {
+                activeMacro = m;
+                break;
+            }
+        }
+
+        if (activeMacro) {
+            widget.classList.add("active");
+            badgeEl.className = "session-badge macro-badge active";
+            badgeEl.textContent = "EN COURS";
+            titleEl.textContent = activeMacro.name;
+
+            const remainingSec = activeMacro.endSec - totalSec;
+            timerEl.textContent = formatDuration(remainingSec);
+            subtitleEl.textContent = `Fin dans ${formatDuration(remainingSec)} (${activeMacro.end} NY)`;
+
+            const startKey = `${dateKey}_${activeMacro.id}_start`;
+            if (!macroAnnouncedSet.has(startKey)) {
+                macroAnnouncedSet.add(startKey);
+                speakMacro(`Attention. Début de la ${activeMacro.name}.`);
+            }
+        } else {
+            widget.classList.remove("active");
+            badgeEl.className = "session-badge macro-badge";
+            badgeEl.textContent = "À VENIR";
+
+            let nextMacro = null;
+            let remSecBeforeStart = 0;
+            let isTomorrow = false;
+
+            for (const m of ICT_MACROS_PROCESSED) {
+                if (m.startSec > totalSec) {
+                    nextMacro = m;
+                    remSecBeforeStart = m.startSec - totalSec;
+                    break;
+                }
+            }
+
+            if (!nextMacro) {
+                nextMacro = ICT_MACROS_PROCESSED[0];
+                remSecBeforeStart = (86400 - totalSec) + nextMacro.startSec;
+                isTomorrow = true;
+            }
+
+            titleEl.textContent = nextMacro.name;
+            timerEl.textContent = formatDuration(remSecBeforeStart);
+            subtitleEl.textContent = isTomorrow 
+                ? `Demain à ${nextMacro.start} NY (${nextMacro.session})` 
+                : `Début à ${nextMacro.start} NY (${nextMacro.session})`;
+
+            if (!isTomorrow && remSecBeforeStart <= 120 && remSecBeforeStart >= 115) {
+                const preKey = `${dateKey}_${nextMacro.id}_pre2m`;
+                if (!macroAnnouncedSet.has(preKey)) {
+                    macroAnnouncedSet.add(preKey);
+                    speakMacro(`Préparation. La ${nextMacro.name} commence dans deux minutes.`);
+                }
+            }
+        }
+    }
 
     function toggleAudio() {
         audioActive = !audioActive;
@@ -2954,6 +3298,7 @@
                     isCalendarCached = true;
                     renderCalendarTable();
                     checkUpcomingEvents();
+                    updateNewsCardProtection();
                 }
             }
         } catch (e) {
@@ -2994,6 +3339,7 @@
 
             renderCalendarTable();
             checkUpcomingEvents();
+            updateNewsCardProtection();
         } catch (e) {
             console.error('Erreur calendrier:', e);
             if (calendarData && calendarData.length > 0) {
@@ -3194,16 +3540,115 @@
             }
         });
         renderCalendarTable(); // rafraîchit la mise en évidence "imminent"
+        updateNewsCardProtection();
+    }
+
+    /* ===================== PROTECTION NEWS (CALENDRIER <-> CARTES) ===================== */
+    const ASSET_CURRENCIES = {
+        GOLD:     ["USD"],
+        US100:    ["USD"],
+        SPX500:   ["USD"],
+        GER40:    ["EUR"],
+        FR40:     ["EUR"],
+        USOIL:    ["USD"],
+        NATGAS:   ["USD"],
+        EURUSD:   ["EUR", "USD"],
+        USDJPY:   ["USD", "JPY"],
+        BTCUSD:   ["USD"],
+        ETHUSD:   ["USD"],
+        SOLUSD:   ["USD"],
+        ADAUSDT:  ["USD"],
+        DOGEUSDT: ["USD"]
+    };
+
+    const newsVoiceAlerted = new Set();
+
+    function updateNewsCardProtection() {
+        if (!calendarData || calendarData.length === 0) return;
+
+        // 1. Synthèse vocale unique à 15 min des annonces High
+        calendarData.forEach(ev => {
+            if (ev.impact !== 'High') return;
+            const mins = minutesUntil(ev.date);
+            // Fenêtre de déclenchement à 15 min (tolérance 13.8 à 15.2 min pour cycle 30s)
+            if (mins <= 15.2 && mins >= 13.8) {
+                const voiceKey = `${ev.country}_${ev.date}_${ev.title || ''}`;
+                if (!newsVoiceAlerted.has(voiceKey)) {
+                    newsVoiceAlerted.add(voiceKey);
+                    speakMacro(`Attention. Annonce économique majeure sur le ${ev.country} dans 15 minutes.`);
+                }
+            }
+        });
+
+        // 2. Détection temporelle de la fenêtre de danger (-5 min à +30 min) pour chaque carte
+        Object.keys(ASSET_CURRENCIES).forEach(sym => {
+            const alertEl = document.getElementById(`news-alert-${sym}`);
+            if (!alertEl) return;
+
+            const currencies = ASSET_CURRENCIES[sym] || [];
+            let activeDanger = null;
+
+            for (const ev of calendarData) {
+                if (ev.impact !== 'High') continue;
+                if (!currencies.includes(ev.country)) continue;
+
+                const mins = minutesUntil(ev.date);
+                // Fenêtre de danger : dans les 30 prochaines minutes ou publié il y a moins de 5 minutes
+                if (mins >= -5 && mins <= 30) {
+                    if (!activeDanger) {
+                        activeDanger = { ev, mins, currency: ev.country };
+                    } else {
+                        // Priorité à l'annonce en cours (entre -5 et 0) ou à la plus imminente
+                        const isCurrentActive = mins <= 0 && mins >= -5;
+                        const isPrevActive = activeDanger.mins <= 0 && activeDanger.mins >= -5;
+                        if ((isCurrentActive && !isPrevActive) || (mins < activeDanger.mins && !isPrevActive)) {
+                            activeDanger = { ev, mins, currency: ev.country };
+                        }
+                    }
+                }
+            }
+
+            if (activeDanger) {
+                alertEl.style.display = "flex";
+                const mins = activeDanger.mins;
+                const curr = activeDanger.currency;
+                const evTitle = typeof translateEventTitle === 'function' ? translateEventTitle(activeDanger.ev.title) : activeDanger.ev.title;
+
+                if (mins > 15) {
+                    // Entre -30 et -15 min : Orange
+                    alertEl.className = "card-news-alert warning-orange";
+                    alertEl.textContent = `⚠️ NEWS ${curr} DANS ${Math.ceil(mins)} MIN`;
+                    alertEl.title = `${evTitle} (${curr}) dans ${Math.round(mins)} min`;
+                } else if (mins > 0) {
+                    // Moins de 15 min avant : Rouge clignotant
+                    alertEl.className = "card-news-alert danger-red";
+                    alertEl.textContent = `⚠️ NEWS ${curr} DANS ${Math.max(1, Math.ceil(mins))} MIN`;
+                    alertEl.title = `${evTitle} (${curr}) dans ${Math.round(mins)} min`;
+                } else {
+                    // Pendant les 5 min suivant la publication : Rouge clignotant
+                    alertEl.className = "card-news-alert danger-red";
+                    alertEl.textContent = `⚠️ NEWS ${curr} EN COURS`;
+                    alertEl.title = `${evTitle} (${curr}) publié il y a ${Math.abs(Math.round(mins))} min`;
+                }
+            } else {
+                alertEl.style.display = "none";
+                alertEl.className = "card-news-alert";
+                alertEl.textContent = "";
+            }
+        });
     }
 
     loadPortfolioVal();
     recomputePerformancePanel();
     initCalendarCache();
+    updateMacroAudioBtn();
     try {
         const savedView = localStorage.getItem('ictRadarView');
         if (savedView === 'journal' || savedView === 'calendar') switchView(savedView);
     } catch (e) {}
     loadCalendar();
+    updateNewsCardProtection();
+    setInterval(updateNewsCardProtection, 30 * 1000); // Protection news vérifiée toutes les 30s
     setInterval(loadCalendar, 15 * 60 * 1000);
     setInterval(checkUpcomingEvents, 60 * 1000);
     setInterval(renderOpenPositions, 60 * 1000); // rafraîchit l'alerte « aucune mise à jour depuis X min »
