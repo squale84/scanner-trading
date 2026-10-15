@@ -1,0 +1,17 @@
+Dossier tampon du 14/10/2026 : rien n'a été supprimé, tout a été déplacé ici. Tu peux vider
+quand tu veux ; rien d'ici n'est dans Git (tout est donc définitif une fois supprimé).
+
+code_rate\        Code des stratégies testées qui n'ont pas passé le critère (PF > 1,2) :
+                  cassure de range, MACD+EMA200, MTF-POI, FVG-RSIDIV, banc de test, MEC.
+                  Les résultats sont conservés dans ..\etude_backtests_2026-10\.
+doublons\         Copies exactes d'autres fichiers (SHA-256 identique) : scripts modify_pine6..12 et
+                  build_instrument_mec.py (l'original est dans code_rate\_archive_MEC...),
+                  CSV en double (voir doublons\csv\DOUBLONS.txt).
+hors_projet\      Installateurs ChatGPT et Microsoft.Services.Store.winmd, sans rapport avec le projet.
+
+ATTENTION avant de vider :
+- code_rate\_archive_MEC_2026-10-10\scanner_mtf_backtest_lab.pine et LAB_modifie_vs_ae9486f.patch
+  sont la SAUVEGARDE des 725 lignes modifiées de scanner_mtf_backtest_lab.pine (non commitées).
+  Ne vide pas ce sous-dossier tant que ces modifications ne sont pas commitées ou abandonnées.
+- v48_strategie.pine est resté à la racine : je n'ai pas retrouvé de copie identique dans
+  Projet_ECC_Test, donc je n'ai pas osé le déplacer.

@@ -13,3 +13,6 @@ last_alerts.json
 backtest_exports/
 *.csv
 card_resets.json
+
+# Banc de test : données de marché téléchargées (volumineuses)
+banc_test/data/

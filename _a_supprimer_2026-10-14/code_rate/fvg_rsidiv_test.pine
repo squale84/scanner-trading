@@ -1,0 +1,341 @@
+//@version=5
+// ============================================================================
+// FVG + DIVERGENCE RSI — V0.1 (stratégie de TEST, indépendante de MTF-POI)
+// ----------------------------------------------------------------------------
+// Règles (définition choisie avec l'utilisateur : divergence formée AU RETOUR dans la FVG) :
+//   1. FVG haussière : trou entre le haut de la bougie N-2 et le bas de la bougie N (taille mini en x ATR).
+//      FVG baissière : symétrique. Une FVG est supprimée si une bougie clôture au-delà de son bord lointain
+//      ou si elle est trop ancienne.
+//      POI : la FVG n'est retenue que si son milieu est en DISCOUNT (achat) ou en PREMIUM (vente), c'est-à-dire
+//      sous / au-dessus de l'équilibre (50 %) du range plus haut/bas des N dernières bougies, mesuré à sa création.
+//   2. ACHAT : un pivot bas (confirmé piv_len bougies plus tard) forme une divergence haussière RSI
+//      (prix : plus bas plus bas ; RSI : plus bas plus haut, par rapport au pivot bas précédent)
+//      ET ce pivot bas se situe DANS une FVG haussière encore valide (mèche sous la FVG tolérée).
+//      VENTE : symétrique avec un pivot haut dans une FVG baissière.
+//   3. Entrée au marché à l'ouverture de la bougie suivant la confirmation du pivot (pas de repaint).
+//   4. Stop : extrême du pivot de divergence +/- une marge (x ATR). Cible : multiple de R.
+//      Ces choix de stop / cible / tolérances sont des CHOIX DE TEST, pas des règles validées.
+// Frais : commission_value dans strategy() = spread aller-retour / 2 (ici 0.2 = 0.4 $ aller-retour, valable
+// pour l'or ; à adapter pour un autre actif). Quantité : 1 unité = 1 once pour l'or (0.01 lot, hypothèse).
+// Limitation : le stop et la cible sont attachés dès le signal, mais la cible est calculée sur la clôture
+// du signal, pas sur le prix d'entrée réel. NON COMPILÉ dans TradingView à la livraison.
+// ============================================================================
+SCRIPT_VERSION = "FVG-RSIDIV V0.1"
+
+strategy("FVG + divergence RSI — test V0.1", shorttitle="FVG-RSIDIV V0.1", overlay=true,
+     initial_capital=222,
+     default_qty_type=strategy.fixed,
+     default_qty_value=1,
+     pyramiding=1,
+     margin_long=1, margin_short=1,
+     calc_on_every_tick=false,
+     commission_type=strategy.commission.cash_per_contract,
+     commission_value=0.2,
+     max_labels_count=100, max_boxes_count=200)
+
+// ==========================================
+// 1. RÉGLAGES
+// ==========================================
+grp_fvg = "FVG"
+fvg_min_atr = input.float(0.3, title="Taille minimale de la FVG (x ATR)", minval=0.0, maxval=3.0, step=0.1, group=grp_fvg)
+fvg_max_age = input.int(300, title="Durée de vie maximale d'une FVG (bougies)", minval=10, maxval=2000, group=grp_fvg)
+max_fvg     = input.int(30, title="Nombre maximal de FVG gardées par sens", minval=5, maxval=100, group=grp_fvg)
+wick_tol    = input.float(0.25, title="Tolérance : mèche du pivot sous/sur la FVG (x ATR)", minval=0.0, maxval=2.0, step=0.05, group=grp_fvg)
+use_pd      = input.bool(true, title="FVG dans le POI : achat en discount, vente en premium", group=grp_fvg)
+dr_len      = input.int(100, title="Range de référence discount/premium : plus haut/bas des N bougies", minval=20, maxval=500, group=grp_fvg)
+
+grp_div = "Divergence RSI"
+rsi_len     = input.int(14, title="RSI : période", minval=2, maxval=50, group=grp_div)
+piv_len     = input.int(3, title="Pivots (gauche = droite, bougies)", minval=2, maxval=10, group=grp_div)
+div_max_bars = input.int(40, title="Distance maximale entre les 2 pivots (bougies)", minval=5, maxval=200, group=grp_div)
+
+grp_sl = "Stop et cible (CHOIX DE TEST)"
+atr_len       = input.int(14, title="ATR : période", minval=2, maxval=100, group=grp_sl)
+sl_margin_atr = input.float(0.1, title="Marge du stop au-delà du pivot (x ATR)", minval=0.0, maxval=2.0, step=0.05, group=grp_sl)
+tp_r          = input.float(2.0, title="Cible : multiple de R (1 = 1:1, 2 = 1:2)", minval=0.5, maxval=10.0, step=0.5, group=grp_sl)
+
+grp_sz = "Taille de position (hypothèses à vérifier)"
+qty_units = input.float(1.0, title="Quantité en unités (or : 1 once = 0,01 lot, hypothèse)", minval=0.01, maxval=1000.0, step=0.01, group=grp_sz)
+risk_max  = input.float(22.0, title="Perte maximale par trade ($) : au-delà, trade refusé", minval=1.0, maxval=1000.0, step=1.0, group=grp_sz)
+eur_per_usd = input.float(0.9, title="HYPOTHESE : EUR pour 1 USD (affichage)", minval=0.5, maxval=1.5, step=0.01, group=grp_sz)
+
+grp_rg = "Période de test"
+use_range = input.bool(false, title="Limiter le test à une période", group=grp_rg)
+t_start   = input.time(timestamp("2026-09-01 00:00"), title="Début", group=grp_rg)
+t_end     = input.time(timestamp("2026-10-31 23:59"), title="Fin", group=grp_rg)
+
+grp_ui = "Affichage"
+show_table = input.bool(true, title="Afficher le tableau de diagnostic", group=grp_ui)
+show_sig   = input.bool(true, title="Flèches et zone sur les signaux retenus", group=grp_ui)
+
+// ==========================================
+// 2. INDICATEURS, FVG ET PIVOTS
+// ==========================================
+rsi_v = ta.rsi(close, rsi_len)
+atr_v = ta.atr(atr_len)
+in_range = not use_range or (time >= t_start and time <= t_end)
+
+bull_fvg = low > high[2] and (low - high[2]) >= fvg_min_atr * atr_v
+bear_fvg = high < low[2] and (low[2] - high) >= fvg_min_atr * atr_v
+
+var float[] bu_top = array.new_float()
+var float[] bu_bot = array.new_float()
+var int[]   bu_bar = array.new_int()
+var float[] be_top = array.new_float()
+var float[] be_bot = array.new_float()
+var int[]   be_bar = array.new_int()
+
+// Supprime les FVG invalidées (clôture au-delà du bord lointain) ou trop anciennes.
+f_purge(float[] t, float[] b, int[] n, bool is_bull) =>
+    int i = array.size(t) - 1
+    while i >= 0
+        bool dead = is_bull ? close < array.get(b, i) : close > array.get(t, i)
+        bool old = bar_index - array.get(n, i) > fvg_max_age
+        if dead or old
+            array.remove(t, i)
+            array.remove(b, i)
+            array.remove(n, i)
+        i -= 1
+    0
+
+f_purge(bu_top, bu_bot, bu_bar, true)
+f_purge(be_top, be_bot, be_bar, false)
+
+var int n_fvg_b = 0
+var int n_fvg_s = 0
+var int n_pd_b = 0
+var int n_pd_s = 0
+// Équilibre (50 %) du range de référence, mesuré à la bougie de création de la FVG (causal).
+float eq_lvl = (ta.highest(high, dr_len) + ta.lowest(low, dr_len)) / 2
+if bull_fvg
+    float mid_b = (low + high[2]) / 2
+    if use_pd and mid_b > eq_lvl
+        n_pd_b += 1
+    else
+        n_fvg_b += 1
+        array.push(bu_top, low)
+        array.push(bu_bot, high[2])
+        array.push(bu_bar, bar_index)
+        if array.size(bu_top) > max_fvg
+            array.shift(bu_top)
+            array.shift(bu_bot)
+            array.shift(bu_bar)
+if bear_fvg
+    float mid_s = (low[2] + high) / 2
+    if use_pd and mid_s < eq_lvl
+        n_pd_s += 1
+    else
+        n_fvg_s += 1
+        array.push(be_top, low[2])
+        array.push(be_bot, high)
+        array.push(be_bar, bar_index)
+        if array.size(be_top) > max_fvg
+            array.shift(be_top)
+            array.shift(be_bot)
+            array.shift(be_bar)
+
+pl = ta.pivotlow(low, piv_len, piv_len)
+ph = ta.pivothigh(high, piv_len, piv_len)
+int piv_bar = bar_index - piv_len
+
+var float pl_prev_p = na
+var float pl_prev_r = na
+var int   pl_prev_b = na
+var float ph_prev_p = na
+var float ph_prev_r = na
+var int   ph_prev_b = na
+var int n_piv_l = 0
+var int n_piv_h = 0
+var int n_div_b = 0
+var int n_div_s = 0
+
+bool bull_div = false
+bool bear_div = false
+float div_low = na
+float div_high = na
+if not na(pl)
+    n_piv_l += 1
+    float r_now = rsi_v[piv_len]
+    if not na(pl_prev_p) and not na(r_now) and pl < pl_prev_p and r_now > pl_prev_r and (piv_bar - pl_prev_b) <= div_max_bars
+        bull_div := true
+        div_low := pl
+        n_div_b += 1
+    pl_prev_p := pl
+    pl_prev_r := r_now
+    pl_prev_b := piv_bar
+if not na(ph)
+    n_piv_h += 1
+    float r_now_h = rsi_v[piv_len]
+    if not na(ph_prev_p) and not na(r_now_h) and ph > ph_prev_p and r_now_h < ph_prev_r and (piv_bar - ph_prev_b) <= div_max_bars
+        bear_div := true
+        div_high := ph
+        n_div_s += 1
+    ph_prev_p := ph
+    ph_prev_r := r_now_h
+    ph_prev_b := piv_bar
+
+// ==========================================
+// 3. SIGNAUX ET ORDRES
+// ==========================================
+var int n_in_b = 0
+var int n_in_s = 0
+var int n_busy = 0
+var int n_ref_b = 0
+var int n_ref_s = 0
+var int n_ent_b = 0
+var int n_ent_s = 0
+var bool  armed = false
+var bool  is_long = true
+var int   sig_bar = na
+var float sl_px = na
+var float tp_px = na
+bool ok_buy = false
+bool ok_sell = false
+
+if bull_div and in_range
+    int kb = -1
+    int szb = array.size(bu_top)
+    if szb > 0
+        for i = szb - 1 to 0
+            float t_ = array.get(bu_top, i)
+            float b_ = array.get(bu_bot, i)
+            int nb_ = array.get(bu_bar, i)
+            if nb_ < piv_bar and div_low <= t_ and div_low >= b_ - wick_tol * atr_v
+                kb := i
+                break
+    if kb >= 0
+        n_in_b += 1
+        if strategy.position_size != 0 or armed
+            n_busy += 1
+        else
+            float sl_b = div_low - sl_margin_atr * atr_v
+            float dist_b = close - sl_b
+            if dist_b <= 0 or dist_b * qty_units > risk_max
+                n_ref_b += 1
+            else
+                strategy.entry("L", strategy.long, qty=qty_units)
+                armed := true
+                is_long := true
+                sig_bar := bar_index
+                sl_px := sl_b
+                tp_px := close + tp_r * dist_b
+                n_ent_b += 1
+                ok_buy := true
+                if show_sig
+                    box.new(array.get(bu_bar, kb), array.get(bu_top, kb), bar_index, array.get(bu_bot, kb), border_color=color.green, bgcolor=color.new(color.green, 85))
+                array.remove(bu_top, kb)
+                array.remove(bu_bot, kb)
+                array.remove(bu_bar, kb)
+
+if bear_div and in_range
+    int ks = -1
+    int szs = array.size(be_top)
+    if szs > 0
+        for i = szs - 1 to 0
+            float t2 = array.get(be_top, i)
+            float b2 = array.get(be_bot, i)
+            int nb2 = array.get(be_bar, i)
+            if nb2 < piv_bar and div_high >= b2 and div_high <= t2 + wick_tol * atr_v
+                ks := i
+                break
+    if ks >= 0
+        n_in_s += 1
+        if strategy.position_size != 0 or armed
+            n_busy += 1
+        else
+            float sl_s = div_high + sl_margin_atr * atr_v
+            float dist_s = sl_s - close
+            if dist_s <= 0 or dist_s * qty_units > risk_max
+                n_ref_s += 1
+            else
+                strategy.entry("S", strategy.short, qty=qty_units)
+                armed := true
+                is_long := false
+                sig_bar := bar_index
+                sl_px := sl_s
+                tp_px := close - tp_r * dist_s
+                n_ent_s += 1
+                ok_sell := true
+                if show_sig
+                    box.new(array.get(be_bar, ks), array.get(be_top, ks), bar_index, array.get(be_bot, ks), border_color=color.red, bgcolor=color.new(color.red, 85))
+                array.remove(be_top, ks)
+                array.remove(be_bot, ks)
+                array.remove(be_bar, ks)
+
+// Stop et cible attachés dès le signal ; l'état "armé" tombe quand la position est refermée.
+if armed
+    if is_long
+        strategy.exit("XL", from_entry="L", stop=sl_px, limit=tp_px)
+    else
+        strategy.exit("XS", from_entry="S", stop=sl_px, limit=tp_px)
+    if strategy.position_size == 0 and bar_index > sig_bar + 1
+        armed := false
+
+plotshape(show_sig and ok_buy, title="Signal achat", style=shape.triangleup, location=location.belowbar, color=color.new(color.lime, 0), size=size.small)
+plotshape(show_sig and ok_sell, title="Signal vente", style=shape.triangledown, location=location.abovebar, color=color.new(color.red, 0), size=size.small)
+
+// ==========================================
+// 4. TABLEAU DE DIAGNOSTIC
+// ==========================================
+var table dbg = table.new(position.top_right, 3, 18, border_color=color.gray, border_width=1, bgcolor=color.new(color.black, 15))
+f_cell(col, row, txt, tcol) =>
+    table.cell(dbg, col, row, txt, text_color=tcol, text_size=size.small, text_halign=text.align_left)
+
+if barstate.islast and show_table
+    closed_n = strategy.closedtrades
+    wins_n = strategy.wintrades
+    net_usd = strategy.netprofit
+    f_cell(0, 0, SCRIPT_VERSION, color.yellow)
+    f_cell(1, 0, "ACHAT", color.lime)
+    f_cell(2, 0, "VENTE", color.red)
+    f_cell(0, 1, "FVG retenues (discount / premium)", color.white)
+    f_cell(1, 1, str.tostring(n_fvg_b), color.white)
+    f_cell(2, 1, str.tostring(n_fvg_s), color.white)
+    f_cell(0, 2, "Pivots bas / hauts confirmés", color.white)
+    f_cell(1, 2, str.tostring(n_piv_l), color.white)
+    f_cell(2, 2, str.tostring(n_piv_h), color.white)
+    f_cell(0, 3, "Divergences RSI (n'importe où)", color.white)
+    f_cell(1, 3, str.tostring(n_div_b), color.white)
+    f_cell(2, 3, str.tostring(n_div_s), color.white)
+    f_cell(0, 4, "Divergences DANS une FVG (signaux)", color.white)
+    f_cell(1, 4, str.tostring(n_in_b), color.white)
+    f_cell(2, 4, str.tostring(n_in_s), color.white)
+    f_cell(0, 5, "Ignorés : position déjà ouverte", color.white)
+    f_cell(1, 5, str.tostring(n_busy), color.white)
+    f_cell(2, 5, "", color.white)
+    f_cell(0, 6, "Refusés : stop trop large / perte > max", color.white)
+    f_cell(1, 6, str.tostring(n_ref_b), color.white)
+    f_cell(2, 6, str.tostring(n_ref_s), color.white)
+    f_cell(0, 7, "Entrées envoyées", color.white)
+    f_cell(1, 7, str.tostring(n_ent_b), color.white)
+    f_cell(2, 7, str.tostring(n_ent_s), color.white)
+    f_cell(0, 8, "--- Strategy Tester (TradingView) ---", color.yellow)
+    f_cell(1, 8, "", color.white)
+    f_cell(2, 8, "", color.white)
+    f_cell(0, 9, "Trades clôturés / gagnants", color.white)
+    f_cell(1, 9, str.tostring(closed_n), color.white)
+    f_cell(2, 9, str.tostring(wins_n), color.white)
+    f_cell(0, 10, "Win rate (%)", color.white)
+    f_cell(1, 10, closed_n > 0 ? str.tostring(wins_n / closed_n * 100, "0.0") : "-", color.white)
+    f_cell(2, 10, "", color.white)
+    f_cell(0, 11, "Profit factor", color.white)
+    f_cell(1, 11, strategy.grossloss > 0 ? str.tostring(strategy.grossprofit / strategy.grossloss, "0.00") : "-", color.white)
+    f_cell(2, 11, "", color.white)
+    f_cell(0, 12, "Résultat net ($ / EUR hyp.)", color.white)
+    f_cell(1, 12, str.tostring(net_usd, "0.00"), color.white)
+    f_cell(2, 12, str.tostring(net_usd * eur_per_usd, "0.00"), color.white)
+    f_cell(0, 13, "Drawdown max ($ / EUR)", color.white)
+    f_cell(1, 13, str.tostring(strategy.max_drawdown, "0.00"), color.white)
+    f_cell(2, 13, str.tostring(strategy.max_drawdown * eur_per_usd, "0.00"), color.white)
+    f_cell(0, 14, "UT du graphique", color.white)
+    f_cell(1, 14, timeframe.period, color.white)
+    f_cell(2, 14, "", color.white)
+    f_cell(0, 15, "Stop : pivot + marge | cible : " + str.tostring(tp_r, "0.0") + " R", color.white)
+    f_cell(1, 15, "", color.white)
+    f_cell(2, 15, "", color.white)
+    f_cell(0, 16, "Frais : 0.4 $ aller-retour (or)", color.white)
+    f_cell(1, 16, "", color.white)
+    f_cell(2, 16, "", color.white)
+    f_cell(0, 17, "FVG écartées (hors discount / premium)", color.white)
+    f_cell(1, 17, str.tostring(n_pd_b), color.white)
+    f_cell(2, 17, str.tostring(n_pd_s), color.white)

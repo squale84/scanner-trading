@@ -103,38 +103,239 @@ color_lux_level = color.new(#B0BEC5, 30)
 // ==========================================
 // 2. EXTRACTION HTF H1 : FVG, BIAIS & BOS
 // ==========================================
+
+type H1Data
+    float bull_top
+    float bull_bot
+    float bear_top
+    float bear_bot
+    float atr
+    float ph
+    float pl
+    int b_sweep
+    int b_mss
+    int b_fvg
+    int b_fvg_exp
+    int b_poi
+    int b_poi_rej
+    int s_sweep
+    int s_mss
+    int s_fvg
+    int s_fvg_exp
+    int s_poi
+    int s_poi_rej
+
 f_get_h1_data() =>
-    h1_atr      = ta.atr(14)
-    h1_ema      = ta.ema(close, 50)
-    h1_ph       = ta.pivothigh(high, 3, 3)
-    h1_pl       = ta.pivotlow(low, 3, 3)
-    [high[1], low[1], high[3], low[3], close[1], h1_ema[1], h1_ema[2], h1_atr[1], h1_ph[1], h1_pl[1]]
-
-[h1_high, h1_low, h1_high2, h1_low2, h1_close, h1_ema, h1_ema_prev, h1_atr, h1_ph, h1_pl] = request.security(syminfo.tickerid, "60", f_get_h1_data(), barmerge.gaps_off, barmerge.lookahead_off)
-
-h1_ema_flat  = math.abs(h1_ema - h1_ema_prev) < (h1_atr * ema_flat_thr)
-h1_bias_bull = (h1_close > h1_ema) and not h1_ema_flat
-h1_bias_bear = (h1_close < h1_ema) and not h1_ema_flat
-
-var float h1_last_ph = na
-var float h1_last_pl = na
-
-if ta.change(time("60"))
+    h1_atr = ta.atr(14)
+    h1_ph = ta.pivothigh(high, 3, 3)
+    h1_pl = ta.pivotlow(low, 3, 3)
+    
+    var float h1_prev_ph = na
+    var float h1_last_ph = na
+    var float h1_prev_pl = na
+    var float h1_last_pl = na
+    
     if not na(h1_ph)
+        h1_prev_ph := h1_last_ph
         h1_last_ph := h1_ph
     if not na(h1_pl)
+        h1_prev_pl := h1_last_pl
         h1_last_pl := h1_pl
+        
+    h1_bias_bull = not na(h1_prev_ph) and not na(h1_prev_pl) and (h1_last_ph > h1_prev_ph) and (h1_last_pl > h1_prev_pl)
+    h1_bias_bear = not na(h1_prev_ph) and not na(h1_prev_pl) and (h1_last_ph < h1_prev_ph) and (h1_last_pl < h1_prev_pl)
 
-h1_bos_bull = ta.change(time("60")) and not na(h1_last_ph) and h1_close > h1_last_ph
-h1_bos_bear = ta.change(time("60")) and not na(h1_last_pl) and h1_close < h1_last_pl
+    h1_c_range = high - low
+    h1_c_body = math.abs(close - open)
+    wick_bot = math.min(open, close) - low
+    wick_top = high - math.max(open, close)
+    rej_buy = h1_c_range > 0 and (wick_bot / h1_c_range) >= 0.35 and close > open
+    rej_sell = h1_c_range > 0 and (wick_top / h1_c_range) >= 0.35 and close < open
+    
+    sweep_l = not na(h1_last_pl) and low < h1_last_pl and close > h1_last_pl and rej_buy
+    sweep_h = not na(h1_last_ph) and high > h1_last_ph and close < h1_last_ph and rej_sell
+    
+    is_disp = h1_c_range > 0 and (h1_c_body / h1_c_range >= 0.5)
+    
+    var int buy_state = 0
+    var float buy_sweep_low = na
+    var float buy_mss_level = na
+    var float buy_ob_top = na
+    var float buy_ob_bot = na
+    var float buy_range_high = na
+    var float buy_poi_top = na
+    var float buy_poi_bot = na
+    
+    var float last_bear_top = na
+    var float last_bear_bot = na
+    
+    
+    var int h1_cnt_buy_sweep = 0
+    var int h1_cnt_buy_mss = 0
+    var int h1_cnt_buy_fvg = 0
+    var int h1_cnt_buy_fvg_exp = 0
+    var int h1_cnt_buy_poi = 0
+    var int h1_cnt_buy_poi_rej = 0
+    
+    var int h1_cnt_sell_sweep = 0
+    var int h1_cnt_sell_mss = 0
+    var int h1_cnt_sell_fvg = 0
+    var int h1_cnt_sell_fvg_exp = 0
+    var int h1_cnt_sell_poi = 0
+    var int h1_cnt_sell_poi_rej = 0
 
-if h1_bos_bull
-    h1_last_ph := na
-if h1_bos_bear
-    h1_last_pl := na
+    var int buy_mss_bar = na
+    var int sell_mss_bar = na
+    
+    if close < open
+        last_bear_top := high
+        last_bear_bot := low
+        
+    if buy_state != 0
+        if not na(buy_sweep_low) and low < buy_sweep_low
+            buy_state := 0
+            
+    if buy_state == 0
+        if sweep_l and h1_bias_bull
+            buy_state := 1
+            buy_sweep_low := low
+            h1_cnt_buy_sweep += 1
+            buy_mss_level := h1_last_ph
+            buy_range_high := high
+    else if buy_state == 1
+        buy_range_high := math.max(buy_range_high, high)
+        if close > buy_mss_level and close > open and is_disp
+            buy_state := 2
+            buy_ob_top := last_bear_top
+            buy_ob_bot := last_bear_bot
+            buy_mss_bar := bar_index
+            h1_cnt_buy_mss += 1
+    else if buy_state == 2
+        buy_range_high := math.max(buy_range_high, high)
+        if low > high[2] and (low - high[2]) >= h1_atr * 0.15
+            buy_state := 3
+            h1_cnt_buy_fvg += 1
+        else if not na(buy_mss_bar) and (bar_index - buy_mss_bar) > 3
+            buy_state := 0
+            h1_cnt_buy_fvg_exp += 1 // Expiration FVG causale H1 (3 bougies)
+    else if buy_state == 3
+        buy_range_high := math.max(buy_range_high, high)
+        eq = buy_sweep_low + (buy_range_high - buy_sweep_low) * 0.5
+        
+        poi_top = math.min(buy_ob_top, eq)
+        poi_bot = buy_ob_bot
+        
+        if buy_ob_bot < eq
+            if poi_top >= poi_bot
+                buy_poi_top := poi_top
+                buy_poi_bot := poi_bot
+                buy_state := 4
+                h1_cnt_buy_poi += 1
+            else
+                buy_state := 0
+                h1_cnt_buy_poi_rej += 1
+        else
+            buy_state := 0
+            h1_cnt_buy_poi_rej += 1
+    else if buy_state == 4
+        if close < buy_ob_bot
+            buy_state := 0
+            
+    var int sell_state = 0
+    var float sell_sweep_high = na
+    var float sell_mss_level = na
+    var float sell_ob_top = na
+    var float sell_ob_bot = na
+    var float sell_range_low = na
+    var float sell_poi_top = na
+    var float sell_poi_bot = na
+    
+    var float last_bull_top = na
+    var float last_bull_bot = na
+    
+    if close > open
+        last_bull_top := high
+        last_bull_bot := low
+        
+    if sell_state != 0
+        if not na(sell_sweep_high) and high > sell_sweep_high
+            sell_state := 0
+            
+    if sell_state == 0
+        if sweep_h and h1_bias_bear
+            sell_state := 1
+            sell_sweep_high := high
+            h1_cnt_sell_sweep += 1
+            sell_mss_level := h1_last_pl
+            sell_range_low := low
+    else if sell_state == 1
+        sell_range_low := math.min(sell_range_low, low)
+        if close < sell_mss_level and close < open and is_disp
+            sell_state := 2
+            sell_ob_top := last_bull_top
+            sell_ob_bot := last_bull_bot
+            sell_mss_bar := bar_index
+            h1_cnt_sell_mss += 1
+    else if sell_state == 2
+        sell_range_low := math.min(sell_range_low, low)
+        if high < low[2] and (low[2] - high) >= h1_atr * 0.15
+            sell_state := 3
+            h1_cnt_sell_fvg += 1
+        else if not na(sell_mss_bar) and (bar_index - sell_mss_bar) > 3
+            sell_state := 0
+            h1_cnt_sell_fvg_exp += 1 // Expiration FVG causale H1 (3 bougies)
+    else if sell_state == 3
+        sell_range_low := math.min(sell_range_low, low)
+        eq = sell_sweep_high - (sell_sweep_high - sell_range_low) * 0.5
+        
+        poi_bot = math.max(sell_ob_bot, eq)
+        poi_top = sell_ob_top
+        
+        if sell_ob_top > eq
+            if poi_top >= poi_bot
+                sell_poi_top := poi_top
+                sell_poi_bot := poi_bot
+                sell_state := 4
+                h1_cnt_sell_poi += 1
+            else
+                sell_state := 0
+                h1_cnt_sell_poi_rej += 1
+        else
+            sell_state := 0
+            h1_cnt_sell_poi_rej += 1
+    else if sell_state == 4
+        if close > sell_ob_top
+            sell_state := 0
 
-h1_fvg_bull = (h1_low > h1_high2) and ((h1_low - h1_high2) > (0.5 * h1_atr))
-h1_fvg_bear = (h1_high < h1_low2) and ((h1_low2 - h1_high) > (0.5 * h1_atr))
+    h1_poi_bull_top = buy_state == 4 ? buy_poi_top : na
+    h1_poi_bull_bot = buy_state == 4 ? buy_poi_bot : na
+    h1_poi_bear_top = sell_state == 4 ? sell_poi_top : na
+    h1_poi_bear_bot = sell_state == 4 ? sell_poi_bot : na
+
+    H1Data.new(h1_poi_bull_top, h1_poi_bull_bot, h1_poi_bear_top, h1_poi_bear_bot, h1_atr[1], h1_ph[1], h1_pl[1], h1_cnt_buy_sweep, h1_cnt_buy_mss, h1_cnt_buy_fvg, h1_cnt_buy_fvg_exp, h1_cnt_buy_poi, h1_cnt_buy_poi_rej, h1_cnt_sell_sweep, h1_cnt_sell_mss, h1_cnt_sell_fvg, h1_cnt_sell_fvg_exp, h1_cnt_sell_poi, h1_cnt_sell_poi_rej)
+
+h1_data_obj = request.security(syminfo.tickerid, "60", f_get_h1_data(), barmerge.gaps_off, barmerge.lookahead_off)
+h1_poi_bull_top = na(h1_data_obj) ? na : h1_data_obj.bull_top
+h1_poi_bull_bot = na(h1_data_obj) ? na : h1_data_obj.bull_bot
+h1_poi_bear_top = na(h1_data_obj) ? na : h1_data_obj.bear_top
+h1_poi_bear_bot = na(h1_data_obj) ? na : h1_data_obj.bear_bot
+h1_atr = na(h1_data_obj) ? na : h1_data_obj.atr
+h1_ph = na(h1_data_obj) ? na : h1_data_obj.ph
+h1_pl = na(h1_data_obj) ? na : h1_data_obj.pl
+h1_cnt_buy_sweep = na(h1_data_obj) ? 0 : h1_data_obj.b_sweep
+h1_cnt_buy_mss = na(h1_data_obj) ? 0 : h1_data_obj.b_mss
+h1_cnt_buy_fvg = na(h1_data_obj) ? 0 : h1_data_obj.b_fvg
+h1_cnt_buy_fvg_exp = na(h1_data_obj) ? 0 : h1_data_obj.b_fvg_exp
+h1_cnt_buy_poi = na(h1_data_obj) ? 0 : h1_data_obj.b_poi
+h1_cnt_buy_poi_rej = na(h1_data_obj) ? 0 : h1_data_obj.b_poi_rej
+h1_cnt_sell_sweep = na(h1_data_obj) ? 0 : h1_data_obj.s_sweep
+h1_cnt_sell_mss = na(h1_data_obj) ? 0 : h1_data_obj.s_mss
+h1_cnt_sell_fvg = na(h1_data_obj) ? 0 : h1_data_obj.s_fvg
+h1_cnt_sell_fvg_exp = na(h1_data_obj) ? 0 : h1_data_obj.s_fvg_exp
+h1_cnt_sell_poi = na(h1_data_obj) ? 0 : h1_data_obj.s_poi
+h1_cnt_sell_poi_rej = na(h1_data_obj) ? 0 : h1_data_obj.s_poi_rej
+
+
 
 var float h1_bull_zone_top = na
 var float h1_bull_zone_bot = na
@@ -150,28 +351,26 @@ color_fvg_hl = color.new(#FFFF00, 80)
 color_fvg_bd = color.new(#FFFF00, 30)
 
 if ta.change(time("60"))
-    if h1_fvg_bull
-        is_new_fvg = na(h1_bull_zone_bot) or (h1_low != h1_bull_zone_top) or (h1_high2 != h1_bull_zone_bot)
-        if is_new_fvg
+    if not na(h1_poi_bull_top)
+        is_new_poi = na(h1_bull_zone_top) or (h1_poi_bull_top != h1_bull_zone_top)
+        if is_new_poi
             if not na(h1_bull_box)
                 box.set_extend(h1_bull_box, extend.none)
                 box.set_right(h1_bull_box, bar_index)
-
-            h1_bull_zone_top := h1_low
-            h1_bull_zone_bot := h1_high2
+            h1_bull_zone_top := h1_poi_bull_top
+            h1_bull_zone_bot := h1_poi_bull_bot
             h1_bull_consumed := false
             if show_fvg
                 h1_bull_box := box.new(bar_index, h1_bull_zone_top, bar_index + 1, h1_bull_zone_bot, border_color=color_fvg_bd, bgcolor=color_fvg_hl, extend=extend.right)
 
-    if h1_fvg_bear
-        is_new_fvg = na(h1_bear_zone_top) or (h1_low2 != h1_bear_zone_top) or (h1_high != h1_bear_zone_bot)
-        if is_new_fvg
+    if not na(h1_poi_bear_top)
+        is_new_poi = na(h1_bear_zone_top) or (h1_poi_bear_top != h1_bear_zone_top)
+        if is_new_poi
             if not na(h1_bear_box)
                 box.set_extend(h1_bear_box, extend.none)
                 box.set_right(h1_bear_box, bar_index)
-
-            h1_bear_zone_top := h1_low2
-            h1_bear_zone_bot := h1_high
+            h1_bear_zone_top := h1_poi_bear_top
+            h1_bear_zone_bot := h1_poi_bear_bot
             h1_bear_consumed := false
             if show_fvg
                 h1_bear_box := box.new(bar_index, h1_bear_zone_top, bar_index + 1, h1_bear_zone_bot, border_color=color_fvg_bd, bgcolor=color_fvg_hl, extend=extend.right)
@@ -179,10 +378,9 @@ if ta.change(time("60"))
 in_h1_bull_zone = not h1_bull_consumed and not na(h1_bull_zone_top) and (high >= h1_bull_zone_bot and low <= h1_bull_zone_top)
 in_h1_bear_zone = not h1_bear_consumed and not na(h1_bear_zone_top) and (high >= h1_bear_zone_bot and low <= h1_bear_zone_top)
 
-// Invalidation dès que le prix retourne dans la zone (mitigation), cohérent avec la logique OB/FVG M5
-if in_h1_bull_zone
+if in_h1_bull_zone and close < h1_bull_zone_bot
     h1_bull_consumed := true
-if in_h1_bear_zone
+if in_h1_bear_zone and close > h1_bear_zone_top
     h1_bear_consumed := true
 
 // ==========================================
@@ -237,6 +435,19 @@ if is_new_ny_day and show_levels
 // ==========================================
 // 3. STRUCTURE M5 & CONFIRMATION DE REJET
 // ==========================================
+
+var float m5_last_bear_top = na
+var float m5_last_bear_bot = na
+var float m5_last_bull_top = na
+var float m5_last_bull_bot = na
+
+if close < open
+    m5_last_bear_top := high
+    m5_last_bear_bot := low
+if close > open
+    m5_last_bull_top := high
+    m5_last_bull_bot := low
+
 atr_val       = ta.atr(14)
 bar_confirmed = barstate.isconfirmed
 
@@ -322,6 +533,39 @@ var float vis_prev_ph = na
 var float vis_last_pl = na
 var float vis_prev_pl = na
 
+// --- AUTOPSIE SWEEP ---
+var int dbg_sweep_time = na
+var string dbg_sweep_dir = ""
+var float dbg_sweep_px = na
+var float dbg_sweep_liq = na
+var float dbg_mss_55 = na
+var float dbg_mss_33 = na
+var float dbg_mss_22 = na
+var float dbg_sweep_atr = na
+var string dbg_death_reason = ""
+var float dbg_max_reach = na
+var bool dbg_crossed_55_close = false
+var bool dbg_crossed_55_nodisp = false
+
+// Alternative pivots
+ph_33 = ta.pivothigh(high, 3, 3)
+pl_33 = ta.pivotlow(low, 3, 3)
+var float vis_last_ph_33 = na
+var float vis_last_pl_33 = na
+if not na(ph_33)
+    vis_last_ph_33 := ph_33
+if not na(pl_33)
+    vis_last_pl_33 := pl_33
+
+ph_22 = ta.pivothigh(high, 2, 2)
+pl_22 = ta.pivotlow(low, 2, 2)
+var float vis_last_ph_22 = na
+var float vis_last_pl_22 = na
+if not na(ph_22)
+    vis_last_ph_22 := ph_22
+if not na(pl_22)
+    vis_last_pl_22 := pl_22
+
 if not na(ph)
     vis_prev_ph := vis_last_ph
     vis_last_ph := ph
@@ -337,13 +581,12 @@ rej_sell = c_range > 0 and (wick_top / c_range) >= 0.35 and close < open
 sweep_l = not na(vis_last_pl) and low < vis_last_pl and close > vis_last_pl and rej_buy
 sweep_h = not na(vis_last_ph) and high > vis_last_ph and close < vis_last_ph and rej_sell
 
-bars_in_h1_bull = ta.barssince(in_h1_bull_zone)
-bars_in_h1_bear = ta.barssince(in_h1_bear_zone)
-tested_h1_bull  = not na(bars_in_h1_bull) and bars_in_h1_bull <= zone_window_in
-tested_h1_bear  = not na(bars_in_h1_bear) and bars_in_h1_bear <= zone_window_in
 
-valid_ctx_bull = tested_h1_bull or (h1_bias_bull and not na(ta.barssince(sweep_l)) and ta.barssince(sweep_l) <= zone_window_in)
-valid_ctx_bear = tested_h1_bear or (h1_bias_bear and not na(ta.barssince(sweep_h)) and ta.barssince(sweep_h) <= zone_window_in)
+tested_h1_bull  = in_h1_bull_zone
+tested_h1_bear  = in_h1_bear_zone
+
+valid_ctx_bull = tested_h1_bull
+valid_ctx_bear = tested_h1_bear
 
 var bool  is_ob_bull_active = false
 var float current_ob_bull_top = na
@@ -691,12 +934,21 @@ f_trade_targets(is_buy, entry, risk) =>
 // ==========================================
 // États de la séquence ICT 2022 :
 // IDLE -> SWEEP_ARMED -> MSS_CONFIRMED -> CAUSAL_FVG_CONFIRMED -> WAIT_RETEST -> READY -> RESET
+
+var bool   in_pos       = false
+var float  pos_entry    = 0.0
+var float  pos_sl       = 0.0
+var float  pos_tp       = 0.0
+var string pos_dir      = "NONE"
+var int    last_sig_bar = 0
+
 int STATE_IDLE                = 0
+int STATE_IN_POI              = 10
 int STATE_SWEEP_ARMED         = 1
 int STATE_MSS_CONFIRMED       = 2
 int STATE_CAUSAL_FVG_CONFIRMED = 3
-int STATE_WAIT_RETEST         = 4
 int STATE_READY               = 5
+int STATE_PENDING_LIMIT       = 6
 
 // --- Machine d'état BUY (Long) ---
 var int   buy_state            = STATE_IDLE
@@ -704,10 +956,14 @@ var int   buy_sweep_bar        = na
 var float buy_sweep_low        = na
 var float buy_mss_level        = na
 var int   buy_displacement_bar = na
-var float buy_pre_disp_high    = na  // haut de la bougie AVANT le displacement — ancre fixe de la FVG causale
+var float buy_pre_disp_high    = na
 var float buy_fvg_top          = na
 var float buy_fvg_bottom       = na
 var int   buy_fvg_bar          = na
+var float buy_ob_top           = na
+var float buy_ob_bot           = na
+var int   buy_limit_bar        = na
+var int   buy_poi_bar          = na
 
 // --- Machine d'état SELL (Short) ---
 var int   sell_state            = STATE_IDLE
@@ -715,14 +971,29 @@ var int   sell_sweep_bar        = na
 var float sell_sweep_high       = na
 var float sell_mss_level        = na
 var int   sell_displacement_bar = na
-var float sell_pre_disp_low     = na  // bas de la bougie AVANT le displacement — ancre fixe de la FVG causale
+var float sell_pre_disp_low     = na
 var float sell_fvg_top          = na
 var float sell_fvg_bottom       = na
 var int   sell_fvg_bar          = na
+var float sell_ob_top           = na
+var float sell_ob_bot           = na
+var int   sell_limit_bar        = na
+var int   sell_poi_bar          = na
 
 // --- Compteurs de diagnostic (DEBUG) — pour localiser précisément où la séquence perd ses
 // candidats. Purement additif, aucun effet sur la logique de trading. À retirer une fois le
 // diagnostic terminé.
+
+var int cnt_buy_in_poi = 0
+var int cnt_sell_in_poi = 0
+var int cnt_buy_ob_rej = 0
+var int cnt_sell_ob_rej = 0
+var int cnt_buy_limit_sent = 0
+var int cnt_sell_limit_sent = 0
+var int cnt_buy_limit_filled = 0
+var int cnt_sell_limit_filled = 0
+var int cnt_buy_limit_cancel = 0
+var int cnt_sell_limit_cancel = 0
 var int cnt_sweep_l    = 0
 var int cnt_sweep_h    = 0
 var int cnt_buy_mss    = 0
@@ -731,8 +1002,12 @@ var int cnt_buy_fvg    = 0
 var int cnt_sell_fvg   = 0
 var int cnt_buy_ready  = 0
 var int cnt_sell_ready = 0
-var int cnt_buy_no_target  = 0 // setups READY abandonnés : aucune cible de liquidité >= min_rr_in
+var int cnt_buy_no_target  = 0
+var int cnt_buy_expired_limit = 0
+var int cnt_buy_sl_invalid = 0 // setups READY abandonnés : aucune cible de liquidité >= min_rr_in
 var int cnt_sell_no_target = 0
+var int cnt_sell_expired_limit = 0
+var int cnt_sell_sl_invalid = 0
 
 // Définition quantitative du Displacement (M5) — seuils réglables (diagnostic du 18/09 : ce
 // filtre éliminait plus de 90% des sweeps à lui seul, goulot d'étranglement principal du moteur).
@@ -747,27 +1022,45 @@ MAX_BARS_FVG_TO_RETEST = fvg_to_retest_window_in
 // -------------------------------------------------------------
 // ÉVOLUTION MACHINE D'ÉTATS : BUY
 // -------------------------------------------------------------
+
 // 1. Resets / Invalidations BUY
 if buy_state != STATE_IDLE
-    // Invalidation par nouveau plus bas sous le low du sweep
     if not na(buy_sweep_low) and low < buy_sweep_low
+        if buy_state == STATE_SWEEP_ARMED and dbg_death_reason == "PENDING"
+            dbg_death_reason := "SL Structurel (low < sweep)"
+        if buy_state == STATE_PENDING_LIMIT
+            strategy.cancel("Long")
+            cnt_buy_limit_cancel += 1
         buy_state := STATE_IDLE
-    // Invalidation si sweep opposé (BSL) plus récent
     else if sweep_h
+        if buy_state == STATE_SWEEP_ARMED and dbg_death_reason == "PENDING"
+            dbg_death_reason := "Sweep opposé (sweep_h)"
+        if buy_state == STATE_PENDING_LIMIT
+            strategy.cancel("Long")
+            cnt_buy_limit_cancel += 1
         buy_state := STATE_IDLE
-    // Timeout Sweep -> MSS (max 12 barres)
     else if buy_state == STATE_SWEEP_ARMED and (bar_index - buy_sweep_bar > MAX_BARS_SWEEP_TO_MSS)
+        if dbg_death_reason == "PENDING"
+            dbg_death_reason := "Expiration 18 barres"
         buy_state := STATE_IDLE
-    // Violation FVG causale (clôture sous le bas de la FVG causale avant exécution)
-    else if (buy_state == STATE_CAUSAL_FVG_CONFIRMED or buy_state == STATE_WAIT_RETEST) and close < buy_fvg_bottom
+    else if (buy_state == STATE_CAUSAL_FVG_CONFIRMED) and not na(buy_ob_bot) and close < buy_ob_bot
         buy_state := STATE_IDLE
-    // Timeout FVG -> Retest (max 20 barres)
-    else if buy_state == STATE_WAIT_RETEST and (bar_index - buy_fvg_bar > MAX_BARS_FVG_TO_RETEST)
+    else if h1_bull_consumed
+        if buy_state == STATE_SWEEP_ARMED and dbg_death_reason == "PENDING"
+            dbg_death_reason := "H1 POI consommé"
+        if buy_state == STATE_PENDING_LIMIT
+            strategy.cancel("Long")
+            cnt_buy_limit_cancel += 1
         buy_state := STATE_IDLE
 
 // 2. Transitions BUY
 if buy_state == STATE_IDLE
-    // Condition de départ : Sweep de Sell-Side Liquidity (SSL)
+    if in_h1_bull_zone
+        buy_state := STATE_IN_POI
+        buy_poi_bar := bar_index
+        cnt_buy_in_poi += 1
+
+if buy_state == STATE_IN_POI
     if sweep_l
         buy_state            := STATE_SWEEP_ARMED
         buy_sweep_bar        := bar_index
@@ -777,24 +1070,62 @@ if buy_state == STATE_IDLE
         buy_fvg_top          := na
         buy_fvg_bottom       := na
         buy_fvg_bar          := na
+        buy_ob_top           := na
+        buy_ob_bot           := na
+        buy_limit_bar        := na
         cnt_sweep_l += 1
+        
+        dbg_sweep_time := time
+        dbg_sweep_dir := "BUY"
+        dbg_sweep_px := low
+        dbg_sweep_liq := vis_last_pl
+        dbg_mss_55 := vis_last_ph
+        dbg_mss_33 := vis_last_ph_33
+        dbg_mss_22 := vis_last_ph_22
+        dbg_sweep_atr := atr_val[1]
+        dbg_death_reason := "PENDING"
+        dbg_max_reach := high
+        dbg_crossed_55_close := false
+        dbg_crossed_55_nodisp := false
+
+    else if bar_index - buy_poi_bar >= 20 or h1_bull_consumed
+        buy_state := STATE_IDLE
 else if buy_state == STATE_SWEEP_ARMED
-    // Si un nouveau sweep de même direction survient avant MSS : réarmer avec le sweep le plus récent
+    if dbg_death_reason == "PENDING"
+        dbg_max_reach := math.max(dbg_max_reach, high)
+        if bar_confirmed and not na(buy_mss_level) and close > buy_mss_level
+            dbg_crossed_55_close := true
+            if not (close > open and is_disp_quant)
+                dbg_crossed_55_nodisp := true
+
     if sweep_l
         buy_sweep_bar := bar_index
         buy_sweep_low := low
         buy_mss_level := vis_last_ph
-    // Recherche du Displacement + MSS haussier cassant buy_mss_level
+        
+        dbg_sweep_time := time
+        dbg_sweep_dir := "BUY"
+        dbg_sweep_px := low
+        dbg_sweep_liq := vis_last_pl
+        dbg_mss_55 := vis_last_ph
+        dbg_mss_33 := vis_last_ph_33
+        dbg_mss_22 := vis_last_ph_22
+        dbg_sweep_atr := atr_val[1]
+        dbg_death_reason := "PENDING"
+        dbg_max_reach := high
+        dbg_crossed_55_close := false
+        dbg_crossed_55_nodisp := false
+
     else if bar_confirmed and not na(buy_mss_level) and close > buy_mss_level and close > open and is_disp_quant
+        if dbg_death_reason == "PENDING"
+            dbg_death_reason := "SUCCESS (MSS_CONFIRMED)"
         buy_state            := STATE_MSS_CONFIRMED
         buy_displacement_bar := bar_index
-        buy_pre_disp_high    := high[1] // ancre fixe : haut de la bougie juste avant le displacement
+        buy_pre_disp_high    := high[1]
+        buy_ob_top           := m5_last_bear_top
+        buy_ob_bot           := m5_last_bear_bot
         cnt_buy_mss += 1
 else if buy_state == STATE_MSS_CONFIRMED
-    // La FVG causale doit se former dans une fenêtre de `causal_fvg_window_in` bougies après le
-    // displacement (pas uniquement sur la bougie n+1 — trop fragile au timing exact). L'ancre
-    // basse reste la bougie juste avant le displacement (buy_pre_disp_high), fixe quelle que soit
-    // la bougie où le gap se referme.
     if bar_confirmed and bar_index >= buy_displacement_bar + 1 and bar_index <= buy_displacement_bar + causal_fvg_window_in
         has_causal_fvg = (low > buy_pre_disp_high) and ((low - buy_pre_disp_high) >= atr_val[1] * 0.15)
         if has_causal_fvg
@@ -804,42 +1135,74 @@ else if buy_state == STATE_MSS_CONFIRMED
             buy_state      := STATE_CAUSAL_FVG_CONFIRMED
             cnt_buy_fvg += 1
         else if bar_index == buy_displacement_bar + causal_fvg_window_in
-            buy_state := STATE_IDLE // Fenêtre épuisée sans FVG causale valide -> Reset
+            buy_state := STATE_IDLE
     else if bar_index > buy_displacement_bar + causal_fvg_window_in
         buy_state := STATE_IDLE
 else if buy_state == STATE_CAUSAL_FVG_CONFIRMED
-    // Passage formel dans l'attente du retest
-    buy_state := STATE_WAIT_RETEST
-else if buy_state == STATE_WAIT_RETEST
-    // Retest causal : le prix pénètre la FVG causale sans clôturer en dessous
-    if mit_probe_bull <= buy_fvg_top and close >= buy_fvg_bottom
+    buy_ob_mid = buy_ob_bot + (buy_ob_top - buy_ob_bot) * 0.5
+    if not na(h1_bull_zone_top) and buy_ob_mid <= h1_bull_zone_top and buy_ob_mid >= h1_bull_zone_bot
         buy_state := STATE_READY
         cnt_buy_ready += 1
+    else
+        buy_state := STATE_IDLE
+        cnt_buy_ob_rej += 1
+else if buy_state == STATE_PENDING_LIMIT
+    if strategy.opentrades > 0 and strategy.position_size > 0
+        buy_state := STATE_IDLE
+        in_pos := true
+        cnt_buy_limit_filled += 1
+        last_sig_bar := bar_index
+        h1_bull_consumed := true
+    else if bar_index - buy_limit_bar >= 12
+        strategy.cancel("Long")
+        buy_state := STATE_IDLE
+        cnt_buy_expired_limit += 1
+
+if buy_state == STATE_IDLE
+    buy_sweep_low := na
 
 // -------------------------------------------------------------
 // ÉVOLUTION MACHINE D'ÉTATS : SELL
 // -------------------------------------------------------------
+
 // 1. Resets / Invalidations SELL
 if sell_state != STATE_IDLE
-    // Invalidation par nouveau plus haut au-dessus du high du sweep
     if not na(sell_sweep_high) and high > sell_sweep_high
+        if sell_state == STATE_SWEEP_ARMED and dbg_death_reason == "PENDING"
+            dbg_death_reason := "SL Structurel (high > sweep)"
+        if sell_state == STATE_PENDING_LIMIT
+            strategy.cancel("Short")
+            cnt_sell_limit_cancel += 1
         sell_state := STATE_IDLE
-    // Invalidation si sweep opposé (SSL) plus récent
     else if sweep_l
+        if sell_state == STATE_SWEEP_ARMED and dbg_death_reason == "PENDING"
+            dbg_death_reason := "Sweep opposé (sweep_l)"
+        if sell_state == STATE_PENDING_LIMIT
+            strategy.cancel("Short")
+            cnt_sell_limit_cancel += 1
         sell_state := STATE_IDLE
-    // Timeout Sweep -> MSS (max 12 barres)
     else if sell_state == STATE_SWEEP_ARMED and (bar_index - sell_sweep_bar > MAX_BARS_SWEEP_TO_MSS)
+        if dbg_death_reason == "PENDING"
+            dbg_death_reason := "Expiration 18 barres"
         sell_state := STATE_IDLE
-    // Violation FVG causale (clôture au-dessus du haut de la FVG causale avant exécution)
-    else if (sell_state == STATE_CAUSAL_FVG_CONFIRMED or sell_state == STATE_WAIT_RETEST) and close > sell_fvg_top
+    else if (sell_state == STATE_CAUSAL_FVG_CONFIRMED) and not na(sell_ob_top) and close > sell_ob_top
         sell_state := STATE_IDLE
-    // Timeout FVG -> Retest (max 20 barres)
-    else if sell_state == STATE_WAIT_RETEST and (bar_index - sell_fvg_bar > MAX_BARS_FVG_TO_RETEST)
+    else if h1_bear_consumed
+        if sell_state == STATE_SWEEP_ARMED and dbg_death_reason == "PENDING"
+            dbg_death_reason := "H1 POI consommé"
+        if sell_state == STATE_PENDING_LIMIT
+            strategy.cancel("Short")
+            cnt_sell_limit_cancel += 1
         sell_state := STATE_IDLE
 
 // 2. Transitions SELL
 if sell_state == STATE_IDLE
-    // Condition de départ : Sweep de Buy-Side Liquidity (BSL)
+    if in_h1_bear_zone
+        sell_state := STATE_IN_POI
+        sell_poi_bar := bar_index
+        cnt_sell_in_poi += 1
+
+if sell_state == STATE_IN_POI
     if sweep_h
         sell_state            := STATE_SWEEP_ARMED
         sell_sweep_bar        := bar_index
@@ -849,22 +1212,62 @@ if sell_state == STATE_IDLE
         sell_fvg_top          := na
         sell_fvg_bottom       := na
         sell_fvg_bar          := na
+        sell_ob_top           := na
+        sell_ob_bot           := na
+        sell_limit_bar        := na
         cnt_sweep_h += 1
+        
+        dbg_sweep_time := time
+        dbg_sweep_dir := "SELL"
+        dbg_sweep_px := high
+        dbg_sweep_liq := vis_last_ph
+        dbg_mss_55 := vis_last_pl
+        dbg_mss_33 := vis_last_pl_33
+        dbg_mss_22 := vis_last_pl_22
+        dbg_sweep_atr := atr_val[1]
+        dbg_death_reason := "PENDING"
+        dbg_max_reach := low
+        dbg_crossed_55_close := false
+        dbg_crossed_55_nodisp := false
+
+    else if bar_index - sell_poi_bar >= 20 or h1_bear_consumed
+        sell_state := STATE_IDLE
 else if sell_state == STATE_SWEEP_ARMED
-    // Si un nouveau sweep de même direction survient avant MSS : réarmer avec le sweep le plus récent
+    if dbg_death_reason == "PENDING"
+        dbg_max_reach := math.min(dbg_max_reach, low)
+        if bar_confirmed and not na(sell_mss_level) and close < sell_mss_level
+            dbg_crossed_55_close := true
+            if not (close < open and is_disp_quant)
+                dbg_crossed_55_nodisp := true
+
     if sweep_h
         sell_sweep_bar := bar_index
         sell_sweep_high := high
         sell_mss_level := vis_last_pl
-    // Recherche du Displacement + MSS baissier cassant sell_mss_level
+        
+        dbg_sweep_time := time
+        dbg_sweep_dir := "SELL"
+        dbg_sweep_px := high
+        dbg_sweep_liq := vis_last_ph
+        dbg_mss_55 := vis_last_pl
+        dbg_mss_33 := vis_last_pl_33
+        dbg_mss_22 := vis_last_pl_22
+        dbg_sweep_atr := atr_val[1]
+        dbg_death_reason := "PENDING"
+        dbg_max_reach := low
+        dbg_crossed_55_close := false
+        dbg_crossed_55_nodisp := false
+
     else if bar_confirmed and not na(sell_mss_level) and close < sell_mss_level and close < open and is_disp_quant
+        if dbg_death_reason == "PENDING"
+            dbg_death_reason := "SUCCESS (MSS_CONFIRMED)"
         sell_state            := STATE_MSS_CONFIRMED
         sell_displacement_bar := bar_index
-        sell_pre_disp_low     := low[1] // ancre fixe : bas de la bougie juste avant le displacement
+        sell_pre_disp_low     := low[1]
+        sell_ob_top           := m5_last_bull_top
+        sell_ob_bot           := m5_last_bull_bot
         cnt_sell_mss += 1
 else if sell_state == STATE_MSS_CONFIRMED
-    // La FVG causale doit se former dans une fenêtre de `causal_fvg_window_in` bougies après le
-    // displacement (pas uniquement sur la bougie n+1). Ancre haute fixe : sell_pre_disp_low.
     if bar_confirmed and bar_index >= sell_displacement_bar + 1 and bar_index <= sell_displacement_bar + causal_fvg_window_in
         has_causal_fvg = (high < sell_pre_disp_low) and ((sell_pre_disp_low - high) >= atr_val[1] * 0.15)
         if has_causal_fvg
@@ -874,17 +1277,31 @@ else if sell_state == STATE_MSS_CONFIRMED
             sell_state      := STATE_CAUSAL_FVG_CONFIRMED
             cnt_sell_fvg += 1
         else if bar_index == sell_displacement_bar + causal_fvg_window_in
-            sell_state := STATE_IDLE // Fenêtre épuisée sans FVG causale valide -> Reset
+            sell_state := STATE_IDLE
     else if bar_index > sell_displacement_bar + causal_fvg_window_in
         sell_state := STATE_IDLE
 else if sell_state == STATE_CAUSAL_FVG_CONFIRMED
-    // Passage formel dans l'attente du retest
-    sell_state := STATE_WAIT_RETEST
-else if sell_state == STATE_WAIT_RETEST
-    // Retest causal : le prix pénètre la FVG causale sans clôturer au-dessus
-    if mit_probe_bear >= sell_fvg_bottom and close <= sell_fvg_top
+    sell_ob_mid = sell_ob_bot + (sell_ob_top - sell_ob_bot) * 0.5
+    if not na(h1_bear_zone_bot) and sell_ob_mid <= h1_bear_zone_top and sell_ob_mid >= h1_bear_zone_bot
         sell_state := STATE_READY
         cnt_sell_ready += 1
+    else
+        sell_state := STATE_IDLE
+        cnt_sell_ob_rej += 1
+else if sell_state == STATE_PENDING_LIMIT
+    if strategy.opentrades > 0 and strategy.position_size < 0
+        sell_state := STATE_IDLE
+        in_pos := true
+        cnt_sell_limit_filled += 1
+        last_sig_bar := bar_index
+        h1_bear_consumed := true
+    else if bar_index - sell_limit_bar >= 12
+        strategy.cancel("Short")
+        sell_state := STATE_IDLE
+        cnt_sell_expired_limit += 1
+
+if sell_state == STATE_IDLE
+    sell_sweep_high := na
 
 // ---- LAB B7.2 : instrumentation LECTURE SEULE + étiquettes d'ordres ----
 // ra (âge réel) = barres écoulées depuis le PREMIER passage à READY de l'épisode en cours ; fa (âge FVG) = barres
@@ -914,12 +1331,6 @@ f_lab_tag(is_mtf, grade, sl_px, tp_px, tpr, tpt, ntp, rk, fa_bar, ra_bar) =>
     tail = "|n" + str.tostring(ntp) + "|k" + str.tostring(rk, "#.#") + "|f" + f_lab_age(fa_bar) + "|r" + f_lab_age(ra_bar) + "|" + (is_crypto_247 ? "CONT" : "KZ")
     head + lvls + tail
 
-var bool   in_pos       = false
-var float  pos_entry    = 0.0
-var float  pos_sl       = 0.0
-var float  pos_tp       = 0.0
-var string pos_dir      = "NONE"
-var int    last_sig_bar = 0
 
 cooldown_ok = na(last_sig_bar) or (bar_index - last_sig_bar > cooldown_bars_in)
 
@@ -943,39 +1354,44 @@ if raw_buy
     grade_ok = (min_grade_in == "B") or (min_grade_in == "A" and score >= 2) or (min_grade_in == "A+" and score == 3)
 
     if grade_ok
-        b_entry  = close
-        // SL Structurel ancré sur le bas du sweep d'origine, plafonné/planché par ATR M5
+        b_entry  = buy_ob_bot + (buy_ob_top - buy_ob_bot) * 0.5
         b_raw_sl = not na(buy_sweep_low) ? (buy_sweep_low - syminfo.mintick * 10) : (ta.lowest(low, 15) - syminfo.mintick * 10)
-        b_risk   = math.max(math.min(b_entry - b_raw_sl, atr_val * atr_cap_mult), atr_val * atr_floor_mult)
-        [t_px, t_ty, t_r, t_ok] = f_trade_targets(true, b_entry, b_risk)
-
-        if not t_ok
-            // Setup valide mais aucune cible de liquidité à min_rr_in R : trade abandonné (identique au Radar R6)
+        b_risk   = b_entry - b_raw_sl
+        
+        if b_risk > atr_val * atr_cap_mult or b_risk < atr_val * atr_floor_mult
             buy_state := STATE_IDLE
-            cnt_buy_no_target += 1
-            label.new(bar_index, low - (syminfo.mintick * 5), "✖ sans cible", color=color.new(color.gray, 55), textcolor=color.white, style=label.style_label_up, size=size.tiny)
+            buy_sweep_low := na
+            cnt_buy_sl_invalid += 1
+            label.new(bar_index, low - (syminfo.mintick * 5), "✖ SL ATR (" + str.tostring(b_risk / atr_val, "#.#") + "a)", color=color.new(color.gray, 55), textcolor=color.white, style=label.style_label_up, size=size.tiny)
         else
-            setup_name   = tested_h1_bull ? "MTF FVG BUY" : "ICT 2022 BUY"
-            pos_entry    := b_entry
-            pos_sl       := b_entry - b_risk
-            pos_tp       := array.get(t_px, array.size(t_px) - 1)
-            pos_dir      := "BUY"
-            in_pos       := true
-            last_sig_bar := bar_index
+            [t_px, t_ty, t_r, t_ok] = f_trade_targets(true, b_entry, b_risk)
+            if not t_ok
+                buy_state := STATE_IDLE
+                buy_sweep_low := na
+                cnt_buy_no_target += 1
+                label.new(bar_index, low - (syminfo.mintick * 5), "✖ sans cible", color=color.new(color.gray, 55), textcolor=color.white, style=label.style_label_up, size=size.tiny)
+            else
+                setup_name   = tested_h1_bull ? "MTF FVG BUY" : "ICT 2022 BUY"
+                pos_entry    := b_entry
+                pos_sl       := b_raw_sl
+                pos_tp       := array.get(t_px, array.size(t_px) - 1)
+                pos_dir      := "BUY"
+                
+                buy_state := STATE_PENDING_LIMIT
+                buy_limit_bar := bar_index
 
-            // Reset de la machine d'état après entrée exécutée
-            buy_state := STATE_IDLE
+                lbl_text = stars_txt + " " + setup_name + " · TP " + str.tostring(array.get(t_r, array.size(t_r) - 1), "#.#") + "R (Lim)"
+                label.new(bar_index, low - (syminfo.mintick * 5), lbl_text, color=color.new(color_lux_bull, 80), textcolor=color.black, style=label.style_label_up, size=size.tiny)
 
-            h1_bull_consumed := true
-
-            lbl_text = stars_txt + " " + setup_name + " · TP " + str.tostring(array.get(t_r, array.size(t_r) - 1), "#.#") + "R"
-            label.new(bar_index, low - (syminfo.mintick * 5), lbl_text, color=color.new(color_lux_bull, 80), textcolor=color.black, style=label.style_label_up, size=size.tiny)
-
-            // Sizing par risque fixe : qty calculée pour risquer risk_pct_in% de l'équité
-            qty = (strategy.equity * (risk_pct_in / 100)) / b_risk
-            lab_tag = f_lab_tag(tested_h1_bull, grade_txt, pos_sl, pos_tp, array.get(t_r, array.size(t_r) - 1), array.get(t_ty, array.size(t_ty) - 1), array.size(t_px), b_risk / atr_val, buy_fvg_bar, lab_buy_ready_bar)
-            strategy.entry("Long", strategy.long, qty=qty, comment=lab_tag)
-            strategy.exit("Exit Long", "Long", stop=pos_sl, limit=pos_tp, comment_profit="TP", comment_loss="SL")
+                // Dimensionnement universel (Pointvalue + Conversion de devise automatique par TV)
+                risk_amount_acct = strategy.equity * (risk_pct_in / 100)
+                risk_amount_quote = strategy.convert_to_symbol(risk_amount_acct)
+                qty = risk_amount_quote / (b_risk * syminfo.pointvalue)
+                
+                lab_tag = f_lab_tag(tested_h1_bull, grade_txt, pos_sl, pos_tp, array.get(t_r, array.size(t_r) - 1), array.get(t_ty, array.size(t_ty) - 1), array.size(t_px), b_risk / atr_val, buy_fvg_bar, lab_buy_ready_bar)
+                strategy.entry("Long", strategy.long, qty=qty, limit=b_entry, comment=lab_tag)
+                cnt_buy_limit_sent += 1
+                strategy.exit("Exit Long", "Long", stop=pos_sl, limit=pos_tp, comment_profit="TP", comment_loss="SL")
 
 // ---- ENTREE SHORT (remplace l'alert() par un vrai ordre pour le backtest) ----
 if raw_sell
@@ -983,39 +1399,44 @@ if raw_sell
     grade_ok = (min_grade_in == "B") or (min_grade_in == "A" and score >= 2) or (min_grade_in == "A+" and score == 3)
 
     if grade_ok
-        s_entry  = close
-        // SL Structurel ancré sur le haut du sweep d'origine, plafonné/planché par ATR M5
+        s_entry  = sell_ob_bot + (sell_ob_top - sell_ob_bot) * 0.5
         s_raw_sl = not na(sell_sweep_high) ? (sell_sweep_high + syminfo.mintick * 10) : (ta.highest(high, 15) + syminfo.mintick * 10)
-        s_risk   = math.max(math.min(s_raw_sl - s_entry, atr_val * atr_cap_mult), atr_val * atr_floor_mult)
-        [t_px, t_ty, t_r, t_ok] = f_trade_targets(false, s_entry, s_risk)
-
-        if not t_ok
-            // Setup valide mais aucune cible de liquidité à min_rr_in R : trade abandonné (identique au Radar R6)
+        s_risk   = s_raw_sl - s_entry
+        
+        if s_risk > atr_val * atr_cap_mult or s_risk < atr_val * atr_floor_mult
             sell_state := STATE_IDLE
-            cnt_sell_no_target += 1
-            label.new(bar_index, high + (syminfo.mintick * 5), "✖ sans cible", color=color.new(color.gray, 55), textcolor=color.white, style=label.style_label_down, size=size.tiny)
+            sell_sweep_high := na
+            cnt_sell_sl_invalid += 1
+            label.new(bar_index, high + (syminfo.mintick * 5), "✖ SL ATR (" + str.tostring(s_risk / atr_val, "#.#") + "a)", color=color.new(color.gray, 55), textcolor=color.white, style=label.style_label_down, size=size.tiny)
         else
-            setup_name   = tested_h1_bear ? "MTF FVG SELL" : "ICT 2022 SELL"
-            pos_entry    := s_entry
-            pos_sl       := s_entry + s_risk
-            pos_tp       := array.get(t_px, array.size(t_px) - 1)
-            pos_dir      := "SELL"
-            in_pos       := true
-            last_sig_bar := bar_index
+            [t_px, t_ty, t_r, t_ok] = f_trade_targets(false, s_entry, s_risk)
+            if not t_ok
+                sell_state := STATE_IDLE
+                sell_sweep_high := na
+                cnt_sell_no_target += 1
+                label.new(bar_index, high + (syminfo.mintick * 5), "✖ sans cible", color=color.new(color.gray, 55), textcolor=color.white, style=label.style_label_down, size=size.tiny)
+            else
+                setup_name   = tested_h1_bear ? "MTF FVG SELL" : "ICT 2022 SELL"
+                pos_entry    := s_entry
+                pos_sl       := s_raw_sl
+                pos_tp       := array.get(t_px, array.size(t_px) - 1)
+                pos_dir      := "SELL"
 
-            // Reset de la machine d'état après entrée exécutée
-            sell_state := STATE_IDLE
+                sell_state := STATE_PENDING_LIMIT
+                sell_limit_bar := bar_index
 
-            h1_bear_consumed := true
+                lbl_text = stars_txt + " " + setup_name + " · TP " + str.tostring(array.get(t_r, array.size(t_r) - 1), "#.#") + "R (Lim)"
+                label.new(bar_index, high + (syminfo.mintick * 5), lbl_text, color=color.new(color_lux_bear, 80), textcolor=color.black, style=label.style_label_down, size=size.tiny)
 
-            lbl_text = stars_txt + " " + setup_name + " · TP " + str.tostring(array.get(t_r, array.size(t_r) - 1), "#.#") + "R"
-            label.new(bar_index, high + (syminfo.mintick * 5), lbl_text, color=color.new(color_lux_bear, 80), textcolor=color.black, style=label.style_label_down, size=size.tiny)
+                // Dimensionnement universel (Pointvalue + Conversion de devise automatique par TV)
+                risk_amount_acct = strategy.equity * (risk_pct_in / 100)
+                risk_amount_quote = strategy.convert_to_symbol(risk_amount_acct)
+                qty = risk_amount_quote / (s_risk * syminfo.pointvalue)
 
-            // Sizing par risque fixe : qty calculée pour risquer risk_pct_in% de l'équité
-            qty = (strategy.equity * (risk_pct_in / 100)) / s_risk
-            lab_tag = f_lab_tag(tested_h1_bear, grade_txt, pos_sl, pos_tp, array.get(t_r, array.size(t_r) - 1), array.get(t_ty, array.size(t_ty) - 1), array.size(t_px), s_risk / atr_val, sell_fvg_bar, lab_sell_ready_bar)
-            strategy.entry("Short", strategy.short, qty=qty, comment=lab_tag)
-            strategy.exit("Exit Short", "Short", stop=pos_sl, limit=pos_tp, comment_profit="TP", comment_loss="SL")
+                lab_tag = f_lab_tag(tested_h1_bear, grade_txt, pos_sl, pos_tp, array.get(t_r, array.size(t_r) - 1), array.get(t_ty, array.size(t_ty) - 1), array.size(t_px), s_risk / atr_val, sell_fvg_bar, lab_sell_ready_bar)
+                strategy.entry("Short", strategy.short, qty=qty, limit=s_entry, comment=lab_tag)
+                cnt_sell_limit_sent += 1
+                strategy.exit("Exit Short", "Short", stop=pos_sl, limit=pos_tp, comment_profit="TP", comment_loss="SL")
 
 // ==========================================
 // 5. SORTIES : timeout 30 barres + resynchro de in_pos avec le broker
@@ -1036,36 +1457,158 @@ if in_pos and strategy.opentrades == 0 and bar_index > last_sig_bar
     in_pos  := false
     pos_dir := "NONE"
 
+
 // ==========================================
 // 6. TABLEAU DE DIAGNOSTIC (DEBUG) — funnel de la séquence causale sur toute la période testée.
 // Purement informatif, à retirer une fois le diagnostic terminé.
 // ==========================================
-var table dbg = table.new(position.bottom_right, 2, 12, border_color=color.gray, border_width=1, bgcolor=color.new(color.black, 15))
+var table dbg = table.new(position.bottom_right, 6, 30, border_color=color.gray, border_width=1, bgcolor=color.new(color.black, 15))
 if barstate.islast
-    table.cell(dbg, 0, 0, "DIAGNOSTIC SÉQUENCE", text_color=color.yellow, text_size=size.small, text_halign=text.align_left)
+    // COLONNE 1: BUY
+    table.cell(dbg, 0, 0, "DIAGNOSTIC BUY", text_color=color.yellow, text_size=size.small, text_halign=text.align_left)
     table.cell(dbg, 1, 0, "", bgcolor=color.new(color.black,15))
-    table.cell(dbg, 0, 1, "Sweep SSL (BUY armé)", text_color=color.white, text_size=size.small, text_halign=text.align_left)
-    table.cell(dbg, 1, 1, str.tostring(cnt_sweep_l), text_color=color.white, text_size=size.small, text_halign=text.align_right)
-    table.cell(dbg, 0, 2, "→ MSS confirmé (BUY)", text_color=color.white, text_size=size.small, text_halign=text.align_left)
-    table.cell(dbg, 1, 2, str.tostring(cnt_buy_mss), text_color=color.white, text_size=size.small, text_halign=text.align_right)
-    table.cell(dbg, 0, 3, "→ FVG causale (BUY)", text_color=color.white, text_size=size.small, text_halign=text.align_left)
-    table.cell(dbg, 1, 3, str.tostring(cnt_buy_fvg), text_color=color.white, text_size=size.small, text_halign=text.align_right)
-    table.cell(dbg, 0, 4, "→ READY / entrée (BUY)", text_color=color.lime, text_size=size.small, text_halign=text.align_left)
-    table.cell(dbg, 1, 4, str.tostring(cnt_buy_ready), text_color=color.lime, text_size=size.small, text_halign=text.align_right)
-    table.cell(dbg, 0, 5, "Sweep BSL (SELL armé)", text_color=color.white, text_size=size.small, text_halign=text.align_left)
-    table.cell(dbg, 1, 5, str.tostring(cnt_sweep_h), text_color=color.white, text_size=size.small, text_halign=text.align_right)
-    table.cell(dbg, 0, 6, "→ MSS confirmé (SELL)", text_color=color.white, text_size=size.small, text_halign=text.align_left)
-    table.cell(dbg, 1, 6, str.tostring(cnt_sell_mss), text_color=color.white, text_size=size.small, text_halign=text.align_right)
-    table.cell(dbg, 0, 7, "→ FVG causale (SELL)", text_color=color.white, text_size=size.small, text_halign=text.align_left)
-    table.cell(dbg, 1, 7, str.tostring(cnt_sell_fvg), text_color=color.white, text_size=size.small, text_halign=text.align_right)
-    table.cell(dbg, 0, 8, "→ READY / entrée (SELL)", text_color=color.lime, text_size=size.small, text_halign=text.align_left)
-    table.cell(dbg, 1, 8, str.tostring(cnt_sell_ready), text_color=color.lime, text_size=size.small, text_halign=text.align_right)
-    table.cell(dbg, 0, 9, "✖ Abandonné : pas de cible ≥ " + str.tostring(min_rr_in, "#.#") + "R (BUY)", text_color=color.gray, text_size=size.small, text_halign=text.align_left)
-    table.cell(dbg, 1, 9, str.tostring(cnt_buy_no_target), text_color=color.gray, text_size=size.small, text_halign=text.align_right)
-    table.cell(dbg, 0, 10, "✖ Abandonné : pas de cible ≥ " + str.tostring(min_rr_in, "#.#") + "R (SELL)", text_color=color.gray, text_size=size.small, text_halign=text.align_left)
-    table.cell(dbg, 1, 10, str.tostring(cnt_sell_no_target), text_color=color.gray, text_size=size.small, text_halign=text.align_right)
-    table.cell(dbg, 0, 11, "LAB " + SCRIPT_VERSION + " (base " + ENGINE_BASE + ")", text_color=color.aqua, text_size=size.small, text_halign=text.align_left)
-    table.cell(dbg, 1, 11, lab_win_txt + " " + (is_crypto_247 ? "CONT" : "KZ"), text_color=color.aqua, text_size=size.small, text_halign=text.align_right)
+    table.cell(dbg, 0, 1, "H1 Sweeps détectés", text_color=color.white, text_size=size.small, text_halign=text.align_left)
+    table.cell(dbg, 1, 1, str.tostring(h1_cnt_buy_sweep), text_color=color.white, text_size=size.small, text_halign=text.align_right)
+    table.cell(dbg, 0, 2, "H1 MSS confirmés", text_color=color.white, text_size=size.small, text_halign=text.align_left)
+    table.cell(dbg, 1, 2, str.tostring(h1_cnt_buy_mss), text_color=color.white, text_size=size.small, text_halign=text.align_right)
+    table.cell(dbg, 0, 3, "H1 FVG validées", text_color=color.white, text_size=size.small, text_halign=text.align_left)
+    table.cell(dbg, 1, 3, str.tostring(h1_cnt_buy_fvg), text_color=color.white, text_size=size.small, text_halign=text.align_right)
+    table.cell(dbg, 0, 4, "H1 FVG expirées", text_color=color.gray, text_size=size.small, text_halign=text.align_left)
+    table.cell(dbg, 1, 4, str.tostring(h1_cnt_buy_fvg_exp), text_color=color.gray, text_size=size.small, text_halign=text.align_right)
+    table.cell(dbg, 0, 5, "H1 POI Validés (Discount)", text_color=color.lime, text_size=size.small, text_halign=text.align_left)
+    table.cell(dbg, 1, 5, str.tostring(h1_cnt_buy_poi), text_color=color.lime, text_size=size.small, text_halign=text.align_right)
+    table.cell(dbg, 0, 6, "H1 POI Rejetés (Eq)", text_color=color.red, text_size=size.small, text_halign=text.align_left)
+    table.cell(dbg, 1, 6, str.tostring(h1_cnt_buy_poi_rej), text_color=color.red, text_size=size.small, text_halign=text.align_right)
+    
+    table.cell(dbg, 0, 7, "---", text_color=color.gray, text_size=size.small, text_halign=text.align_left)
+    
+    table.cell(dbg, 0, 8, "M5 Entrées dans POI", text_color=color.white, text_size=size.small, text_halign=text.align_left)
+    table.cell(dbg, 1, 8, str.tostring(cnt_buy_in_poi), text_color=color.white, text_size=size.small, text_halign=text.align_right)
+    table.cell(dbg, 0, 9, "M5 Sweeps", text_color=color.white, text_size=size.small, text_halign=text.align_left)
+    table.cell(dbg, 1, 9, str.tostring(cnt_sweep_l), text_color=color.white, text_size=size.small, text_halign=text.align_right)
+    table.cell(dbg, 0, 10, "M5 MSS confirmés", text_color=color.white, text_size=size.small, text_halign=text.align_left)
+    table.cell(dbg, 1, 10, str.tostring(cnt_buy_mss), text_color=color.white, text_size=size.small, text_halign=text.align_right)
+    table.cell(dbg, 0, 11, "M5 FVG causales", text_color=color.white, text_size=size.small, text_halign=text.align_left)
+    table.cell(dbg, 1, 11, str.tostring(cnt_buy_fvg), text_color=color.white, text_size=size.small, text_halign=text.align_right)
+    table.cell(dbg, 0, 12, "M5 OB Rejetés (hors POI)", text_color=color.red, text_size=size.small, text_halign=text.align_left)
+    table.cell(dbg, 1, 12, str.tostring(cnt_buy_ob_rej), text_color=color.red, text_size=size.small, text_halign=text.align_right)
+    table.cell(dbg, 0, 13, "M5 READY / Limit préparé", text_color=color.lime, text_size=size.small, text_halign=text.align_left)
+    table.cell(dbg, 1, 13, str.tostring(cnt_buy_ready), text_color=color.lime, text_size=size.small, text_halign=text.align_right)
+    table.cell(dbg, 0, 14, "M5 Abandon : SL hors ATR", text_color=color.gray, text_size=size.small, text_halign=text.align_left)
+    table.cell(dbg, 1, 14, str.tostring(cnt_buy_sl_invalid), text_color=color.gray, text_size=size.small, text_halign=text.align_right)
+    table.cell(dbg, 0, 15, "M5 Abandon : pas de cible", text_color=color.gray, text_size=size.small, text_halign=text.align_left)
+    table.cell(dbg, 1, 15, str.tostring(cnt_buy_no_target), text_color=color.gray, text_size=size.small, text_halign=text.align_right)
+    
+    table.cell(dbg, 0, 16, "M5 Limit Envoyés", text_color=color.yellow, text_size=size.small, text_halign=text.align_left)
+    table.cell(dbg, 1, 16, str.tostring(cnt_buy_limit_sent), text_color=color.yellow, text_size=size.small, text_halign=text.align_right)
+    table.cell(dbg, 0, 17, "M5 Limit Exécutés", text_color=color.lime, text_size=size.small, text_halign=text.align_left)
+    table.cell(dbg, 1, 17, str.tostring(cnt_buy_limit_filled), text_color=color.lime, text_size=size.small, text_halign=text.align_right)
+    table.cell(dbg, 0, 18, "M5 Limit Annulés (contexte)", text_color=color.red, text_size=size.small, text_halign=text.align_left)
+    table.cell(dbg, 1, 18, str.tostring(cnt_buy_limit_cancel), text_color=color.red, text_size=size.small, text_halign=text.align_right)
+    table.cell(dbg, 0, 19, "M5 Limit Expirés (12 barres)", text_color=color.gray, text_size=size.small, text_halign=text.align_left)
+    table.cell(dbg, 1, 19, str.tostring(cnt_buy_expired_limit), text_color=color.gray, text_size=size.small, text_halign=text.align_right)
+
+    // COLONNE 2: SELL
+    table.cell(dbg, 2, 0, "DIAGNOSTIC SELL", text_color=color.yellow, text_size=size.small, text_halign=text.align_left)
+    table.cell(dbg, 3, 0, "", bgcolor=color.new(color.black,15))
+    table.cell(dbg, 2, 1, "H1 Sweeps détectés", text_color=color.white, text_size=size.small, text_halign=text.align_left)
+    table.cell(dbg, 3, 1, str.tostring(h1_cnt_sell_sweep), text_color=color.white, text_size=size.small, text_halign=text.align_right)
+    table.cell(dbg, 2, 2, "H1 MSS confirmés", text_color=color.white, text_size=size.small, text_halign=text.align_left)
+    table.cell(dbg, 3, 2, str.tostring(h1_cnt_sell_mss), text_color=color.white, text_size=size.small, text_halign=text.align_right)
+    table.cell(dbg, 2, 3, "H1 FVG validées", text_color=color.white, text_size=size.small, text_halign=text.align_left)
+    table.cell(dbg, 3, 3, str.tostring(h1_cnt_sell_fvg), text_color=color.white, text_size=size.small, text_halign=text.align_right)
+    table.cell(dbg, 2, 4, "H1 FVG expirées", text_color=color.gray, text_size=size.small, text_halign=text.align_left)
+    table.cell(dbg, 3, 4, str.tostring(h1_cnt_sell_fvg_exp), text_color=color.gray, text_size=size.small, text_halign=text.align_right)
+    table.cell(dbg, 2, 5, "H1 POI Validés (Premium)", text_color=color.lime, text_size=size.small, text_halign=text.align_left)
+    table.cell(dbg, 3, 5, str.tostring(h1_cnt_sell_poi), text_color=color.lime, text_size=size.small, text_halign=text.align_right)
+    table.cell(dbg, 2, 6, "H1 POI Rejetés (Eq)", text_color=color.red, text_size=size.small, text_halign=text.align_left)
+    table.cell(dbg, 3, 6, str.tostring(h1_cnt_sell_poi_rej), text_color=color.red, text_size=size.small, text_halign=text.align_right)
+    
+    table.cell(dbg, 2, 7, "---", text_color=color.gray, text_size=size.small, text_halign=text.align_left)
+    
+    table.cell(dbg, 2, 8, "M5 Entrées dans POI", text_color=color.white, text_size=size.small, text_halign=text.align_left)
+    table.cell(dbg, 3, 8, str.tostring(cnt_sell_in_poi), text_color=color.white, text_size=size.small, text_halign=text.align_right)
+    table.cell(dbg, 2, 9, "M5 Sweeps", text_color=color.white, text_size=size.small, text_halign=text.align_left)
+    table.cell(dbg, 3, 9, str.tostring(cnt_sweep_h), text_color=color.white, text_size=size.small, text_halign=text.align_right)
+    table.cell(dbg, 2, 10, "M5 MSS confirmés", text_color=color.white, text_size=size.small, text_halign=text.align_left)
+    table.cell(dbg, 3, 10, str.tostring(cnt_sell_mss), text_color=color.white, text_size=size.small, text_halign=text.align_right)
+    table.cell(dbg, 2, 11, "M5 FVG causales", text_color=color.white, text_size=size.small, text_halign=text.align_left)
+    table.cell(dbg, 3, 11, str.tostring(cnt_sell_fvg), text_color=color.white, text_size=size.small, text_halign=text.align_right)
+    table.cell(dbg, 2, 12, "M5 OB Rejetés (hors POI)", text_color=color.red, text_size=size.small, text_halign=text.align_left)
+    table.cell(dbg, 3, 12, str.tostring(cnt_sell_ob_rej), text_color=color.red, text_size=size.small, text_halign=text.align_right)
+    table.cell(dbg, 2, 13, "M5 READY / Limit préparé", text_color=color.lime, text_size=size.small, text_halign=text.align_left)
+    table.cell(dbg, 3, 13, str.tostring(cnt_sell_ready), text_color=color.lime, text_size=size.small, text_halign=text.align_right)
+    table.cell(dbg, 2, 14, "M5 Abandon : SL hors ATR", text_color=color.gray, text_size=size.small, text_halign=text.align_left)
+    table.cell(dbg, 3, 14, str.tostring(cnt_sell_sl_invalid), text_color=color.gray, text_size=size.small, text_halign=text.align_right)
+    table.cell(dbg, 2, 15, "M5 Abandon : pas de cible", text_color=color.gray, text_size=size.small, text_halign=text.align_left)
+    table.cell(dbg, 3, 15, str.tostring(cnt_sell_no_target), text_color=color.gray, text_size=size.small, text_halign=text.align_right)
+    
+    table.cell(dbg, 2, 16, "M5 Limit Envoyés", text_color=color.yellow, text_size=size.small, text_halign=text.align_left)
+    table.cell(dbg, 3, 16, str.tostring(cnt_sell_limit_sent), text_color=color.yellow, text_size=size.small, text_halign=text.align_right)
+    table.cell(dbg, 2, 17, "M5 Limit Exécutés", text_color=color.lime, text_size=size.small, text_halign=text.align_left)
+    table.cell(dbg, 3, 17, str.tostring(cnt_sell_limit_filled), text_color=color.lime, text_size=size.small, text_halign=text.align_right)
+    table.cell(dbg, 2, 18, "M5 Limit Annulés (contexte)", text_color=color.red, text_size=size.small, text_halign=text.align_left)
+    table.cell(dbg, 3, 18, str.tostring(cnt_sell_limit_cancel), text_color=color.red, text_size=size.small, text_halign=text.align_right)
+    table.cell(dbg, 2, 19, "M5 Limit Expirés (12 barres)", text_color=color.gray, text_size=size.small, text_halign=text.align_left)
+    table.cell(dbg, 3, 19, str.tostring(cnt_sell_expired_limit), text_color=color.gray, text_size=size.small, text_halign=text.align_right)
+
+    // COLONNE 4: AUTOPSIE SWEEP
+    table.cell(dbg, 4, 0, "AUTOPSIE DU DERNIER SWEEP", text_color=color.orange, text_size=size.small, text_halign=text.align_left)
+    table.cell(dbg, 5, 0, "", bgcolor=color.new(color.black,15))
+    
+    table.cell(dbg, 4, 1, "Sens", text_color=color.white, text_size=size.small, text_halign=text.align_left)
+    table.cell(dbg, 5, 1, dbg_sweep_dir, text_color=color.white, text_size=size.small, text_halign=text.align_right)
+    
+    time_str = na(dbg_sweep_time) ? "-" : str.format_time(dbg_sweep_time, "MM-dd HH:mm", "America/New_York")
+    table.cell(dbg, 4, 2, "Date (New York)", text_color=color.white, text_size=size.small, text_halign=text.align_left)
+    table.cell(dbg, 5, 2, time_str, text_color=color.white, text_size=size.small, text_halign=text.align_right)
+
+    table.cell(dbg, 4, 3, "Prix Sweep", text_color=color.white, text_size=size.small, text_halign=text.align_left)
+    table.cell(dbg, 5, 3, str.tostring(dbg_sweep_px), text_color=color.white, text_size=size.small, text_halign=text.align_right)
+    
+    if dbg_sweep_dir == "BUY"
+        dist_55 = na(dbg_mss_55) or na(dbg_sweep_px) ? na : (dbg_mss_55 - dbg_sweep_px) / dbg_sweep_atr
+        dist_33 = na(dbg_mss_33) or na(dbg_sweep_px) ? na : (dbg_mss_33 - dbg_sweep_px) / dbg_sweep_atr
+        dist_22 = na(dbg_mss_22) or na(dbg_sweep_px) ? na : (dbg_mss_22 - dbg_sweep_px) / dbg_sweep_atr
+        
+        table.cell(dbg, 4, 4, "Niveau MSS 5/5", text_color=color.white, text_size=size.small, text_halign=text.align_left)
+        table.cell(dbg, 5, 4, str.tostring(dbg_mss_55) + " (" + str.tostring(dist_55, "#.#") + "a)", text_color=color.white, text_size=size.small, text_halign=text.align_right)
+        
+        table.cell(dbg, 4, 5, "Niveau MSS 3/3", text_color=color.silver, text_size=size.small, text_halign=text.align_left)
+        table.cell(dbg, 5, 5, str.tostring(dbg_mss_33) + " (" + str.tostring(dist_33, "#.#") + "a)", text_color=color.silver, text_size=size.small, text_halign=text.align_right)
+        
+        table.cell(dbg, 4, 6, "Niveau MSS 2/2", text_color=color.gray, text_size=size.small, text_halign=text.align_left)
+        table.cell(dbg, 5, 6, str.tostring(dbg_mss_22) + " (" + str.tostring(dist_22, "#.#") + "a)", text_color=color.gray, text_size=size.small, text_halign=text.align_right)
+        
+        table.cell(dbg, 4, 7, "Plus haut atteint", text_color=color.white, text_size=size.small, text_halign=text.align_left)
+        table.cell(dbg, 5, 7, str.tostring(dbg_max_reach), text_color=color.white, text_size=size.small, text_halign=text.align_right)
+        
+    else if dbg_sweep_dir == "SELL"
+        dist_55 = na(dbg_mss_55) or na(dbg_sweep_px) ? na : (dbg_sweep_px - dbg_mss_55) / dbg_sweep_atr
+        dist_33 = na(dbg_mss_33) or na(dbg_sweep_px) ? na : (dbg_sweep_px - dbg_mss_33) / dbg_sweep_atr
+        dist_22 = na(dbg_mss_22) or na(dbg_sweep_px) ? na : (dbg_sweep_px - dbg_mss_22) / dbg_sweep_atr
+        
+        table.cell(dbg, 4, 4, "Niveau MSS 5/5", text_color=color.white, text_size=size.small, text_halign=text.align_left)
+        table.cell(dbg, 5, 4, str.tostring(dbg_mss_55) + " (" + str.tostring(dist_55, "#.#") + "a)", text_color=color.white, text_size=size.small, text_halign=text.align_right)
+        
+        table.cell(dbg, 4, 5, "Niveau MSS 3/3", text_color=color.silver, text_size=size.small, text_halign=text.align_left)
+        table.cell(dbg, 5, 5, str.tostring(dbg_mss_33) + " (" + str.tostring(dist_33, "#.#") + "a)", text_color=color.silver, text_size=size.small, text_halign=text.align_right)
+        
+        table.cell(dbg, 4, 6, "Niveau MSS 2/2", text_color=color.gray, text_size=size.small, text_halign=text.align_left)
+        table.cell(dbg, 5, 6, str.tostring(dbg_mss_22) + " (" + str.tostring(dist_22, "#.#") + "a)", text_color=color.gray, text_size=size.small, text_halign=text.align_right)
+        
+        table.cell(dbg, 4, 7, "Plus bas atteint", text_color=color.white, text_size=size.small, text_halign=text.align_left)
+        table.cell(dbg, 5, 7, str.tostring(dbg_max_reach), text_color=color.white, text_size=size.small, text_halign=text.align_right)
+    
+    table.cell(dbg, 4, 8, "Franchissement Clôture ?", text_color=color.white, text_size=size.small, text_halign=text.align_left)
+    table.cell(dbg, 5, 8, dbg_crossed_55_close ? "OUI" : "NON", text_color=dbg_crossed_55_close ? color.lime : color.gray, text_size=size.small, text_halign=text.align_right)
+    
+    table.cell(dbg, 4, 9, "Échec par manque de Disp ?", text_color=color.white, text_size=size.small, text_halign=text.align_left)
+    table.cell(dbg, 5, 9, dbg_crossed_55_nodisp ? "OUI" : "NON", text_color=dbg_crossed_55_nodisp ? color.red : color.gray, text_size=size.small, text_halign=text.align_right)
+    
+    table.cell(dbg, 4, 10, "Raison de sortie/mort", text_color=color.orange, text_size=size.small, text_halign=text.align_left)
+    table.cell(dbg, 5, 10, dbg_death_reason, text_color=color.orange, text_size=size.small, text_halign=text.align_right)
+
 
 if h1_bull_consumed and not na(h1_bull_box)
     box.set_extend(h1_bull_box, extend.none)

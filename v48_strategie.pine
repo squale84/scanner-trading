@@ -1,0 +1,5629 @@
+//@version=5
+strategy("Stratégie V48 S1 — copie fidèle de la V48 CLEAN", shorttitle="Stratégie V48 S1", overlay=true, max_labels_count=500, max_lines_count=500, max_boxes_count=300, initial_capital=10000, commission_type=strategy.commission.cash_per_contract, commission_value=0.15, slippage=0, process_orders_on_close=true, pyramiding=0)
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// PARAMÈTRES
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+groupMain = "1. Réglages principaux"
+pivotLen = input.int(30, "Force pivot M5", minval=3, group=groupMain)
+rr = input.float(3.2, "Risk Reward", step=0.1, group=groupMain)
+atrLen = input.int(14, "ATR", group=groupMain)
+atrBuffer = input.float(0.65, "Buffer SL ATR", step=0.05, group=groupMain)
+minStopAtr = input.float(1.10, "Stop min ATR", step=0.05, group=groupMain)
+cooldownBars = input.int(8, "Cooldown", minval=1, group=groupMain)
+conservativeMode = input.bool(true, "TP et SL même bougie = SL", group=groupMain)
+groupH1Filter = "9. Filtre H1 pour M5"
+h1M5FilterMode = input.string("Strict", "Filtre H1 pour signaux M5", options=["OFF", "Souple", "Strict"], group=groupH1Filter)
+m5AlignMemoryBars = input.int(12, "Mémoire M5 ALIGN", minval=1, maxval=50, group=groupH1Filter)
+zoneRiskMemoryBars = input.int(10, "Mémoire ZONE RISK", minval=1, maxval=50, group=groupH1Filter)
+fireMemoryBars = input.int(12, "Mémoire FEU ICT Pullback", minval=1, maxval=50, group=groupH1Filter)
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// H1 NARRATIVE FILTER V4.12B-18
+// Contexte H1 intelligent pour guider le M5
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+groupH1Narrative = "11. H1 Narrative Filter"
+
+useH1Narrative = input.bool(true, "Activer H1 Narrative Filter", group=groupH1Narrative)
+h1NarrativeMode = input.string("Lecture seule", "Mode H1 Narrative", options=["Lecture seule", "Filtre souple", "Filtre strict"], group=groupH1Narrative)
+showH1NarrativeDashboard = input.bool(true, "Afficher H1 Narrative dans dashboard", group=groupH1Narrative)
+groupSession = "2. Session"
+useSession = input.bool(true, "Filtrer session", group=groupSession)
+sessionInput = input.session("0830-2030", "Session Paris", group=groupSession)
+
+groupPA = "3. Bougies de retournement"
+useEngulf = input.bool(true, "Englobantes", group=groupPA)
+usePin = input.bool(false, "Pinbar / Hammer / Shooting", group=groupPA)
+useStars = input.bool(true, "Morning / Evening Star", group=groupPA)
+
+groupZones = "4. OB / FVG"
+showFVG = input.bool(true, "Afficher FVG", group=groupZones)
+showOB = input.bool(true, "Afficher OB", group=groupZones)
+requireZone = input.bool(true, "Exiger OB/FVG pour signal", group=groupZones)
+showOteStar = input.bool(true, "Afficher étoile OTE sur OB/FVG", group=groupZones)
+oteLowRatio = input.float(0.63, "OTE bas", step=0.01, group=groupZones)
+oteHighRatio = input.float(0.79, "OTE haut", step=0.01, group=groupZones)
+fvgAtr = input.float(0.80, "Force FVG ATR", step=0.05, group=groupZones)
+obAtr = input.float(0.80, "Force OB ATR", step=0.05, group=groupZones)
+maxZones = input.int(15, "Max zones gardées", minval=5, group=groupZones)
+deleteMitigated = input.bool(true, "Supprimer zones mitigées", group=groupZones)
+deleteMitigatedOB = input.bool(true, "Supprimer OB mitigées", group=groupZones)
+useCloseMitigation = input.bool(true, "Mitigation sur clôture uniquement", group=groupZones)
+fvgMitigationMode = input.string("Cloture", "Mitigation FVG dynamique", options=["Meche", "Corps", "Cloture"], group=groupZones)
+shrinkPartialFVG = input.bool(true, "Réduire FVG partiellement comblée", group=groupZones)
+
+groupMTF = "5. Contexte H4 / H1"
+h4Tf = input.timeframe("240", "Timeframe H4", group=groupMTF)
+h1Tf = input.timeframe("60", "Timeframe H1", group=groupMTF)
+emaFastLen = input.int(50, "EMA rapide HTF", group=groupMTF)
+emaSlowLen = input.int(200, "EMA lente HTF", group=groupMTF)
+pdLookbackHTF = input.int(100, "Lookback P/D H4-H1", group=groupMTF)
+pdLookbackLocal = input.int(120, "Lookback P/D TF actuelle", minval=20, group=groupMTF)
+
+groupVisual = "6. Visuel"
+showStructure = input.bool(true, "Afficher HH/HL/LH/LL", group=groupVisual)
+showBos = input.bool(true, "Afficher BOS/CHoCH", group=groupVisual)
+showLiqLite = input.bool(true, "Afficher BSL/SSL Lite", group=groupVisual)
+showLiqTakenMarks = input.bool(true, "Marquer liquidité prise", group=groupVisual)
+showEqhEqlLite = input.bool(true, "Afficher EQH/EQL Lite", group=groupVisual)
+liqEqToleranceAtr = input.float(0.25, "Tolérance EQH/EQL ATR", step=0.05, group=groupVisual)
+liqVisualMode = input.string("Majeur + EQH/EQL", "Mode liquidité visuelle", options=["Swing + EQH/EQL", "Majeur + EQH/EQL", "EQH/EQL seulement"], group=groupVisual)
+liqMajorAtr = input.float(1.50, "Swing majeur min ATR", step=0.10, group=groupVisual)
+liqMajorLookback = input.int(40, "Lookback swing majeur", minval=10, maxval=200, group=groupVisual)
+showHtfLiqMarks = input.bool(true, "Afficher marqueurs liquidité HTF", group=groupVisual)
+htfLiqMarkSize = input.string("Small", "Taille marqueurs HTF", options=["Tiny", "Small", "Normal"], group=groupVisual)
+showPostChochBos = input.bool(true, "Afficher BOS post-CHoCH", group=groupVisual)
+showFastMss = input.bool(true, "Afficher MSS rapide", group=groupVisual)
+fastMssLen = input.int(8, "Force MSS rapide", minval=2, maxval=20, group=groupVisual)
+fastMssUseClose = input.bool(false, "MSS rapide sur clôture", group=groupVisual)
+showSignals = input.bool(true, "Afficher labels BUY/SELL", group=groupVisual)
+labelFilterMode = input.string("Tous", "Filtre visuel labels", options=["Tous", "ICT SYNC OK", "Masquer"], group=groupVisual)
+showSLTP = input.bool(true, "Afficher SL/TP", group=groupVisual)
+showResults = input.bool(false, "Afficher WIN/LOSS", group=groupVisual)
+showDashboard = input.bool(true, "Dashboard principal", group=groupVisual)
+dashboardMode = input.string("SIMPLE", "Mode Dashboard", options=["SIMPLE", "COMPLET"], group=groupVisual)
+dashPosition = input.string("Top Right", "Position dashboard principal", options=["Top Right", "Top Left", "Bottom Right", "Bottom Left"], group=groupVisual)
+groupTradeFilter = "7. Trade Autorisé / No Trade"
+showTradePermission = input.bool(true, "Afficher Trade Autorisé / No Trade", group=groupTradeFilter)
+blockMixedContext = input.bool(true, "No Trade si contexte mixte", group=groupTradeFilter)
+blockDangerZone = input.bool(true, "No Trade si zone danger", group=groupTradeFilter)
+blockWaitExecution = input.bool(true, "No Trade si exécution WAIT", group=groupTradeFilter)
+blockCounterHtf = input.bool(true, "No Trade si contre HTF", group=groupTradeFilter)
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// GRADE ICT ★ / ★★ / ★★★
+// Affichage seulement au départ - ne bloque aucun signal
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+groupIctGrade = "8. Grade ICT ★"
+
+showIctGrade = input.bool(true, "Afficher Grade ICT", group=groupIctGrade)
+ictGradeMode = input.string("Affichage seulement", "Mode Grade ICT", options=["Affichage seulement", "Influence Prudence", "Influence GO"], group=groupIctGrade)
+showStarsOnLabels = input.bool(true, "Afficher étoiles sur labels", group=groupIctGrade)
+showGradeInDashboard = input.bool(true, "Afficher Grade dans dashboard", group=groupIctGrade)
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// LABEL ↔ ENTRY BRIDGE V4.12B-12
+// Synchronise les labels / Sync / Joker avec les entrées simulées
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+groupBridge = "10. Label ↔ Entry Bridge"
+
+useEntryBridge = input.bool(true, "Activer Label ↔ Entry Bridge", group=groupBridge)
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// SMART RECOVERY SETUPS V4.12B-20
+// Récupère les setups ICT propres manqués par le moteur principal
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+groupRecovery = "12. Smart Recovery Setups"
+
+useSmartRecovery = input.bool(true, "Activer Smart Recovery", group=groupRecovery)
+
+recoveryMode = input.string(
+     "Normal",
+     "Mode Recovery",
+     options=["Prudent", "Normal", "Agressif"],
+     group=groupRecovery)
+
+showRecoveryLabels = input.bool(false, "Afficher labels Recovery", group=groupRecovery)
+
+recoveryMemoryBars = input.int(18, "Mémoire Recovery", minval=5, maxval=80, group=groupRecovery)
+
+recoveryNeedSweep = input.bool(true, "Recovery exige sweep récent", group=groupRecovery)
+
+recoveryNeedZone = input.bool(true, "Recovery exige OB/FVG", group=groupRecovery)
+
+recoveryNeedReaction = input.bool(true, "Recovery exige réaction bougie", group=groupRecovery)
+
+recoveryAllowH1Counter = input.bool(true, "Autoriser Recovery contre H1 en zone extrême", group=groupRecovery)
+
+recoveryMinScore = input.int(4, "Score minimum Recovery", minval=2, maxval=7, group=groupRecovery)
+
+recoveryCooldownBars = input.int(8, "Cooldown Recovery", minval=1, maxval=50, group=groupRecovery)
+
+entryBridgeMode = input.string(
+     "ICT Simple",
+     "Mode Bridge",
+     options=["Signal strict", "Signal + Sync OK", "Signal + Sync/Joker", "Signal + Sync/Pullback", "ICT Simple", "ICT Simple Brut"],
+     group=groupBridge)
+
+minBridgeIctScore = input.int(3, "Score ICT minimum Bridge", minval=1, maxval=6, group=groupBridge)
+
+bridgeUseH1Guard = input.bool(true, "Bridge respecte H1 sauf reversal", group=groupBridge)
+useAntiBadSellFilter = input.bool(true, "Anti SELL bas de range / proche zone BUY", group=groupBridge)
+badSellZoneAtr = input.float(1.20, "Distance max zone BUY pour bloquer SELL ATR", step=0.10, group=groupBridge)
+blockSellInDiscount = input.bool(true, "Bloquer SELL en Discount proche zone BUY", group=groupBridge)
+ictSimpleZoneProximityAtr = input.float(0.30, "ICT Simple proximité zone ATR", step=0.05, group=groupBridge)
+ictSimpleStructureMode = input.string("CHoCH + BOS", "ICT Simple structure", options=["BOS/MSS strict", "CHoCH + BOS"], group=groupBridge)
+// Debug ICT Simple
+showIctSimpleDebug = input.bool(false, "Afficher Debug ICT Simple", group=groupBridge)
+debugOnlyNearZones = input.bool(true, "Debug seulement proche OB/FVG", group=groupBridge)
+debugEveryBars = input.int(8, "Espacement Debug labels", minval=1, maxval=50, group=groupBridge)
+debugMaxLabels = input.int(60, "Nombre max labels Debug", minval=10, maxval=200, group=groupBridge)
+useIctRangeEdge = input.bool(false, "Activer ICT Range Edge", group=groupBridge)
+rangeEdgeLimit = input.float(0.30, "ICT Range Edge extrême range", step=0.05, minval=0.10, maxval=0.50, group=groupBridge)
+rangeEdgeNeedTarget = input.bool(true, "Range Edge exige zone opposée cible", group=groupBridge)
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// SELL TREND+ V4.12B-21 — PARAMÈTRES NEUTRALISÉS
+// Inputs retirés du panneau TradingView.
+// Variables conservées pour éviter les dépendances cassées.
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+groupSellTrendPlus = "13. SELL TREND+"
+
+useSellTrendPlus = false
+showSellTrendPlusLabels = false
+
+sellTrendPlusCooldown = 10
+sellTrendPlusNeedBsl = false
+sellTrendPlusBlockNearBuyZone = true
+sellTrendPlusMinSpaceAtr = 0.80
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// BUY EXP+ V4.12B-22
+// Observation des BUY d'expansion : MSS/BOS + displacement + FVG/OB
+// Ne modifie pas le backtest
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+groupBuyExpPlus = "14. BUY EXP+"
+
+useBuyExpPlus = input.bool(true, "Activer BUY EXP+", group=groupBuyExpPlus)
+showBuyExpPlusLabels = input.bool(false, "Afficher labels BUY EXP+", group=groupBuyExpPlus)
+
+buyExpPlusCooldown = input.int(10, "Cooldown BUY EXP+", minval=1, maxval=50, group=groupBuyExpPlus)
+
+buyExpLookback = input.int(20, "Mémoire BUY EXP+", minval=5, maxval=80, group=groupBuyExpPlus)
+buyExpStructMemoryBars = input.int(8, "Mémoire structure BUY EXP+", minval=2, maxval=30, group=groupBuyExpPlus)
+
+buyExpNeedFvg = input.bool(true, "Exiger FVG BUY récent", group=groupBuyExpPlus)
+
+buyExpAllowH1Counter = input.bool(true, "Autoriser contre H1 si expansion M5 forte", group=groupBuyExpPlus)
+
+buyExpBlockNearSellZone = input.bool(false, "Bloquer si zone SELL trop proche au-dessus", group=groupBuyExpPlus)
+
+buyExpMinSpaceToSellAtr = input.float(0.80, "Espace min vers zone SELL ATR", step=0.10, group=groupBuyExpPlus)
+showBuyPrepLabels = input.bool(false, "Afficher labels BUY PREP", group=groupBuyExpPlus)
+
+buyPrepMemoryBars = input.int(24, "Mémoire BUY PREP", minval=5, maxval=100, group=groupBuyExpPlus)
+
+buyPrepCooldownBars = input.int(12, "Cooldown BUY PREP", minval=1, maxval=50, group=groupBuyExpPlus)
+showBuyExpDiag = input.bool(false, "Afficher diagnostic BUY EXP", group=groupBuyExpPlus)
+
+buyExpDiagEveryBars = input.int(5, "Espacement diagnostic BUY EXP", minval=1, maxval=30, group=groupBuyExpPlus)
+
+buyExpDiagMaxLabels = input.int(50, "Nombre max diagnostics BUY EXP", minval=10, maxval=150, group=groupBuyExpPlus)
+
+// V45 — Guards BUY EXP+
+buyExpBlockRange = input.bool(true, "BUY EXP+ bloque range", group=groupBuyExpPlus)
+buyExpWaitAfterTrigger = input.bool(true, "BUY EXP+ attend confirmation après trigger", group=groupBuyExpPlus)
+buyExpConfirmMemoryBars = input.int(4, "Mémoire confirmation BUY EXP+", minval=1, maxval=20, group=groupBuyExpPlus)
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// OTE WATCH V45 — PARAMÈTRES NEUTRALISÉS
+// Inputs retirés du panneau TradingView.
+// Variables conservées pour éviter les dépendances cassées.
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+groupOteWatch = "20. OTE WATCH"
+
+useOteWatch = false
+showOteWatchLabels = false
+
+oteWatchNeedH1 = true
+oteWatchNeedLiq = true
+oteWatchLiqProximityAtr = 1.00
+
+oteWatchCooldownBars = 12
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// WATCH V1 — PARAMÈTRES NEUTRALISÉS
+// Inputs retirés du panneau TradingView.
+// Variables conservées pour éviter les dépendances cassées.
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+groupWatchV1 = "21. WATCH V1"
+
+useWatchV1 = false
+showWatchV1Labels = false
+
+watchV1NeedH1 = false
+watchV1CooldownBars = 10
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// BUY MIRROR+ V4.12B-26 — PARAMÈTRES NEUTRALISÉS
+// Inputs retirés du panneau TradingView.
+// Variables conservées pour éviter les dépendances cassées.
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+groupBuyMirror = "15. BUY MIRROR+"
+
+useBuyMirrorPlus = false
+showBuyMirrorPlusLabels = false
+
+buyMirrorCooldownBars = 12
+buyMirrorStructMemoryBars = 40
+buyMirrorRetestMemoryBars = 12
+
+buyMirrorOnePerStruct = true
+buyMirrorRequireRealTouch = true
+buyMirrorNeedStrongReaction = true
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// BUY PB+ PRO V4.12B-31
+// Pullback propre après structure BUY : BOS/CHoCH/MSS → expansion → retour OB/FVG → réaction
+// Observation uniquement - ne modifie pas le backtest
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+groupBuyPbPro = "16. BUY PB+ PRO"
+
+useBuyPbPro = input.bool(true, "Activer BUY PB+ PRO", group=groupBuyPbPro)
+showBuyPbProLabels = input.bool(false, "Afficher labels BUY PB+ PRO", group=groupBuyPbPro)
+
+buyPbStructMemoryBars = input.int(35, "Mémoire structure BUY PB+", minval=5, maxval=100, group=groupBuyPbPro)
+buyPbRetestMemoryBars = input.int(8, "Mémoire retest BUY PB+", minval=2, maxval=30, group=groupBuyPbPro)
+buyPbCooldownBars = input.int(14, "Cooldown BUY PB+", minval=1, maxval=60, group=groupBuyPbPro)
+
+buyPbMinExpansionAtr = input.float(1.00, "Expansion min avant pullback ATR", step=0.10, group=groupBuyPbPro)
+
+buyPbRequireRealTouch = input.bool(true, "Exiger contact réel OB/FVG BUY", group=groupBuyPbPro)
+buyPbNeedStrongReaction = input.bool(true, "Exiger réaction forte BUY", group=groupBuyPbPro)
+buyPbRequirePostRetestConfirm = input.bool(true, "Exiger confirmation après retest", group=groupBuyPbPro)
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// BUY PB+ PRO V4.12B-36 — Deep Pullback Retest
+// Attend un vrai retour profond dans OB/FVG avant confirmation
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+buyPbUseDeepRetest = input.bool(true, "Exiger pullback profond BUY PB+", group=groupBuyPbPro)
+
+buyPbMinPullbackDepth = input.float(0.35, "Profondeur min pullback BUY PB+", minval=0.10, maxval=0.90, step=0.05, group=groupBuyPbPro)
+buyPbOnePerStruct = input.bool(true, "Un seul BUY PB+ par structure", group=groupBuyPbPro)
+
+buyPbNeedSsl = input.bool(false, "Exiger SSL / sweep bas récent", group=groupBuyPbPro)
+buyPbAllowH1Counter = input.bool(true, "Autoriser contre H1 si structure M5 propre", group=groupBuyPbPro)
+
+buyPbBlockNearSellZone = input.bool(true, "Bloquer si zone SELL trop proche", group=groupBuyPbPro)
+buyPbMinSpaceToSellAtr = input.float(0.80, "Espace min vers zone SELL ATR", step=0.10, group=groupBuyPbPro)
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// BUY PB+ PRO V4.12B-33 — Countertrend Guard
+// Durcit les BUY PB+ quand H1 n'est pas clairement acheteur
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+buyPbUseCounterGuard = input.bool(true, "Guard contre-tendance BUY PB+", group=groupBuyPbPro)
+
+buyPbTreatH1NeutralAsCounter = input.bool(true, "H1 neutre = contre-tendance", group=groupBuyPbPro)
+
+buyPbCounterMinExpansionAtr = input.float(1.40, "Expansion min contre-tendance ATR", step=0.10, group=groupBuyPbPro)
+
+buyPbCounterNeedChochBos = input.bool(true, "Contre-tendance exige CHoCH + BOS", group=groupBuyPbPro)
+
+buyPbCounterBlockSellZone = input.bool(true, "Contre-tendance bloque proche zone SELL", group=groupBuyPbPro)
+
+buyPbCounterMinSpaceSellAtr = input.float(1.30, "Espace SELL min contre-tendance ATR", step=0.10, group=groupBuyPbPro)
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// BUY PB+ PRO V4.12B-35 — Major Break Guard
+// Exige une vraie cassure d'un swing high majeur quand H1 n'est pas clairement BUY
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+buyPbUseMajorBreakGuard = input.bool(true, "Guard cassure swing majeur BUY PB+", group=groupBuyPbPro)
+
+buyPbMajorGuardWhenH1NotBull = input.bool(true, "Cassure majeure si H1 non BUY", group=groupBuyPbPro)
+
+buyPbMajorSwingLen = input.int(8, "Pivot swing high majeur BUY PB+", minval=3, maxval=30, group=groupBuyPbPro)
+
+buyPbMajorBreakMemoryBars = input.int(60, "Mémoire cassure majeure BUY PB+", minval=10, maxval=150, group=groupBuyPbPro)
+
+buyPbMajorBreakBufferAtr = input.float(0.10, "Buffer cassure majeure ATR", step=0.05, group=groupBuyPbPro)
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// BUY REV EARLY V4.12B-37 — PARAMÈTRES NEUTRALISÉS
+// Inputs retirés du panneau TradingView.
+// Variables conservées pour éviter les dépendances cassées.
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+groupBuyRevEarly = "17. BUY REV EARLY"
+
+useBuyRevEarly = false
+showBuyRevEarlyLabels = false
+
+buyRevCooldownBars = 12
+
+buyRevStructMemoryBars = 10
+buyRevFvgMemoryBars = 8
+buyRevSweepLookback = 18
+
+buyRevNeedLowWorked = true
+buyRevNeedFvg = true
+
+buyRevLocalDispAtr = 0.40
+
+buyRevUseBreaker = false
+buyRevBreakerMemoryBars = 40
+buyRevBreakerTolAtr = 0.10
+
+buyRevAllowAgainstH1 = false
+buyRevRespectSession = false
+
+buyRevBlockFreshBear = true
+buyRevBlockNearSellZone = true
+buyRevMinRoomSellAtr = 0.50
+
+buyRevStrongPathBypassSellSpace = false
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// BUY CONT EARLY V4.12B-38
+// Continuation BUY : BOS / impulsion / FVG / pullback / reclaim
+// Observation uniquement - ne modifie pas le backtest
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+groupBuyContEarly = "18. BUY CONT EARLY"
+
+useBuyContEarly = input.bool(true, "Activer BUY CONT EARLY", group=groupBuyContEarly)
+showBuyContEarlyLabels = input.bool(true, "Afficher labels BUY CONT EARLY", group=groupBuyContEarly)
+showBuyContDiagLabel = input.bool(false, "Afficher diagnostic BUY CONT dans label", group=groupBuyContEarly)
+
+buyContCooldownBars = input.int(12, "Cooldown BUY CONT", minval=1, maxval=60, group=groupBuyContEarly)
+
+buyContStructMemoryBars = input.int(18, "Mémoire structure BUY CONT", minval=5, maxval=100, group=groupBuyContEarly)
+buyContPullbackMemoryBars = input.int(10, "Mémoire pullback BUY CONT", minval=2, maxval=40, group=groupBuyContEarly)
+
+buyContMinImpulseAtr = input.float(2, "Impulsion min BUY CONT ATR", step=0.10, group=groupBuyContEarly)
+
+buyContRequireFvg = input.bool(true, "BUY CONT exige FVG récent", group=groupBuyContEarly)
+buyContRequireReclaim = input.bool(false, "BUY CONT exige reclaim après pullback", group=groupBuyContEarly)
+
+buyContRespectSession = input.bool(false, "BUY CONT respecte session", group=groupBuyContEarly)
+
+buyContBlockNearSellZone = input.bool(true, "BUY CONT bloque zone SELL proche", group=groupBuyContEarly)
+buyContMinRoomSellAtr = input.float(1.20, "Espace min BUY CONT vers SELL ATR", step=0.10, group=groupBuyContEarly)
+// V38B — Re-arm après nouvelle expansion
+buyContRearmNeedNewHigh = input.bool(true, "BUY CONT réarme seulement après nouveau high", group=groupBuyContEarly)
+buyContRearmNewHighAtr = input.float(0.80, "Nouveau high min pour réarmer ATR", step=0.10, group=groupBuyContEarly)
+// V38C — Qualité du pullback
+buyContRequirePullbackDepth = input.bool(true, "BUY CONT exige pullback profond", group=groupBuyContEarly)
+buyContMinPullbackDepth = input.float(0.45, "Profondeur min pullback BUY CONT", minval=0.10, maxval=0.90, step=0.05, group=groupBuyContEarly)
+buyContMaxPullbackDepth = input.float(0.65, "Profondeur max pullback BUY CONT", minval=0.30, maxval=1.50, step=0.05, group=groupBuyContEarly)
+buyContPullbackDepthMode = input.string("Corps", "Mode profondeur BUY CONT", options=["Meche", "Corps"], group=groupBuyContEarly)
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// BACKTEST MODULES DEV V39
+// Intégration contrôlée des modules observation
+// OFF par défaut pour protéger la base PF actuelle
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+groupBacktestModules = "19. Backtest Modules DEV"
+
+btIncludeBase = input.bool(true, "Backtest inclut BASE", group=groupBacktestModules)
+btIncludeBuyContEarly = input.bool(true, "Backtest inclut BUY CONT EARLY", group=groupBacktestModules)
+btIncludeBuyPrepIct = input.bool(true, "Backtest inclut BUY PREP ICT", group=groupBacktestModules)
+
+btIncludeBuyPbPro = input.bool(false, "Backtest inclut BUY PB+ PRO", group=groupBacktestModules)
+btIncludeBuyExpPlus = input.bool(false, "Backtest inclut BUY EXP+", group=groupBacktestModules)
+
+// Modules rejetés REV / RETEST+ / CORE retirés définitivement du routeur BTM.
+// V40 — Dashboard stats par module backtest
+showBtModuleStats = input.bool(true, "Afficher stats modules backtest", group=groupBacktestModules)
+// V41 — Audit visuel des sorties modules
+showBtModuleExitLabels = input.bool(false, "Afficher sorties WIN/LOSS modules", group=groupBacktestModules)
+btAuditOnlyDevModules = input.bool(true, "Afficher seulement sorties modules DEV", group=groupBacktestModules)
+
+// Position stats modules fixée en bas à gauche après nettoyage BT MOD
+btModuleStatsPosition = "Bottom Left"
+// V43 — Fenêtre de backtest
+btUseDateWindow = input.bool(true, "Limiter backtest à une fenêtre dates", group=groupBacktestModules)
+btStartTime = input.time(timestamp("01 May 2026 00:00 +0000"), "Début fenêtre backtest", group=groupBacktestModules)
+btEndTime = input.time(timestamp("14 Jul 2026 00:00 +0000"), "Fin fenêtre backtest", group=groupBacktestModules)
+btInDateWindow =
+     not btUseDateWindow or
+     (time >= btStartTime and time <= btEndTime)     
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// BUY AUDIT MATH V48
+// Diagnostic mathématique des BUY manqués.
+// Ne modifie aucun signal ni backtest.
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+groupBuyAudit = "23. BUY AUDIT MATH"
+
+showBuyAuditMath = input.bool(false, "Afficher BUY AUDIT MATH", group=groupBuyAudit)
+buyAuditMinScore = input.int(7, "Score min BUY AUDIT", minval=1, maxval=10, group=groupBuyAudit)
+buyAuditEveryBars = input.int(2, "Espacement BUY AUDIT", minval=1, maxval=20, group=groupBuyAudit)
+buyAuditMaxLabels = input.int(80, "Max labels BUY AUDIT", minval=10, maxval=200, group=groupBuyAudit)     
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// RÉSIDUS BUY REV DEEP / BUY MIRROR — PARAMÈTRES NEUTRALISÉS
+// Inputs retirés du panneau TradingView.
+// Variables conservées pour éviter les dépendances cassées.
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+buyRevDeepNeedReclaim = true
+buyRevDeepReclaimMemoryBars = 6
+
+buyMirrorNeedSsl = true
+buyMirrorAllowH1Counter = true
+buyMirrorBlockSellRetest = true
+buyMirrorMinSellSpaceAtr = 0.80
+groupConfirm = "7. Confirmations ICT"
+useStructureConfirm = input.bool(true, "Exiger CHoCH/BOS récent", group=groupConfirm)
+sweepWindow = input.int(20, "Fenêtre sweep récente", minval=3, group=groupConfirm)
+structureWindow = input.int(20, "Fenêtre CHoCH/BOS récente", minval=3, group=groupConfirm)
+
+groupSessVisu = "8. VISUEL SESSIONS"
+showSessionBg = input.bool(true, "Afficher fonds sessions", group=groupSessVisu)
+showAsiaBg = input.bool(true, "Asie", group=groupSessVisu)
+showLondonBg = input.bool(true, "Londres", group=groupSessVisu)
+showNyBg = input.bool(true, "New York", group=groupSessVisu)
+
+asiaSession = input.session("0000-0800", "Session Asie Paris", group=groupSessVisu)
+londonSession = input.session("0900-1200", "Session Londres Paris", group=groupSessVisu)
+nySession = input.session("1400-1700", "Session New York Paris", group=groupSessVisu)
+
+asiaBgColor = input.color(color.new(color.yellow, 92), "Fond Asie", group=groupSessVisu)
+londonBgColor = input.color(color.new(color.blue, 92), "Fond Londres", group=groupSessVisu)
+nyBgColor = input.color(color.new(color.red, 92), "Fond New York", group=groupSessVisu)
+
+groupEdu = "9. ICT SYNC pédagogique"
+
+// Dashboard pédagogique nouvelle génération
+showSyncDashboard = input.bool(true, "Afficher dashboard ICT Sync", group=groupEdu)
+syncDashPosition = input.string("Top Left", "Position ICT Sync", options=["Top Right", "Top Left", "Bottom Right", "Bottom Left"], group=groupEdu)
+
+// Timeframe de référence
+syncRefMode = input.string("Auto", "Référence HTF", options=["Auto", "H1", "H4", "Daily"], group=groupEdu)
+
+// Mémoire utilisée pour les validations pédagogiques
+syncMemoryWindow = input.int(30, "Mémoire ICT Sync", minval=5, group=groupEdu)
+
+// Option graphique
+showJokerOnChart = input.bool(false, "Afficher petit label Joker sur graphique", group=groupEdu)
+
+// Compatibilité avec l'ancien bloc ICT CHECK-UP.
+// À garder temporairement tant que l'ancien dashboard n'est pas remplacé.
+showEduDashboard = showSyncDashboard
+eduDashPosition = syncDashPosition
+eduMemoryWindow = syncMemoryWindow
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// BASE
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+tfMs = timeframe.in_seconds(timeframe.period) * 1000
+futureTime(bars) => time + tfMs * bars
+
+atr = ta.atr(atrLen)
+sessionOk = not useSession or not na(time(timeframe.period, sessionInput, "Europe/Paris"))
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// OUTILS ICT SYNC - V4.12B-2
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+tfSec = timeframe.in_seconds(timeframe.period)
+
+// Référence automatique selon la timeframe affichée.
+// M5  -> H1
+// M15 -> H4
+// H1  -> H4
+// H4  -> Daily
+autoRefTf =
+     tfSec <= timeframe.in_seconds("5") ? "60" :
+     tfSec <= timeframe.in_seconds("15") ? "240" :
+     tfSec <= timeframe.in_seconds("60") ? "240" :
+     "D"
+
+syncRefTf =
+     syncRefMode == "H1" ? "60" :
+     syncRefMode == "H4" ? "240" :
+     syncRefMode == "Daily" ? "D" :
+     autoRefTf
+
+syncRefLabel =
+     syncRefTf == "60" ? "H1" :
+     syncRefTf == "240" ? "H4" :
+     syncRefTf == "D" ? "D" :
+     syncRefTf
+
+syncLtfLabel = timeframe.period
+
+fTrendShortTxt(_dir) =>
+    _dir == 1 ? "BUY" : _dir == -1 ? "SELL" : "MIXTE"
+
+fBiasTxt(_dir) =>
+    _dir == 1 ? "BUY" : _dir == -1 ? "SELL" : "MIXTE"
+
+fStructTxt(_bullChoch, _bullBos, _bearChoch, _bearBos) =>
+    _bearBos ? "BOS SELL" :
+     _bearChoch ? "CHoCH SELL" :
+     _bullBos ? "BOS BUY" :
+     _bullChoch ? "CHoCH BUY" :
+     "-"
+
+fZoneTxt(_buyZone, _sellZone) =>
+    _buyZone and _sellZone ? "MIXTE" :
+     _buyZone ? "BUY" :
+     _sellZone ? "SELL" :
+     "-"
+
+fSyncTxt(_labelDir, _htfDir, _ltfDir) =>
+    _labelDir == -1 and _htfDir == -1 and _ltfDir == -1 ? "SELL OK" :
+     _labelDir == 1 and _htfDir == 1 and _ltfDir == 1 ? "BUY OK" :
+     _labelDir != 0 and (_htfDir == 0 or _ltfDir == 0) ? "PRUDENCE" :
+     _labelDir != 0 and _htfDir != _ltfDir ? "MIXTE" :
+     "WAIT"
+
+fSyncColor(_txt) =>
+    _txt == "SELL OK" ? color.new(color.red, 25) :
+     _txt == "BUY OK" ? color.new(color.green, 25) :
+     _txt == "PRUDENCE" ? color.new(color.orange, 35) :
+     _txt == "MIXTE" ? color.new(color.yellow, 35) :
+     color.new(color.gray, 65)
+
+fLabelSize(_s) =>
+    _s == "Tiny" ? size.tiny :
+     _s == "Small" ? size.small :
+     size.normal     
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// CONTEXTE DAILY / H4 / H1
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+f_ctx() =>
+    fast = ta.ema(close, emaFastLen)
+    slow = ta.ema(close, emaSlowLen)
+    trend = close > fast and fast > slow ? 1 : close < fast and fast < slow ? -1 : 0
+    hi = ta.highest(high, pdLookbackHTF)
+    lo = ta.lowest(low, pdLookbackHTF)
+    mid = (hi + lo) / 2
+    pd = close >= mid ? 1 : -1
+    [trend, pd]
+
+[d1Trend, d1PD] = request.security(syminfo.tickerid, "D", f_ctx(), barmerge.gaps_off, barmerge.lookahead_off)
+[h4Trend, h4PD] = request.security(syminfo.tickerid, h4Tf, f_ctx(), barmerge.gaps_off, barmerge.lookahead_off)
+[h1Trend, h1PD] = request.security(syminfo.tickerid, h1Tf, f_ctx(), barmerge.gaps_off, barmerge.lookahead_off)
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// CONTEXT ENGINE HTF FOUNDATION
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+h4BullCtx = h4Trend == 1 and h4PD == -1
+h4BearCtx = h4Trend == -1 and h4PD == 1
+
+h1BullCtx = h1Trend == 1 and h1PD == -1
+h1BearCtx = h1Trend == -1 and h1PD == 1
+
+htfBullScore = (h4BullCtx ? 1 : 0) + (h1BullCtx ? 1 : 0)
+htfBearScore = (h4BearCtx ? 1 : 0) + (h1BearCtx ? 1 : 0)
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// H1 NARRATIVE FILTER V4.12B-18
+// Lecture intelligente H1 : priorité / zone de retournement / neutralité
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+// H1 tendance + zone logique
+h1BuyPriority =
+     useH1Narrative and
+     h1Trend == 1 and
+     h1PD == -1
+
+h1SellPriority =
+     useH1Narrative and
+     h1Trend == -1 and
+     h1PD == 1
+
+// H1 en tendance mais arrivé dans zone opposée
+// Exemple : H1 SELL mais prix en Discount = prudence SELL / possible BUY recovery
+h1SellDiscountRecovery =
+     useH1Narrative and
+     h1Trend == -1 and
+     h1PD == -1
+
+h1BuyPremiumRecovery =
+     useH1Narrative and
+     h1Trend == 1 and
+     h1PD == 1
+
+h1NarrativeDir =
+     h1BuyPriority ? 1 :
+     h1SellPriority ? -1 :
+     h1SellDiscountRecovery ? 2 :
+     h1BuyPremiumRecovery ? -2 :
+     0
+
+h1NarrativeTxt =
+     h1BuyPriority ? "H1 BUY PRIORITY" :
+     h1SellPriority ? "H1 SELL PRIORITY" :
+     h1SellDiscountRecovery ? "H1 SELL EN DISCOUNT / BUY RECOVERY" :
+     h1BuyPremiumRecovery ? "H1 BUY EN PREMIUM / SELL RECOVERY" :
+     "H1 NEUTRE"
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// PREMIUM / DISCOUNT TF ACTUELLE
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+graphHi = ta.highest(high, pdLookbackLocal)
+graphLo = ta.lowest(low, pdLookbackLocal)
+graphMid = (graphHi + graphLo) / 2
+graphPD = close >= graphMid ? 1 : -1
+
+graphPremium = graphPD == 1
+graphDiscount = graphPD == -1
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// STRUCTURE GRAPHIQUE ACTUELLE
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ph = ta.pivothigh(high, pivotLen, pivotLen)
+pl = ta.pivotlow(low, pivotLen, pivotLen)
+
+// Pivots rapides pour MSS / CHoCH anticipé
+fastPh = ta.pivothigh(high, fastMssLen, fastMssLen)
+fastPl = ta.pivotlow(low, fastMssLen, fastMssLen)
+
+var float prevHigh = na
+var float prevLow = na
+var float lastHigh = na
+var float lastLow = na
+var int lastHighTime = na
+var int lastLowTime = na
+var int lastHighBar = na
+var int lastLowBar = na
+var string highType = ""
+var string lowType = ""
+var float lastBullBreakLevel = na
+var float lastBearBreakLevel = na
+var line bslLine = na
+var line sslLine = na
+var label bslLabel = na
+var label sslLabel = na
+
+// BOS post-CHoCH : lecture complémentaire de continuation après changement de caractère
+var bool postBullChochActive = false
+var bool postBearChochActive = false
+
+var float postBullBosLevel = na
+var float postBearBosLevel = na
+
+var int postBullBosStartBar = na
+var int postBearBosStartBar = na
+
+var float lastPostBullBosLevel = na
+var float lastPostBearBosLevel = na
+
+var int lastPostBullBosVisualBar = na
+var int lastPostBearBosVisualBar = na
+
+// MSS rapide : structure plus réactive, utilisée uniquement en lecture visuelle
+var float fastPrevHigh = na
+var float fastPrevLow = na
+var float fastLastHigh = na
+var float fastLastLow = na
+
+var int fastLastHighBar = na
+var int fastLastLowBar = na
+
+var int fastTrend = 0
+
+var float lastFastBullMssLevel = na
+var float lastFastBearMssLevel = na
+
+var int lastFastBullMssBar = na
+var int lastFastBearMssBar = na
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// MSS RAPIDE - STRUCTURE PROTÉGÉE COURTE
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+if not na(fastPh)
+    fastPrevHigh := fastLastHigh
+    fastLastHigh := fastPh
+    fastLastHighBar := bar_index[fastMssLen]
+
+if not na(fastPl)
+    fastPrevLow := fastLastLow
+    fastLastLow := fastPl
+    fastLastLowBar := bar_index[fastMssLen]
+
+// Lecture rapide de tendance locale
+fastBullStruct =
+     not na(fastPrevHigh) and
+     not na(fastPrevLow) and
+     not na(fastLastHigh) and
+     not na(fastLastLow) and
+     fastLastHigh > fastPrevHigh and
+     fastLastLow > fastPrevLow
+
+fastBearStruct =
+     not na(fastPrevHigh) and
+     not na(fastPrevLow) and
+     not na(fastLastHigh) and
+     not na(fastLastLow) and
+     fastLastHigh < fastPrevHigh and
+     fastLastLow < fastPrevLow
+
+if fastBullStruct
+    fastTrend := 1
+
+if fastBearStruct
+    fastTrend := -1
+
+fastBullBreak =
+     not na(fastLastHigh) and
+     (fastMssUseClose ? close > fastLastHigh : high > fastLastHigh)
+
+fastBearBreak =
+     not na(fastLastLow) and
+     (fastMssUseClose ? close < fastLastLow : low < fastLastLow)
+
+fastBullMss =
+     showFastMss and
+     fastBullBreak and
+     fastTrend == -1 and
+     not na(fastLastHighBar) and
+     (na(lastFastBullMssLevel) or fastLastHigh != lastFastBullMssLevel)
+
+fastBearMss =
+     showFastMss and
+     fastBearBreak and
+     fastTrend == 1 and
+     not na(fastLastLowBar) and
+     (na(lastFastBearMssLevel) or fastLastLow != lastFastBearMssLevel)
+
+if fastBullMss
+    midFastBull = math.round((fastLastHighBar + bar_index) / 2)
+    line.new(fastLastHighBar, fastLastHigh, bar_index, fastLastHigh, xloc=xloc.bar_index, extend=extend.none, color=color.new(color.lime, 15), width=1)
+    label.new(midFastBull, fastLastHigh, "MSS", xloc=xloc.bar_index, style=label.style_none, textcolor=color.lime, size=size.tiny)
+    lastFastBullMssLevel := fastLastHigh
+    lastFastBullMssBar := bar_index
+
+if fastBearMss
+    midFastBear = math.round((fastLastLowBar + bar_index) / 2)
+    line.new(fastLastLowBar, fastLastLow, bar_index, fastLastLow, xloc=xloc.bar_index, extend=extend.none, color=color.new(color.red, 15), width=1)
+    label.new(midFastBear, fastLastLow, "MSS", xloc=xloc.bar_index, style=label.style_none, textcolor=color.red, size=size.tiny)
+    lastFastBearMssLevel := fastLastLow
+    lastFastBearMssBar := bar_index
+
+if not na(ph)
+    prevHigh := lastHigh
+    lastHigh := ph
+    lastHighTime := time[pivotLen]
+    lastHighBar := bar_index[pivotLen]
+    highType := na(prevHigh) ? "H" : ph > prevHigh ? "HH" : "LH"
+
+    if not na(bslLine)
+        line.delete(bslLine)
+    if not na(bslLabel)
+        label.delete(bslLabel)
+
+    eqhLite = showEqhEqlLite and not na(prevHigh) and math.abs(ph - prevHigh) <= atr * liqEqToleranceAtr
+    majorBslByAtr = not na(prevLow) and math.abs(ph - prevLow) >= atr * liqMajorAtr
+    majorBslByLookback = ph >= ta.highest(high, liqMajorLookback)[pivotLen]
+
+    drawBslLite = false
+    if liqVisualMode == "Swing + EQH/EQL"
+        drawBslLite := true
+    if liqVisualMode == "Majeur + EQH/EQL" and ((majorBslByAtr and majorBslByLookback) or eqhLite)
+        drawBslLite := true
+    if liqVisualMode == "EQH/EQL seulement" and eqhLite
+        drawBslLite := true
+
+    bslTxtLite = eqhLite ? "EQH / BSL" : "BSL MAJEURE"
+
+    if showLiqLite and drawBslLite
+        bslLine := line.new(lastHighBar, lastHigh, bar_index, lastHigh, xloc=xloc.bar_index, extend=extend.none, color=color.new(color.red, 0), style=line.style_dotted, width=1)
+        bslLabel := label.new(bar_index, lastHigh, bslTxtLite, xloc=xloc.bar_index, style=label.style_none, textcolor=color.red, size=size.normal)
+
+    if showStructure
+        label.new(bar_index[pivotLen], ph, highType, xloc=xloc.bar_index, style=label.style_none, textcolor=highType == "HH" ? color.lime : color.red, size=size.tiny)  
+if not na(pl)
+    prevLow := lastLow
+    lastLow := pl
+    lastLowTime := time[pivotLen]
+    lastLowBar := bar_index[pivotLen]
+    lowType := na(prevLow) ? "L" : pl > prevLow ? "HL" : "LL"
+
+    if not na(sslLine)
+        line.delete(sslLine)
+    if not na(sslLabel)
+        label.delete(sslLabel)
+
+    eqlLite = showEqhEqlLite and not na(prevLow) and math.abs(pl - prevLow) <= atr * liqEqToleranceAtr
+    majorSslByAtr = not na(prevHigh) and math.abs(prevHigh - pl) >= atr * liqMajorAtr
+    majorSslByLookback = pl <= ta.lowest(low, liqMajorLookback)[pivotLen]
+
+    drawSslLite = false
+    if liqVisualMode == "Swing + EQH/EQL"
+        drawSslLite := true
+    if liqVisualMode == "Majeur + EQH/EQL" and ((majorSslByAtr and majorSslByLookback) or eqlLite)
+        drawSslLite := true
+    if liqVisualMode == "EQH/EQL seulement" and eqlLite
+        drawSslLite := true
+
+    sslTxtLite = eqlLite ? "EQL / SSL" : "SSL MAJEURE"
+
+    if showLiqLite and drawSslLite
+        sslLine := line.new(lastLowBar, lastLow, bar_index, lastLow, xloc=xloc.bar_index, extend=extend.none, color=color.new(color.lime, 0), style=line.style_dotted, width=1)
+        sslLabel := label.new(bar_index, lastLow, sslTxtLite, xloc=xloc.bar_index, style=label.style_none, textcolor=color.lime, size=size.normal)
+
+    if showStructure
+        label.new(bar_index[pivotLen], pl, lowType, xloc=xloc.bar_index, style=label.style_none, textcolor=lowType == "HL" ? color.lime : color.red, size=size.tiny)
+
+    
+
+bullStruct = highType == "HH" and lowType == "HL"
+bearStruct = highType == "LH" and lowType == "LL"
+
+var int graphTrend = 0
+prevGraphTrend = graphTrend
+
+graphState =
+     bullStruct ? "BULL" :
+     bearStruct ? "BEAR" :
+     "TRANS"
+
+if bullStruct
+    graphTrend := 1
+
+if bearStruct
+    graphTrend := -1
+
+bullBreak = not na(lastHigh) and close > lastHigh
+bearBreak = not na(lastLow) and close < lastLow
+
+bullChoch = bullBreak and prevGraphTrend == -1
+bearChoch = bearBreak and prevGraphTrend == 1
+
+newBullBreak = bullBreak and (na(lastBullBreakLevel) or lastHigh != lastBullBreakLevel)
+newBearBreak = bearBreak and (na(lastBearBreakLevel) or lastLow != lastBearBreakLevel)
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// BUY REV EARLY V4.12B-37 — Mémoire Breaker
+// Dernier sommet cassé qui peut devenir support
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+var float buyRevLastBrokenHigh = na
+var int buyRevLastBrokenHighBar = na
+
+if buyRevUseBreaker and newBullBreak and not na(lastHigh)
+    buyRevLastBrokenHigh := lastHigh
+    buyRevLastBrokenHighBar := bar_index
+if showBos and newBullBreak and not na(lastHighBar)
+    bosTxt = bullChoch ? "CHoCH" : "BOS"
+    midBar = math.round((lastHighBar + bar_index) / 2)
+    line.new(lastHighBar, lastHigh, bar_index, lastHigh, xloc=xloc.bar_index, extend=extend.none, color=color.new(color.lime, 0), width=1)
+    label.new(midBar, lastHigh, bosTxt, xloc=xloc.bar_index, style=label.style_none, textcolor=color.lime, size=size.small)
+    lastBullBreakLevel := lastHigh
+
+    // Si CHoCH BUY, on arme un futur BOS BUY de continuation
+    if bullChoch
+        postBullChochActive := true
+        postBearChochActive := false
+        postBullBosLevel := high
+        postBullBosStartBar := bar_index
+        lastPostBullBosLevel := na
+
+if showBos and newBearBreak and not na(lastLowBar)
+    bosTxt = bearChoch ? "CHoCH" : "BOS"
+    midBar = math.round((lastLowBar + bar_index) / 2)
+    line.new(lastLowBar, lastLow, bar_index, lastLow, xloc=xloc.bar_index, extend=extend.none, color=color.new(color.red, 0), width=1)
+    label.new(midBar, lastLow, bosTxt, xloc=xloc.bar_index, style=label.style_none, textcolor=color.red, size=size.small)
+    lastBearBreakLevel := lastLow
+
+    // Si CHoCH SELL, on arme un futur BOS SELL de continuation
+    if bearChoch
+        postBearChochActive := true
+        postBullChochActive := false
+        postBearBosLevel := low
+        postBearBosStartBar := bar_index
+        lastPostBearBosLevel := na
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// BOS POST-CHoCH - VISUEL COMPLÉMENTAIRE
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+postBullBos =
+     showBos and
+     showPostChochBos and
+     postBullChochActive and
+     not na(postBullBosLevel) and
+     not na(postBullBosStartBar) and
+     bar_index > postBullBosStartBar and
+     close > postBullBosLevel and
+     (na(lastPostBullBosLevel) or postBullBosLevel != lastPostBullBosLevel)
+
+if postBullBos
+    midPostBull = math.round((postBullBosStartBar + bar_index) / 2)
+    line.new(postBullBosStartBar, postBullBosLevel, bar_index, postBullBosLevel, xloc=xloc.bar_index, extend=extend.none, color=color.new(color.lime, 0), width=1)
+    label.new(midPostBull, postBullBosLevel, "BOS", xloc=xloc.bar_index, style=label.style_none, textcolor=color.lime, size=size.small)
+    lastPostBullBosLevel := postBullBosLevel
+    lastPostBullBosVisualBar := bar_index
+    postBullChochActive := false
+
+postBearBos =
+     showBos and
+     showPostChochBos and
+     postBearChochActive and
+     not na(postBearBosLevel) and
+     not na(postBearBosStartBar) and
+     bar_index > postBearBosStartBar and
+     close < postBearBosLevel and
+     (na(lastPostBearBosLevel) or postBearBosLevel != lastPostBearBosLevel)
+
+if postBearBos
+    midPostBear = math.round((postBearBosStartBar + bar_index) / 2)
+    line.new(postBearBosStartBar, postBearBosLevel, bar_index, postBearBosLevel, xloc=xloc.bar_index, extend=extend.none, color=color.new(color.red, 0), width=1)
+    label.new(midPostBear, postBearBosLevel, "BOS", xloc=xloc.bar_index, style=label.style_none, textcolor=color.red, size=size.small)
+    lastPostBearBosLevel := postBearBosLevel
+    lastPostBearBosVisualBar := bar_index
+    postBearChochActive := false
+if showLiqLite and not na(bslLine)
+    line.set_x2(bslLine, bar_index)
+    if not na(bslLabel)
+        label.set_x(bslLabel, bar_index)
+
+if showLiqLite and not na(sslLine)
+    line.set_x2(sslLine, bar_index)
+    if not na(sslLabel)
+        label.set_x(sslLabel, bar_index)
+bslTaken = not na(lastHigh) and high >= lastHigh
+sslTaken = not na(lastLow) and low <= lastLow
+
+if bslTaken and not na(bslLine)
+    if showLiqTakenMarks
+        label.new(
+             bar_index,
+             high,
+             "BSL ✓",
+             xloc=xloc.bar_index,
+             yloc=yloc.abovebar,
+             style=label.style_none,
+             textcolor=color.red,
+             size=size.tiny)
+
+    line.set_color(bslLine, color.new(color.gray, 40))
+    line.set_style(bslLine, line.style_solid)
+    line.set_x2(bslLine, bar_index)
+
+    if not na(bslLabel)
+        label.delete(bslLabel)
+
+    bslLine := na
+    bslLabel := na
+
+if sslTaken and not na(sslLine)
+    if showLiqTakenMarks
+        label.new(
+             bar_index,
+             low,
+             "SSL ✓",
+             xloc=xloc.bar_index,
+             yloc=yloc.belowbar,
+             style=label.style_none,
+             textcolor=color.lime,
+             size=size.tiny)
+
+    line.set_color(sslLine, color.new(color.gray, 40))
+    line.set_style(sslLine, line.style_solid)
+    line.set_x2(sslLine, bar_index)
+
+    if not na(sslLabel)
+        label.delete(sslLabel)
+
+    sslLine := na
+    sslLabel := na
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// PRICE ACTION
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+body = math.abs(close - open)
+rng = high - low
+upperWick = high - math.max(open, close)
+lowerWick = math.min(open, close) - low
+
+bullCandle = close > open
+bearCandle = close < open
+
+bullDisplacement = bullCandle and body > atr * 0.60
+bearDisplacement = bearCandle and body > atr * 0.60
+
+bullEngulf = useEngulf and bullCandle and close[1] < open[1] and close >= open[1] and open <= close[1]
+bearEngulf = useEngulf and bearCandle and close[1] > open[1] and close <= open[1] and open >= close[1]
+
+hammer = usePin and rng > 0 and lowerWick >= body * 2 and close > low + rng * 0.60
+shooting = usePin and rng > 0 and upperWick >= body * 2 and close < low + rng * 0.40
+
+bullPin = usePin and rng > 0 and lowerWick >= rng * 0.55 and bullCandle
+bearPin = usePin and rng > 0 and upperWick >= rng * 0.55 and bearCandle
+
+smallBody1 = math.abs(close[1] - open[1]) <= (high[1] - low[1]) * 0.35
+bearStrong2 = close[2] < open[2] and math.abs(close[2] - open[2]) > (high[2] - low[2]) * 0.45
+bullStrong2 = close[2] > open[2] and math.abs(close[2] - open[2]) > (high[2] - low[2]) * 0.45
+
+morningStar = useStars and bearStrong2 and smallBody1 and bullCandle and close > (open[2] + close[2]) / 2
+eveningStar = useStars and bullStrong2 and smallBody1 and bearCandle and close < (open[2] + close[2]) / 2
+
+bullPattern = bullEngulf or morningStar or hammer or bullPin
+bearPattern = bearEngulf or eveningStar or shooting or bearPin
+
+bullPatternName = bullEngulf ? "ENGULF" : hammer ? "HAMMER" : bullPin ? "PIN" : morningStar ? "M-STAR" : "BUY PA"
+bearPatternName = bearEngulf ? "ENGULF" : shooting ? "SHOOTING" : bearPin ? "PIN" : eveningStar ? "E-STAR" : "SELL PA"
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// FVG / OB
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// CONFLUENCE OTE / PREMIUM-DISCOUNT SUR OB/FVG
+// ★ = zone située dans l'OTE du dernier swing
+// + = FVG située du bon côté Premium/Discount
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+fInOte(_top, _bot, _dir) =>
+    zoneTop = math.max(_top, _bot)
+    zoneBot = math.min(_top, _bot)
+
+    swingOk = not na(lastHigh) and not na(lastLow) and lastHigh != lastLow
+    swingRange = swingOk ? math.abs(lastHigh - lastLow) : na
+
+    buyOteLow = swingOk ? lastHigh - swingRange * oteHighRatio : na
+    buyOteHigh = swingOk ? lastHigh - swingRange * oteLowRatio : na
+
+    sellOteLow = swingOk ? lastLow + swingRange * oteLowRatio : na
+    sellOteHigh = swingOk ? lastLow + swingRange * oteHighRatio : na
+
+    buyIntersect = swingOk and zoneBot <= buyOteHigh and zoneTop >= buyOteLow
+    sellIntersect = swingOk and zoneBot <= sellOteHigh and zoneTop >= sellOteLow
+
+    showOteStar and (_dir == 1 ? buyIntersect : sellIntersect)
+
+fInGoodPD(_top, _bot, _dir) =>
+    zoneMid = (_top + _bot) / 2.0
+    buyPdOk = not na(graphMid) and _dir == 1 and zoneMid <= graphMid
+    sellPdOk = not na(graphMid) and _dir == -1 and zoneMid >= graphMid
+    buyPdOk or sellPdOk
+
+fZoneTxtOte(_txt, _top, _bot, _dir) =>
+    txt = _txt
+    txt := fInOte(_top, _bot, _dir) ? txt + " ★" : txt
+    txt := str.contains(_txt, "FVG") and fInGoodPD(_top, _bot, _dir) ? txt + " +" : txt
+    txt
+// Détection FVG V4.12B-9
+// Strict = ancien filtre ATR
+// Souple = détecte aussi les FVG ICT visuelles plus petites
+
+fvgMode = input.string("Souple", "Mode détection FVG", options=["Strict", "Souple"], group=groupZones)
+fvgMinGapAtr = input.float(0.06, "Gap min FVG ATR", step=0.01, group=groupZones)
+
+bullGap = low - high[2]
+bearGap = low[2] - high
+
+bullFVGStrict = low > high[2] and close > open and (close - open) > atr * fvgAtr
+bearFVGStrict = high < low[2] and close < open and (open - close) > atr * fvgAtr
+
+bullFVGSouple = bullGap > atr * fvgMinGapAtr and close > open
+bearFVGSouple = bearGap > atr * fvgMinGapAtr and close < open
+
+bullFVG = fvgMode == "Strict" ? bullFVGStrict : bullFVGSouple
+bearFVG = fvgMode == "Strict" ? bearFVGStrict : bearFVGSouple
+
+var box[] bullZones = array.new_box()
+var box[] bearZones = array.new_box()
+
+var string[] bullZoneTypes = array.new_string()
+var string[] bearZoneTypes = array.new_string()
+
+var int lastBullFvgBar = na
+var int lastBearFvgBar = na
+var int lastBullObBar = na
+var int lastBearObBar = na
+var int lastTouchBullZoneBar = na
+var int lastTouchBearZoneBar = na
+
+bullObCreated = false
+bearObCreated = false
+
+if showFVG and bullFVG
+    fvgBuyTxt = fZoneTxtOte("FVG BUY", low, high[2], 1)
+    box b = box.new(
+         time[2], low,
+         futureTime(25), high[2],
+         xloc=xloc.bar_time,
+         bgcolor=color.new(color.yellow, 84),
+         border_color=color.new(color.orange, 35),
+         text=fvgBuyTxt,
+         text_color=color.black,
+         text_size=size.tiny)
+    array.push(bullZones, b)
+    array.push(bullZoneTypes, "FVG BUY")
+    lastBullFvgBar := bar_index
+
+if showFVG and bearFVG
+    fvgSellTxt = fZoneTxtOte("FVG SELL", low[2], high, -1)
+    box b = box.new(
+         time[2], low[2],
+         futureTime(25), high,
+         xloc=xloc.bar_time,
+         bgcolor=color.new(color.yellow, 84),
+         border_color=color.new(color.orange, 35),
+         text=fvgSellTxt,
+         text_color=color.black,
+         text_size=size.tiny)
+    array.push(bearZones, b)
+    array.push(bearZoneTypes, "FVG SELL")
+    lastBearFvgBar := bar_index
+
+bullOBDisp = close > open and (close - open) > atr * obAtr
+bearOBDisp = close < open and (open - close) > atr * obAtr
+
+if showOB and bullOBDisp
+    obFound = false
+    obTop = 0.0
+    obBot = 0.0
+    obTime = time
+
+    for i = 1 to 8
+        if not obFound and close[i] < open[i]
+            obTop := open[i]
+            obBot := low[i]
+            obTime := time[i]
+            obFound := true
+
+    if obFound
+        obBuyTxt = fZoneTxtOte("OB BUY", obTop, obBot, 1)
+        b = box.new(obTime, obTop, futureTime(35), obBot, xloc=xloc.bar_time, bgcolor=color.new(color.green, 86), border_color=color.new(color.lime, 35), text=obBuyTxt, text_color=color.lime, text_size=size.tiny)
+        array.push(bullZones, b)
+        array.push(bullZoneTypes, "OB BUY")
+        bullObCreated := true
+        lastBullObBar := bar_index    
+
+if showOB and bearOBDisp
+    obFound = false
+    obTop = 0.0
+    obBot = 0.0
+    obTime = time
+
+    for i = 1 to 8
+        if not obFound and close[i] > open[i]
+            obTop := high[i]
+            obBot := open[i]
+            obTime := time[i]
+            obFound := true
+
+    if obFound
+        obSellTxt = fZoneTxtOte("OB SELL", obTop, obBot, -1)
+        b = box.new(obTime, obTop, futureTime(35), obBot, xloc=xloc.bar_time, bgcolor=color.new(color.red, 86), border_color=color.new(color.red, 30), text=obSellTxt, text_color=color.red, text_size=size.tiny)
+        array.push(bearZones, b)
+        array.push(bearZoneTypes, "OB SELL")
+        bearObCreated := true
+        lastBearObBar := bar_index    
+
+while array.size(bullZones) > maxZones
+    old = array.shift(bullZones)
+    array.shift(bullZoneTypes)
+    box.delete(old)
+
+while array.size(bearZones) > maxZones
+    old = array.shift(bearZones)
+    array.shift(bearZoneTypes)
+    box.delete(old)
+    
+touchBullZone = false
+touchBearZone = false
+
+iBull = array.size(bullZones) - 1
+while iBull >= 0
+    bx = array.get(bullZones, iBull)
+    top = box.get_top(bx)
+    bot = box.get_bottom(bx)
+
+    box.set_right(bx, futureTime(5))
+
+    zoneType = array.get(bullZoneTypes, iBull)
+    box.set_text(bx, fZoneTxtOte(zoneType, top, bot, 1))
+
+    if low <= top and high >= bot
+        touchBullZone := true
+
+    isBullFVG = str.contains(zoneType, "FVG")
+    isBullOB = str.contains(zoneType, "OB")
+
+    bullProbe =
+         fvgMitigationMode == "Meche" ? low :
+         fvgMitigationMode == "Corps" ? math.min(open, close) :
+         close
+
+    bullTouchedFVG = isBullFVG and bullProbe < top and bullProbe > bot
+    bullFullMitigatedFVG = isBullFVG and bullProbe <= bot
+
+    if shrinkPartialFVG and bullTouchedFVG
+        box.set_top(bx, bullProbe)
+        top := bullProbe
+
+    bullMitigatedRaw =
+         isBullFVG ? bullFullMitigatedFVG :
+         useCloseMitigation ? close <= bot :
+         low <= bot
+
+    bullMitigated = bullMitigatedRaw
+
+    if isBullOB and not deleteMitigatedOB
+        bullMitigated := false
+
+    if deleteMitigated and bullMitigated
+        box.delete(bx)
+        if iBull >= 0 and iBull < array.size(bullZones)
+            array.remove(bullZones, iBull)
+        if iBull >= 0 and iBull < array.size(bullZoneTypes)
+            array.remove(bullZoneTypes, iBull)
+
+    iBull -= 1
+
+iBear = array.size(bearZones) - 1
+while iBear >= 0
+    bx = array.get(bearZones, iBear)
+    top = box.get_top(bx)
+    bot = box.get_bottom(bx)
+
+    box.set_right(bx, futureTime(5))
+
+    zoneType = array.get(bearZoneTypes, iBear)
+    box.set_text(bx, fZoneTxtOte(zoneType, top, bot, -1))
+
+    if high >= bot and low <= top
+        touchBearZone := true
+
+    isBearFVG = str.contains(zoneType, "FVG")
+    isBearOB = str.contains(zoneType, "OB")
+
+    bearProbe =
+         fvgMitigationMode == "Meche" ? high :
+         fvgMitigationMode == "Corps" ? math.max(open, close) :
+         close
+
+    bearTouchedFVG = isBearFVG and bearProbe > bot and bearProbe < top
+    bearFullMitigatedFVG = isBearFVG and bearProbe >= top
+
+    if shrinkPartialFVG and bearTouchedFVG
+        box.set_bottom(bx, bearProbe)
+        bot := bearProbe
+
+    bearMitigatedRaw =
+         isBearFVG ? bearFullMitigatedFVG :
+         useCloseMitigation ? close >= top :
+         high >= top
+
+    bearMitigated = bearMitigatedRaw
+
+    if isBearOB and not deleteMitigatedOB
+        bearMitigated := false
+
+    if deleteMitigated and bearMitigated
+        box.delete(bx)
+        if iBear >= 0 and iBear < array.size(bearZones)
+            array.remove(bearZones, iBear)
+        if iBear >= 0 and iBear < array.size(bearZoneTypes)
+            array.remove(bearZoneTypes, iBear)
+
+    iBear -= 1
+
+if touchBullZone
+    lastTouchBullZoneBar := bar_index
+
+if touchBearZone
+    lastTouchBearZoneBar := bar_index
+
+zoneBuyOk = not requireZone or touchBullZone or bullFVG
+zoneSellOk = not requireZone or touchBearZone or bearFVG
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// ZONE RISK - ZONE OPPOSÉE PROCHE
+// VISUEL UNIQUEMENT - NE BLOQUE AUCUN TRADE
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+zoneRiskAtr = ta.atr(atrLen)
+zoneRiskMaxDist = zoneRiskAtr * 1.0
+
+float nearestBullZoneBelow = na
+float nearestBearZoneAbove = na
+
+if array.size(bullZones) > 0
+    for i = 0 to array.size(bullZones) - 1
+        bx = array.get(bullZones, i)
+        zTop = math.max(box.get_top(bx), box.get_bottom(bx))
+        zBot = math.min(box.get_top(bx), box.get_bottom(bx))
+
+        bullZoneDist =
+             close > zTop ? close - zTop :
+             close >= zBot and close <= zTop ? 0.0 :
+             na
+
+        if not na(bullZoneDist)
+            nearestBullZoneBelow := na(nearestBullZoneBelow) ? bullZoneDist : math.min(nearestBullZoneBelow, bullZoneDist)
+
+if array.size(bearZones) > 0
+    for i = 0 to array.size(bearZones) - 1
+        bx = array.get(bearZones, i)
+        zTop = math.max(box.get_top(bx), box.get_bottom(bx))
+        zBot = math.min(box.get_top(bx), box.get_bottom(bx))
+
+        bearZoneDist =
+             close < zBot ? zBot - close :
+             close >= zBot and close <= zTop ? 0.0 :
+             na
+
+        if not na(bearZoneDist)
+            nearestBearZoneAbove := na(nearestBearZoneAbove) ? bearZoneDist : math.min(nearestBearZoneAbove, bearZoneDist)
+
+sellHasOppositeBuyZoneNear = not na(nearestBullZoneBelow) and nearestBullZoneBelow <= zoneRiskMaxDist
+buyHasOppositeSellZoneNear = not na(nearestBearZoneAbove) and nearestBearZoneAbove <= zoneRiskMaxDist
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// ZONE CONTEXT ENGINE V4.12B-9
+// Lecture de la zone ICT la plus proche
+// au-dessus / en dessous du prix.
+// VISUEL UNIQUEMENT - NE BLOQUE AUCUN TRADE
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+string nearestCtxAboveTxt = "-"
+string nearestCtxBelowTxt = "-"
+
+float nearestCtxAboveDist = na
+float nearestCtxBelowDist = na
+
+// Zones SELL au-dessus = obstacle potentiel pour BUY
+if array.size(bearZones) > 0
+    for i = 0 to array.size(bearZones) - 1
+        bx = array.get(bearZones, i)
+        zTop = math.max(box.get_top(bx), box.get_bottom(bx))
+        zBot = math.min(box.get_top(bx), box.get_bottom(bx))
+        zType = array.get(bearZoneTypes, i)
+        isOB = str.contains(zType, "OB")
+
+        distAbove = close < zBot ? zBot - close : close >= zBot and close <= zTop ? 0.0 : na
+
+        if not na(distAbove)
+            if na(nearestCtxAboveDist) or
+   distAbove < nearestCtxAboveDist or
+   (isOB and nearestCtxAboveTxt != "-" and str.contains(nearestCtxAboveTxt, "FVG"))
+                nearestCtxAboveDist := distAbove
+                nearestCtxAboveTxt := zType + " ↑"
+
+// Zones BUY en dessous = support potentiel / target SELL
+if array.size(bullZones) > 0
+    for i = 0 to array.size(bullZones) - 1
+        bx = array.get(bullZones, i)
+        zTop = math.max(box.get_top(bx), box.get_bottom(bx))
+        zBot = math.min(box.get_top(bx), box.get_bottom(bx))
+        zType = array.get(bullZoneTypes, i)
+        isOB = str.contains(zType, "OB")
+
+        distBelow = close > zTop ? close - zTop : close >= zBot and close <= zTop ? 0.0 : na
+
+        if not na(distBelow)
+            if na(nearestCtxBelowDist) or
+   distBelow < nearestCtxBelowDist or
+   (isOB and nearestCtxBelowTxt != "-" and str.contains(nearestCtxBelowTxt, "FVG"))
+                nearestCtxBelowDist := distBelow
+                nearestCtxBelowTxt := zType + " ↓"
+zoneContextTxt =
+     nearestCtxAboveTxt != "-" and nearestCtxBelowTxt != "-" ? nearestCtxAboveTxt + " / " + nearestCtxBelowTxt :
+     nearestCtxAboveTxt != "-" ? nearestCtxAboveTxt :
+     nearestCtxBelowTxt != "-" ? nearestCtxBelowTxt :
+     "CLEAN"
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// CONTEXT SCORE V4.12B-9
+// Lecture informative uniquement.
+// Ne bloque aucun BUY/SELL.
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+ctxBuyScore = 0
+ctxSellScore = 0
+
+// Contexte HTF tendance
+ctxBuyScore += h4Trend == 1 ? 1 : 0
+ctxSellScore += h4Trend == -1 ? 1 : 0
+
+ctxBuyScore += h1Trend == 1 ? 1 : 0
+ctxSellScore += h1Trend == -1 ? 1 : 0
+
+// Premium / Discount
+ctxBuyScore += h4PD == -1 ? 2 : 0
+ctxSellScore += h4PD == 1 ? 2 : 0
+
+ctxBuyScore += h1PD == -1 ? 1 : 0
+ctxSellScore += h1PD == 1 ? 1 : 0
+
+// Zones proches
+ctxSellScore += str.contains(nearestCtxAboveTxt, "SELL") ? 1 : 0
+ctxBuyScore += str.contains(nearestCtxBelowTxt, "BUY") ? 1 : 0
+
+ctxBiasTxt =
+     ctxSellScore > ctxBuyScore ? "CTX SELL " + str.tostring(ctxSellScore) + "/" + str.tostring(ctxBuyScore) :
+     ctxBuyScore > ctxSellScore ? "CTX BUY " + str.tostring(ctxBuyScore) + "/" + str.tostring(ctxSellScore) :
+     "CTX MIXTE" 
+ctxDetailTxt =
+     ctxSellScore > ctxBuyScore ? "HTF SELL" :
+     ctxBuyScore > ctxSellScore ? "HTF BUY" :
+     "HTF MIXTE"  
+
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// READY / ACTIVE - MOTEUR V4.12 CONSERVÉ
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+bslSweep = not na(lastHigh) and high > lastHigh and close < lastHigh
+sslSweep = not na(lastLow) and low < lastLow and close > lastLow
+
+var int lastSslSweepBar = na
+var int lastBslSweepBar = na
+var int lastBullChochBar = na
+var int lastBearChochBar = na
+var int lastBullBosBar = na
+var int lastBearBosBar = na
+
+if sslSweep
+    lastSslSweepBar := bar_index
+
+if bslSweep
+    lastBslSweepBar := bar_index
+
+if bullChoch
+    lastBullChochBar := bar_index
+    // CROSS-RESET FEU V4.12B-8
+    // Un CHoCH BUY invalide immédiatement les anciennes mémoires SELL.
+    
+else if newBullBreak
+    lastBullBosBar := bar_index
+
+if bearChoch
+    lastBearChochBar := bar_index
+    // CROSS-RESET FEU V4.12B-8
+    // Un CHoCH SELL invalide immédiatement les anciennes mémoires BUY.
+    
+else if newBearBreak
+    lastBearBosBar := bar_index
+
+recentSslSweep = not na(lastSslSweepBar) and bar_index - lastSslSweepBar <= sweepWindow
+recentBslSweep = not na(lastBslSweepBar) and bar_index - lastBslSweepBar <= sweepWindow
+recentBullChoch = not na(lastBullChochBar) and bar_index - lastBullChochBar <= structureWindow
+recentBearChoch = not na(lastBearChochBar) and bar_index - lastBearChochBar <= structureWindow
+recentBullBos =
+     (not na(lastBullBosBar) and bar_index - lastBullBosBar <= structureWindow) or
+     (not na(lastPostBullBosVisualBar) and bar_index - lastPostBullBosVisualBar <= structureWindow)
+
+recentBearBos =
+     (not na(lastBearBosBar) and bar_index - lastBearBosBar <= structureWindow) or
+     (not na(lastPostBearBosVisualBar) and bar_index - lastPostBearBosVisualBar <= structureWindow)
+
+recentBullStructure = recentBullChoch or recentBullBos
+recentBearStructure = recentBearChoch or recentBearBos
+
+h4Bear = h4Trend == -1
+h4Bull = h4Trend == 1
+h1Bear = h1Trend == -1
+h1Bull = h1Trend == 1
+
+h4h1BearAligned = h4Bear and h1Bear
+h4h1BullAligned = h4Bull and h1Bull
+
+premiumForShort = h4PD == 1 or h1PD == 1 or graphPD == 1
+discountForLong = h4PD == -1 or h1PD == -1 or graphPD == -1
+
+strongBuyReversal =
+     recentSslSweep and
+     recentBullChoch and
+     discountForLong and
+     (bullFVG or bullDisplacement or touchBullZone)
+
+
+strongSellReversal =
+     recentBslSweep and
+     recentBearChoch and
+     premiumForShort and
+     (bearFVG or bearDisplacement or touchBearZone)
+
+structureBuyOk =
+     not useStructureConfirm or
+     recentBullChoch or
+     recentBullBos or
+     recentBullStructure or
+     bullBreak
+
+structureSellOk =
+     not useStructureConfirm or
+     recentBearChoch or
+     recentBearBos or
+     recentBearStructure or
+     bearBreak
+
+buyContinuationReady =
+     h1Bull and
+     not h4Bear and
+     discountForLong and
+     zoneBuyOk
+
+sellContinuationReady =
+     h1Bear and
+     not h4Bull and
+     premiumForShort and
+     zoneSellOk
+
+buyReversalReady =
+     not buyContinuationReady and
+     strongBuyReversal and
+     zoneBuyOk
+
+sellReversalReady =
+     not sellContinuationReady and
+     strongSellReversal and
+     zoneSellOk
+
+buyIctReady =
+     zoneBuyOk and
+     (recentBullBos or recentBullStructure or bullBreak) and
+     not h4Bear
+
+sellIctReady =
+     zoneSellOk and
+     (recentBearBos or recentBearStructure or bearBreak) and
+     not h4Bull
+
+buyReady = buyContinuationReady or buyReversalReady or buyIctReady
+sellReady = sellContinuationReady or sellReversalReady or sellIctReady
+
+
+ictSellDirect =
+     sellReady and
+     (bearBreak or bearChoch or bslSweep)
+
+ictBullPattern =
+     bullPattern or
+     (sslSweep and (bullChoch or bullBreak) and bullDisplacement)
+
+ictBearPattern =
+     bearPattern or
+     (bslSweep and (bearChoch or bearBreak) and bearDisplacement)
+
+earlyBuyStructOk = lowType == "HL" or lowType == "LL" or sslSweep or bullChoch or bullBreak
+earlySellStructOk = highType == "LH" or highType == "HH" or bslSweep or bearChoch or bearBreak
+
+h1EarlyBuy =
+     h1Bull and
+     not h4Bear and
+     discountForLong and
+     zoneBuyOk and
+     earlyBuyStructOk and
+     (bullDisplacement or bullCandle)
+
+h1EarlySell =
+     h1Bear and
+     not h4Bull and
+     premiumForShort and
+     zoneSellOk and
+     earlySellStructOk and
+     (bearDisplacement or bearCandle)
+
+ictBuyDirect =
+     buyReady and
+     zoneBuyOk and
+     (recentBullBos or recentBullStructure or bullBreak)
+
+
+buyActiveRaw = (buyReady and structureBuyOk and (ictBullPattern or ictBuyDirect)) or h1EarlyBuy
+sellActiveRaw = (sellReady and structureSellOk and (ictBearPattern or ictSellDirect)) or h1EarlySell
+
+var int lastSignalBar = na
+var int lastSignalDir = 0
+
+cooldownOk = na(lastSignalBar) or bar_index - lastSignalBar >= cooldownBars
+
+buySpamOk = lastSignalDir != 1 or cooldownOk
+sellSpamOk = lastSignalDir != -1 or cooldownOk
+
+buyContextOk = not h4h1BearAligned or buyReversalReady
+sellContextOk = not h4h1BullAligned or sellReversalReady
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// FILTRE H1 INTELLIGENT POUR SIGNAUX M5
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+isBelowH1 = timeframe.isminutes and timeframe.multiplier < 60
+useH1M5Filter = h1M5FilterMode != "OFF" and isBelowH1
+
+h1M5BuyOk =
+     not useH1M5Filter ? true :
+     h1M5FilterMode == "Souple" ? (not h1Bear or buyReversalReady) :
+     h1M5FilterMode == "Strict" ? (h1Bull or buyReversalReady) :
+     true
+
+h1M5SellOk =
+     not useH1M5Filter ? true :
+     h1M5FilterMode == "Souple" ? (not h1Bull or sellReversalReady) :
+     h1M5FilterMode == "Strict" ? (h1Bear or sellReversalReady) :
+     true
+
+finalBuySignal = barstate.isconfirmed and sessionOk and buyActiveRaw and not sellActiveRaw and buySpamOk and buyContextOk and h1M5BuyOk
+
+finalSellSignal = barstate.isconfirmed and sessionOk and sellActiveRaw and not buyActiveRaw and sellSpamOk and sellContextOk and h1M5SellOk
+
+if finalBuySignal
+    lastSignalBar := bar_index
+    lastSignalDir := 1
+
+if finalSellSignal
+    lastSignalBar := bar_index
+    lastSignalDir := -1
+
+setupMode =
+     finalBuySignal and buyContinuationReady ? "BUY ALIGNÉ" :
+     finalBuySignal and buyReversalReady ? "BUY REVERSAL" :
+     finalSellSignal and sellContinuationReady ? "SELL ALIGNÉ" :
+     finalSellSignal and sellReversalReady ? "SELL REVERSAL" :
+     buyContinuationReady ? "BUY READY" :
+     sellContinuationReady ? "SELL READY" :
+     buyReversalReady ? "BUY ARMÉ" :
+     sellReversalReady ? "SELL ARMÉ" :
+     "WAIT"
+
+signalTxt =
+     finalBuySignal ? "BUY ACTIVE" :
+     finalSellSignal ? "SELL ACTIVE" :
+     setupMode
+
+signalType =
+     finalBuySignal and buyContinuationReady ? "ALIGNÉ" :
+     finalBuySignal and buyReversalReady ? "REVERSAL" :
+     finalSellSignal and sellContinuationReady ? "ALIGNÉ" :
+     finalSellSignal and sellReversalReady ? "REVERSAL" :
+     buyReversalReady or sellReversalReady ? "ARMÉ" :
+     buyReady or sellReady ? "READY" :
+     "WAIT"
+
+alignScore = 0
+alignScore += finalBuySignal and d1Trend == 1 ? 1 : finalSellSignal and d1Trend == -1 ? 1 : 0
+alignScore += finalBuySignal and h4Trend == 1 ? 1 : finalSellSignal and h4Trend == -1 ? 1 : 0
+alignScore += finalBuySignal and h1Trend == 1 ? 1 : finalSellSignal and h1Trend == -1 ? 1 : 0
+alignScore += finalBuySignal and graphTrend == 1 ? 1 : finalSellSignal and graphTrend == -1 ? 1 : 0
+alignScore += finalBuySignal and zoneBuyOk ? 1 : finalSellSignal and zoneSellOk ? 1 : 0
+
+grade =
+     finalBuySignal and buyReversalReady ? "B REVERSAL" :
+     finalSellSignal and sellReversalReady ? "B REVERSAL" :
+     alignScore >= 5 ? "A+ ALIGNÉ" :
+     alignScore >= 4 ? "A ALIGNÉ" :
+     "B"
+
+labelTxtBuy = grade == "B REVERSAL" ? "BUY R" : grade == "A+ ALIGNÉ" ? "BUY A+" : grade == "A ALIGNÉ" ? "BUY A" : "BUY B"
+labelTxtSell = grade == "B REVERSAL" ? "SELL R" : grade == "A+ ALIGNÉ" ? "SELL A+" : grade == "A ALIGNÉ" ? "SELL A" : "SELL B"
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// ICT CHECK-UP PÉDAGOGIQUE - AUCUN BLOCAGE
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+recentBullFVG = not na(lastBullFvgBar) and bar_index - lastBullFvgBar <= eduMemoryWindow
+recentBearFVG = not na(lastBearFvgBar) and bar_index - lastBearFvgBar <= eduMemoryWindow
+recentBullOB = not na(lastBullObBar) and bar_index - lastBullObBar <= eduMemoryWindow
+recentBearOB = not na(lastBearObBar) and bar_index - lastBearObBar <= eduMemoryWindow
+recentTouchBullZone = not na(lastTouchBullZoneBar) and bar_index - lastTouchBullZoneBar <= eduMemoryWindow
+recentTouchBearZone = not na(lastTouchBearZoneBar) and bar_index - lastTouchBearZoneBar <= eduMemoryWindow
+
+activeBullZones = array.size(bullZones) > 0
+activeBearZones = array.size(bearZones) > 0
+
+buyZoneEdu =
+     activeBullZones and
+     (recentBullOB or recentBullFVG or recentTouchBullZone or touchBullZone or bullFVG)
+
+sellZoneEdu =
+     activeBearZones and
+     (recentBearOB or recentBearFVG or recentTouchBearZone or touchBearZone or bearFVG)
+
+ictBuyScore = 0
+ictBuyScore += discountForLong ? 1 : 0
+ictBuyScore += recentSslSweep ? 1 : 0
+ictBuyScore += recentBullStructure ? 1 : 0
+ictBuyScore += recentBullFVG or bullFVG ? 1 : 0
+ictBuyScore += recentBullOB or touchBullZone ? 1 : 0
+ictBuyScore += bullDisplacement or bullPattern ? 1 : 0
+ictBuyScore += h1Bull ? 1 : 0
+ictBuyScore += not h4Bear ? 1 : 0
+
+ictSellScore = 0
+ictSellScore += premiumForShort ? 1 : 0
+ictSellScore += recentBslSweep ? 1 : 0
+ictSellScore += recentBearStructure ? 1 : 0
+ictSellScore += recentBearFVG or bearFVG ? 1 : 0
+ictSellScore += recentBearOB or touchBearZone ? 1 : 0
+ictSellScore += bearDisplacement or bearPattern ? 1 : 0
+ictSellScore += h1Bear ? 1 : 0
+ictSellScore += not h4Bull ? 1 : 0
+
+buyJoker =
+     (finalBuySignal or buyReady) and
+     recentSslSweep and
+     buyZoneEdu and
+     recentBullStructure and
+     (h1Bull or graphTrend == 1 or not h4Bear)
+
+sellJoker =
+     (finalSellSignal or sellReady) and
+     recentBslSweep and
+     sellZoneEdu and
+     recentBearStructure and
+     (h1Bear or graphTrend == -1 or not h4Bull)
+
+buySequence =
+     buyJoker and buyReversalReady ? "REVERSAL BUY" :
+     buyJoker and buyContinuationReady ? "CONT BUY" :
+     recentSslSweep and buyZoneEdu ? "RAID BUY" :
+     "WAIT"
+
+sellSequence =
+     sellJoker and sellReversalReady ? "REVERSAL SELL" :
+     sellJoker and sellContinuationReady ? "CONT SELL" :
+     recentBslSweep and sellZoneEdu ? "RAID SELL" :
+     "WAIT"
+
+activeSequence =
+     finalSellSignal or sellJoker or ictSellScore > ictBuyScore ? sellSequence :
+     finalBuySignal or buyJoker or ictBuyScore > ictSellScore ? buySequence :
+     "WAIT"
+
+[plusDI, minusDI, adx] = ta.dmi(14, 14)
+atrRegime = ta.atr(14)
+atrAvg = ta.sma(atrRegime, 50)
+volatilityRatio = atrAvg > 0 ? atrRegime / atrAvg : 1.0
+
+isVolatile = volatilityRatio > 1.25
+isRange = adx < 18 and volatilityRatio < 1.10
+isTrending = adx > 22 and graphTrend != 0 and (h1Trend == graphTrend or h4Trend == graphTrend)
+
+isBearManipulation =
+     premiumForShort and
+     recentBslSweep and
+     (bearPattern or bearDisplacement or recentBearStructure or touchBearZone)
+
+isBullManipulation =
+     discountForLong and
+     recentSslSweep and
+     (bullPattern or bullDisplacement or recentBullStructure or touchBullZone)
+
+marketState =
+     isBearManipulation or isBullManipulation ? "MANIP ICT" :
+     isVolatile and isTrending ? "TEND VOLATILE" :
+     isTrending ? "TENDANCE" :
+     isRange ? "RANGE" :
+     "NEUTRE"
+
+recommendedMode =
+     marketState == "MANIP ICT" ? "REVERSAL" :
+     marketState == "TEND VOLATILE" ? "AGRESSIF" :
+     marketState == "TENDANCE" ? "EQUILIBRE" :
+     marketState == "RANGE" ? "SELECTIF" :
+     "EQUILIBRE"
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// AMD PHASE ENGINE V2 — Contexte + Sens
+// AMD décrit le marché, il ne bloque aucun trade
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+groupAmd = "22. AMD PHASE ENGINE"
+
+showAmdPhaseLabel = input.bool(false, "Afficher phase AMD debug", group=groupAmd)
+
+// Sessions AMD
+amdInAsia =
+     not na(time(timeframe.period, asiaSession, "Europe/Paris"))
+
+amdInLondon =
+     not na(time(timeframe.period, londonSession, "Europe/Paris"))
+
+amdInNy =
+     not na(time(timeframe.period, nySession, "Europe/Paris"))
+
+// Liquidité travaillée avec mémoire courte AMD
+// Corrige le problème AMD trop souvent en ATTENTE après sweep
+
+amdLiqMemoryBars = input.int(10, "Mémoire liquidité AMD", minval=1, maxval=30, group=groupAmd)
+
+var int amdLastSslSweepBar = na
+var int amdLastBslSweepBar = na
+
+// Mémoire liquidité AMD avec reset événementiel
+// La mémoire reste active tant qu'un vrai événement opposé ne l'invalide pas.
+
+amdResetSslMemory =
+     newBullBreak or
+     bullChoch or
+     postBullBos or
+     fastBullMss or
+     bslSweep
+
+amdResetBslMemory =
+     newBearBreak or
+     bearChoch or
+     postBearBos or
+     fastBearMss or
+     sslSweep
+
+if sslSweep or sslTaken
+    amdLastSslSweepBar := bar_index
+
+if bslSweep or bslTaken
+    amdLastBslSweepBar := bar_index
+
+if amdResetSslMemory
+    amdLastSslSweepBar := na
+
+if amdResetBslMemory
+    amdLastBslSweepBar := na
+
+amdSslMemory =
+     not na(amdLastSslSweepBar) and
+     bar_index - amdLastSslSweepBar <= amdLiqMemoryBars
+
+amdBslMemory =
+     not na(amdLastBslSweepBar) and
+     bar_index - amdLastBslSweepBar <= amdLiqMemoryBars
+
+// Liquidité travaillée
+amdSslWorked =
+     recentSslSweep or
+     sslTaken or
+     amdSslMemory
+
+amdBslWorked =
+     recentBslSweep or
+     bslTaken or
+     amdBslMemory
+
+// Distribution BUY : sell-side liquidité prise puis reprise haussière
+amdDistributionExpansionBuy =
+     amdSslWorked and
+     (
+         bullChoch or
+         newBullBreak or
+         postBullBos or
+         fastBullMss
+     ) and
+     (
+         bullDisplacement or
+         bullFVG
+     )
+
+// Distribution SELL : buy-side liquidité prise puis reprise baissière
+amdDistributionExpansionSell =
+     amdBslWorked and
+     (
+         bearChoch or
+         newBearBreak or
+         postBearBos or
+         fastBearMss
+     ) and
+     (
+         bearDisplacement or
+         bearFVG
+     )
+
+// Mémoire courte des distributions
+var int amdLastDistributionBuyBar = na
+var int amdLastDistributionSellBar = na
+
+if amdDistributionExpansionBuy
+    amdLastDistributionBuyBar := bar_index
+
+if amdDistributionExpansionSell
+    amdLastDistributionSellBar := bar_index
+
+amdDistributionBuyRecent =
+     not na(amdLastDistributionBuyBar) and
+     bar_index - amdLastDistributionBuyBar <= 20
+
+amdDistributionSellRecent =
+     not na(amdLastDistributionSellBar) and
+     bar_index - amdLastDistributionSellBar <= 20
+
+// Retest après distribution BUY
+amdDistributionRetestBuy =
+     amdDistributionBuyRecent and
+     (
+         touchBullZone or
+         recentTouchBullZone
+     ) and
+     (
+         bullCandle or
+         bullDisplacement or
+         bullPattern
+     )
+
+// Retest après distribution SELL
+amdDistributionRetestSell =
+     amdDistributionSellRecent and
+     (
+         touchBearZone or
+         recentTouchBearZone
+     ) and
+     (
+         bearCandle or
+         bearDisplacement or
+         bearPattern
+     )
+
+// Manipulation directionnelle
+amdManipulationSell =
+     amdSslWorked and
+     not amdDistributionExpansionBuy and
+     not amdDistributionRetestBuy and
+     (
+         bearCandle or
+         bearDisplacement
+     )
+
+amdManipulationBuy =
+     amdBslWorked and
+     not amdDistributionExpansionSell and
+     not amdDistributionRetestSell and
+     (
+         bullCandle or
+         bullDisplacement
+     )
+
+// Accumulation = construction / attente / compression
+amdAccumulation =
+     (
+         amdInAsia or
+         isRange
+     ) and
+     not amdManipulationSell and
+     not amdManipulationBuy and
+     not amdDistributionExpansionBuy and
+     not amdDistributionExpansionSell and
+     not amdDistributionRetestBuy and
+     not amdDistributionRetestSell
+
+// Texte cycle AMD
+amdCycleTxt =
+     amdDistributionRetestBuy or amdDistributionRetestSell or amdDistributionExpansionBuy or amdDistributionExpansionSell ? "DISTRIBUTION" :
+     amdManipulationSell or amdManipulationBuy ? "MANIPULATION" :
+     amdAccumulation ? "ACCUMULATION" :
+     "ATTENTE"
+
+// Sens AMD
+amdSensTxt =
+     amdDistributionExpansionBuy or amdDistributionRetestBuy or amdManipulationBuy ? "BUY" :
+     amdDistributionExpansionSell or amdDistributionRetestSell or amdManipulationSell ? "SELL" :
+     "NEUTRE"
+
+// Étape AMD
+amdStepTxt =
+     amdDistributionRetestBuy or amdDistributionRetestSell ? "RETEST" :
+     amdDistributionExpansionBuy or amdDistributionExpansionSell ? "EXPANSION" :
+     amdManipulationSell or amdManipulationBuy ? "LIQUIDITÉ" :
+     amdAccumulation ? "RANGE" :
+     "-"
+
+// Texte final dashboard compact
+// Évite que le dashboard s'agrandisse / se rétrécisse en temps réel
+
+amdPhaseFullTxt =
+     amdCycleTxt == "ATTENTE" ? "ATTENTE" :
+     amdCycleTxt + " " + amdSensTxt + " / " + amdStepTxt
+
+amdCycleShortTxt =
+     amdCycleTxt == "DISTRIBUTION" ? "DIST" :
+     amdCycleTxt == "MANIPULATION" ? "MANIP" :
+     amdCycleTxt == "ACCUMULATION" ? "ACC" :
+     "WAIT"
+
+amdStepShortTxt =
+     amdStepTxt == "LIQUIDITÉ" ? "LIQ" :
+     amdStepTxt == "EXPANSION" ? "EXP" :
+     amdStepTxt == "RETEST" ? "RT" :
+     amdStepTxt == "RANGE" ? "RNG" :
+     "-"
+
+amdPhaseTxt =
+     amdCycleTxt == "ATTENTE" ? "WAIT -" :
+     amdCycleShortTxt + " " + amdSensTxt + " " + amdStepShortTxt
+
+// Label debug AMD
+var label amdPhaseLabel = na
+
+if barstate.islast and showAmdPhaseLabel
+    if not na(amdPhaseLabel)
+        label.delete(amdPhaseLabel)
+
+    amdPhaseLabel := label.new(
+         bar_index,
+         high,
+         amdPhaseTxt,
+         xloc=xloc.bar_index,
+         yloc=yloc.abovebar,
+         style=label.style_label_down,
+         textcolor=color.white,
+         color=color.new(color.black, 0),
+         size=size.small)
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// ICT SYNC HTF / LTF - V4.12B-2
+// Le dashboard analyse le label existant.
+// Il ne crée pas de signal et ne bloque rien.
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+// Direction de référence HTF selon le mode choisi
+syncHtfTrend =
+     syncRefTf == "60" ? h1Trend :
+     syncRefTf == "240" ? h4Trend :
+     syncRefTf == "D" ? d1Trend :
+     h1Trend
+
+syncHtfPD =
+     syncRefTf == "60" ? h1PD :
+     syncRefTf == "240" ? h4PD :
+     syncRefTf == "D" ? d1PD :
+     h1PD
+
+// Lecture HTF simplifiée :
+// tendance haussière = BUY
+// tendance baissière = SELL
+// neutre = MIXTE
+syncHtfBiasDir =
+     syncHtfTrend == 1 ? 1 :
+     syncHtfTrend == -1 ? -1 :
+     0
+
+// Lecture de zone HTF via Premium / Discount :
+// Premium = zone favorable SELL
+// Discount = zone favorable BUY
+syncHtfZoneDir =
+     syncHtfPD == 1 ? -1 :
+     syncHtfPD == -1 ? 1 :
+     0
+
+// Lecture LTF via tendance graphique actuelle
+syncLtfBiasDir =
+     graphTrend == 1 ? 1 :
+     graphTrend == -1 ? -1 :
+     0
+
+// Zone LTF : on corrige le problème BUY + SELL en même temps
+ltfBuyZoneActive = buyZoneEdu
+ltfSellZoneActive = sellZoneEdu
+
+syncLtfZoneDir =
+     ltfBuyZoneActive and ltfSellZoneActive ? 0 :
+     ltfBuyZoneActive ? 1 :
+     ltfSellZoneActive ? -1 :
+     0
+
+syncLtfZoneTxt = fZoneTxt(ltfBuyZoneActive, ltfSellZoneActive)
+
+// Structure LTF dominante
+syncLtfStructDir =
+     recentBullStructure and recentBearStructure ? 0 :
+     recentBullStructure ? 1 :
+     recentBearStructure ? -1 :
+     0
+
+syncLtfStructTxt = fStructTxt(recentBullChoch, recentBullBos, recentBearChoch, recentBearBos)
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// TF VISUEL OPÉRATIONNEL V4.12B-8
+// Corrige l'affichage dashboard sans toucher au moteur.
+// Priorité à la structure récente CHoCH/BOS.
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+tfVisualTrend =
+     syncLtfStructDir == 1 ? 1 :
+     syncLtfStructDir == -1 ? -1 :
+     graphTrend
+
+syncLtfBiasVisualDir =
+     syncLtfStructDir != 0 ? syncLtfStructDir :
+     syncLtfBiasDir
+// Mémoire du dernier label BUY/SELL pour que le dashboard reste synchronisé quelques bougies
+var int syncLastLabelBar = na
+var int syncLastLabelDir = 0
+
+if finalBuySignal
+    syncLastLabelBar := bar_index
+    syncLastLabelDir := 1
+
+if finalSellSignal
+    syncLastLabelBar := bar_index
+    syncLastLabelDir := -1
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// CROSS-RESET ICT SYNC V4.12B-8
+// Un CHoCH opposé invalide immédiatement
+// l'ancien label mémorisé dans ICT Sync.
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+if bullChoch and syncLastLabelDir == -1
+    syncLastLabelBar := na
+    syncLastLabelDir := 0
+
+if bearChoch and syncLastLabelDir == 1
+    syncLastLabelBar := na
+    syncLastLabelDir := 0
+
+syncRecentLabel =
+     not na(syncLastLabelBar) and
+     bar_index - syncLastLabelBar <= syncMemoryWindow
+
+syncLabelDir =
+     syncRecentLabel ? syncLastLabelDir : 0
+
+syncLabelTxt =
+     syncLabelDir == 1 ? "BUY" :
+     syncLabelDir == -1 ? "SELL" :
+     "-"
+
+// Direction LTF globale pour la synchronisation
+// Priorité : structure récente, puis zone, puis tendance graphique
+syncLtfDir =
+     syncLtfStructDir != 0 ? syncLtfStructDir :
+     syncLtfZoneDir != 0 ? syncLtfZoneDir :
+     syncLtfBiasDir
+
+// Direction HTF globale pour la synchronisation
+// Priorité : tendance HTF, puis zone Premium/Discount
+syncHtfDir =
+     syncHtfBiasDir != 0 ? syncHtfBiasDir :
+     syncHtfZoneDir
+
+// Texte final de synchronisation
+syncStatus = fSyncTxt(syncLabelDir, syncHtfDir, syncLtfDir)
+
+// Score HTF / LTF pédagogique
+syncHtfScore = 0
+syncHtfScore += syncHtfBiasDir != 0 ? 1 : 0
+syncHtfScore += syncHtfZoneDir != 0 ? 1 : 0
+syncHtfScore += syncHtfBiasDir == syncHtfZoneDir and syncHtfBiasDir != 0 ? 1 : 0
+syncHtfScore += syncHtfDir == syncLabelDir and syncLabelDir != 0 ? 1 : 0
+
+syncLtfScore = 0
+syncLtfScore += syncLtfStructDir != 0 ? 1 : 0
+syncLtfScore += syncLtfZoneDir != 0 ? 1 : 0
+syncLtfScore += syncLtfBiasDir != 0 ? 1 : 0
+syncLtfScore += syncLtfDir == syncLabelDir and syncLabelDir != 0 ? 1 : 0
+
+// Lecture Joker MTF : purement pédagogique
+syncJokerTxt =
+     syncStatus == "SELL OK" ? "SELL JOKER" :
+     syncStatus == "BUY OK" ? "BUY JOKER" :
+     syncStatus == "PRUDENCE" ? "PRUDENCE" :
+     syncStatus == "MIXTE" ? "MIXTE" :
+     "-"
+
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// LABEL ↔ ENTRY BRIDGE V4.12B-13
+// Pont sélectif : Signal / Sync / Joker / Pullback ICT
+// Situé juste avant BACKTEST VISUEL
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// 1. SYNC OK FILTRÉ
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+bridgeBuySyncOk =
+     entryBridgeMode != "Signal strict" and
+     syncStatus == "BUY OK" and
+     syncLabelDir == 1 and
+     ictBuyScore >= minBridgeIctScore and
+     (bullDisplacement or recentBullBos or bullBreak) and
+     (touchBullZone or recentTouchBullZone or bullFVG) and
+     (recentSslSweep or sslTaken)
+
+bridgeSellSyncOk =
+     entryBridgeMode != "Signal strict" and
+     syncStatus == "SELL OK" and
+     syncLabelDir == -1 and
+     ictSellScore >= minBridgeIctScore and
+     (bearDisplacement or recentBearBos or bearBreak) and
+     (touchBearZone or recentTouchBearZone or bearFVG) and
+     (recentBslSweep or bslTaken)
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// 2. JOKER FILTRÉ
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+bridgeBuyJokerOk =
+     entryBridgeMode == "Signal + Sync/Joker" and
+     buyJoker and
+     ictBuyScore >= minBridgeIctScore and
+     (bullDisplacement or recentBullBos or bullBreak) and
+     (touchBullZone or recentTouchBullZone or bullFVG) and
+     (recentSslSweep or sslTaken)
+
+bridgeSellJokerOk =
+     entryBridgeMode == "Signal + Sync/Joker" and
+     sellJoker and
+     ictSellScore >= minBridgeIctScore and
+     (bearDisplacement or recentBearBos or bearBreak) and
+     (touchBearZone or recentTouchBearZone or bearFVG) and
+     (recentBslSweep or bslTaken)
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// 3. PULLBACK ICT V4.12B-13
+// Entrée ajoutée : sweep → structure → retour OB/FVG → réaction
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+bridgeBuyPullbackOk =
+     entryBridgeMode == "Signal + Sync/Pullback" and
+     ictBuyScore >= minBridgeIctScore and
+     (recentSslSweep or sslTaken) and
+     (recentBullChoch or recentBullBos or recentBullStructure or bullBreak or fastBullMss) and
+     (touchBullZone or recentTouchBullZone) and
+     bullDisplacement and
+     not h4Bear
+
+bridgeSellPullbackOk =
+     entryBridgeMode == "Signal + Sync/Pullback" and
+     ictSellScore >= minBridgeIctScore and
+     (recentBslSweep or bslTaken) and
+     (recentBearChoch or recentBearBos or recentBearStructure or bearBreak or fastBearMss) and
+     (touchBearZone or recentTouchBearZone) and
+     bearDisplacement and
+     not h4Bull
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// 3B. ICT SIMPLE CORE V4.12B-15
+// Logique simple : P/D + OB/FVG + BOS + réaction
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+// Proximité OB/FVG pour ICT Simple
+nearBullZone =
+     not na(nearestBullZoneBelow) and
+     nearestBullZoneBelow <= atr * ictSimpleZoneProximityAtr
+
+
+
+
+nearBearZone =
+     not na(nearestBearZoneAbove) and
+     nearestBearZoneAbove <= atr * ictSimpleZoneProximityAtr
+
+ictSimpleBuyStructOk =
+     ictSimpleStructureMode == "CHoCH + BOS" ?
+     (recentBullChoch or recentBullBos or bullBreak or fastBullMss) :
+     (recentBullBos or bullBreak or fastBullMss)
+
+// Structure ICT Simple : choix BOS strict ou CHoCH + BOS
+
+
+ictSimpleSellStructOk =
+     ictSimpleStructureMode == "CHoCH + BOS" ?
+     (recentBearChoch or recentBearBos or bearBreak or fastBearMss) :
+     (recentBearBos or bearBreak or fastBearMss)
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// BUY ARMED RECLAIM V44C
+// Contact OB/FVG BUY en Discount → armement → reclaim du high de contact
+// Ne pollue pas ictSimpleBuyStructOk
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+var bool buyArmedReclaim = false
+var float buyArmedHigh = na
+var float buyArmedLow = na
+var int buyArmedBar = na
+
+buyArmedContact =
+     touchBullZone and
+     graphDiscount and
+     (bullCandle or lowerWick >= body * 0.50)
+
+if buyArmedContact
+    buyArmedReclaim := true
+    buyArmedHigh := high
+    buyArmedLow := low
+    buyArmedBar := bar_index
+
+buyArmedExpired =
+     buyArmedReclaim and
+     not na(buyArmedBar) and
+     bar_index - buyArmedBar > 8
+
+buyArmedInvalid =
+     buyArmedReclaim and
+     (
+         (not na(buyArmedLow) and close < buyArmedLow) or
+         bearChoch or
+         newBearBreak or
+         fastBearMss or
+         postBearBos or
+         buyArmedExpired
+     )
+
+if buyArmedInvalid
+    buyArmedReclaim := false
+    buyArmedHigh := na
+    buyArmedLow := na
+    buyArmedBar := na
+
+buyArmedConfirm =
+     buyArmedReclaim and
+     not na(buyArmedHigh) and
+     bar_index > buyArmedBar and
+     close > buyArmedHigh and
+     (bullCandle or bullDisplacement)
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// BUY ICT CORE V2 — NEUTRALISÉ
+// Ancien automate continuation non retenu.
+// Variables conservées à false pour éviter les dépendances cassées.
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+useBuyIctCoreV2 = false
+showBuyIctCoreV2Labels = false
+
+buyCoreV2MaxWaitBars = 12
+buyCoreV2Cooldown = 10
+
+buyCoreV2BosNow = false
+buyCoreV2Expired = false
+buyCoreV2Invalid = false
+buyCoreV2Retest = false
+buyCoreV2Reaction = false
+buyCoreV2CooldownOk = false
+buyCoreV2Pulse = false
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// BUY CORE V2B OBS — NEUTRALISÉ
+// Ancien moteur observation compacté non retenu.
+// Variables conservées à false pour éviter les dépendances cassées.
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+useBuyCoreV2BObs = false
+showBuyCoreV2BObsLabels = false
+
+buyCoreV2BMaxWaitBars = 18
+buyCoreV2BRetestMemoryBars = 5
+buyCoreV2BCooldownBars = 10
+buyCoreV2BMinImpulseAtr = 1.20
+buyCoreV2BMinRoomSellAtr = 0.80
+
+buyCoreV2BObsPulse = false
+// Noyau ICT Simple : P/D + OB/FVG + structure + réaction
+ictSimpleBuyOk =
+     entryBridgeMode == "ICT Simple" and
+     graphDiscount and
+     (touchBullZone or recentTouchBullZone or nearBullZone) and
+     ictSimpleBuyStructOk and
+     (bullCandle or bullDisplacement)
+
+ictSimpleSellOk =
+     entryBridgeMode == "ICT Simple" and
+     graphPremium and
+     (touchBearZone or recentTouchBearZone or nearBearZone) and
+     ictSimpleSellStructOk and
+     (bearCandle or bearDisplacement)
+
+ictSimpleSellTrendPlusOk =
+     entryBridgeMode == "ICT Simple" and
+     graphPremium and
+     (touchBearZone or recentTouchBearZone or nearBearZone) and
+     (bearCandle or bearDisplacement) and
+     sellContextOk and
+     h1Trend == -1
+
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// 3C. ICT SIMPLE BRUT V4.12B-16
+// Version test : sans H1 guard, sans contexte secondaire
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ictSimpleBrutBuyOk =
+     entryBridgeMode == "ICT Simple Brut" and
+     graphDiscount and
+     (touchBullZone or recentTouchBullZone or nearBullZone) and
+     ictSimpleBuyStructOk and
+     (bullCandle or bullDisplacement)
+
+ictSimpleBrutSellOk =
+     entryBridgeMode == "ICT Simple Brut" and
+     graphPremium and
+     (touchBearZone or recentTouchBearZone or nearBearZone) and
+     ictSimpleSellStructOk and
+     (bearCandle or bearDisplacement)
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// 3D. ICT RANGE HYBRID V4.12B-17C
+// BUY = logique ICT Simple Brut en bas de range
+// SELL = logique Signal + Sync OK en haut de range
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+rangeSize = math.max(graphHi - graphLo, syminfo.mintick)
+
+// Extrêmes basés sur les mèches
+rangeLowPos = (low - graphLo) / rangeSize
+rangeHighPos = (high - graphLo) / rangeSize
+
+rangeLowEdgeOk =
+     rangeLowPos <= rangeEdgeLimit
+
+rangeHighEdgeOk =
+     rangeHighPos >= 1.0 - rangeEdgeLimit
+
+rangeBuyTargetOk =
+     not rangeEdgeNeedTarget or
+     not na(nearestBearZoneAbove)
+
+rangeSellTargetOk =
+     not rangeEdgeNeedTarget or
+     not na(nearestBullZoneBelow)
+
+// BUY RANGE = copie contrôlée de ICT Simple Brut BUY
+ictRangeBuyOk =
+     useIctRangeEdge and
+     entryBridgeMode == "ICT Simple" and
+     rangeLowEdgeOk and
+     rangeBuyTargetOk and
+     graphDiscount and
+     (touchBullZone or recentTouchBullZone or nearBullZone) and
+     ictSimpleBuyStructOk and
+     (bullDisplacement or bullPattern)
+
+// SELL RANGE = copie contrôlée de Signal + Sync OK SELL
+ictRangeSellOk = false
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// SMART RECOVERY CORE V4.12B-20
+// Sweep → Structure → OB/FVG Pullback → Réaction
+// Objectif : récupérer les bons trades manqués sans casser le moteur principal
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+// Mémoire structure Recovery
+recoveryBullStructRecent =
+     recentBullChoch or
+     recentBullBos or
+     recentBullStructure or
+     bullBreak or
+     fastBullMss or
+     postBullBos
+
+recoveryBearStructRecent =
+     recentBearChoch or
+     recentBearBos or
+     recentBearStructure or
+     bearBreak or
+     fastBearMss or
+     postBearBos
+
+// Mémoire zone Recovery
+recoveryBuyZoneRecent =
+     touchBullZone or
+     recentTouchBullZone or
+     nearBullZone or
+     bullFVG or
+     recentBullFVG or
+     recentBullOB
+
+recoverySellZoneRecent =
+     touchBearZone or
+     recentTouchBearZone or
+     nearBearZone or
+     bearFVG or
+     recentBearFVG or
+     recentBearOB
+
+// Sweep Recovery
+recoveryBuySweepRecent =
+     recentSslSweep or
+     sslTaken
+
+recoverySellSweepRecent =
+     recentBslSweep or
+     bslTaken
+
+// Réaction bougie Recovery
+recoveryBuyReaction =
+     bullDisplacement or
+     bullPattern or
+     bullEngulf or
+     hammer or
+     bullPin or
+     morningStar
+
+recoverySellReaction =
+     bearDisplacement or
+     bearPattern or
+     bearEngulf or
+     shooting or
+     bearPin or
+     eveningStar
+
+// Zone extrême locale
+recoveryBuyRangeEdge =
+     graphDiscount and
+     rangeLowEdgeOk
+
+recoverySellRangeEdge =
+     graphPremium and
+     rangeHighEdgeOk
+
+// Narratif H1 favorable aux Recovery
+// BUY Recovery : H1 baissier mais déjà en Discount = short tardif, achat de réaction possible
+recoveryH1BuyContext =
+     h1SellDiscountRecovery or
+     h1Bull or
+     not h1Bear
+
+// SELL Recovery : H1 haussier mais déjà en Premium = buy tardif, vente de réaction possible
+recoveryH1SellContext =
+     h1BuyPremiumRecovery or
+     h1Bear or
+     not h1Bull
+
+// Contre H1 autorisé seulement en extrême
+recoveryBuyH1Ok =
+     recoveryAllowH1Counter ?
+     (recoveryH1BuyContext or recoveryBuyRangeEdge) :
+     not h1Bear
+
+recoverySellH1Ok =
+     recoveryAllowH1Counter ?
+     (recoveryH1SellContext or recoverySellRangeEdge) :
+     not h1Bull
+
+// Score BUY Recovery
+recoveryBuyScore = 0
+recoveryBuyScore += graphDiscount ? 1 : 0
+recoveryBuyScore += recoveryBuySweepRecent ? 1 : 0
+recoveryBuyScore += recoveryBullStructRecent ? 1 : 0
+recoveryBuyScore += recoveryBuyZoneRecent ? 1 : 0
+recoveryBuyScore += recoveryBuyReaction ? 1 : 0
+recoveryBuyScore += recoveryBuyRangeEdge ? 1 : 0
+recoveryBuyScore += recoveryBuyH1Ok ? 1 : 0
+
+// Score SELL Recovery
+recoverySellScore = 0
+recoverySellScore += graphPremium ? 1 : 0
+recoverySellScore += recoverySellSweepRecent ? 1 : 0
+recoverySellScore += recoveryBearStructRecent ? 1 : 0
+recoverySellScore += recoverySellZoneRecent ? 1 : 0
+recoverySellScore += recoverySellReaction ? 1 : 0
+recoverySellScore += recoverySellRangeEdge ? 1 : 0
+recoverySellScore += recoverySellH1Ok ? 1 : 0
+
+// Conditions selon mode
+recoveryBuyModeOk =
+     recoveryMode == "Prudent" ?
+         recoveryBuyScore >= recoveryMinScore and recoveryBuySweepRecent and recoveryBullStructRecent and recoveryBuyZoneRecent and recoveryBuyReaction :
+     recoveryMode == "Normal" ?
+         recoveryBuyScore >= recoveryMinScore and recoveryBullStructRecent and recoveryBuyZoneRecent and recoveryBuyReaction :
+     recoveryBuyScore >= recoveryMinScore and recoveryBullStructRecent and recoveryBuyZoneRecent
+
+recoverySellModeOk =
+     recoveryMode == "Prudent" ?
+         recoverySellScore >= recoveryMinScore and recoverySellSweepRecent and recoveryBearStructRecent and recoverySellZoneRecent and recoverySellReaction :
+     recoveryMode == "Normal" ?
+         recoverySellScore >= recoveryMinScore and recoveryBearStructRecent and recoverySellZoneRecent and recoverySellReaction :
+     recoverySellScore >= recoveryMinScore and recoveryBearStructRecent and recoverySellZoneRecent
+
+// Filtres obligatoires optionnels
+recoveryBuySweepOk =
+     not recoveryNeedSweep or recoveryBuySweepRecent
+
+recoverySellSweepOk =
+     not recoveryNeedSweep or recoverySellSweepRecent
+
+recoveryBuyZoneOk =
+     not recoveryNeedZone or recoveryBuyZoneRecent
+
+recoverySellZoneOk =
+     not recoveryNeedZone or recoverySellZoneRecent
+
+recoveryBuyReactionOk =
+     not recoveryNeedReaction or recoveryBuyReaction
+
+recoverySellReactionOk =
+     not recoveryNeedReaction or recoverySellReaction
+
+// Anti-spam Recovery séparé
+var int lastRecoveryBar = na
+var int lastRecoveryDir = 0
+
+recoveryCooldownOk =
+     na(lastRecoveryBar) or
+     bar_index - lastRecoveryBar >= recoveryCooldownBars
+
+// Déclencheurs Recovery bruts
+smartRecoveryBuyRaw =
+     useSmartRecovery and
+     recoveryBuyModeOk and
+     recoveryBuySweepOk and
+     recoveryBuyZoneOk and
+     recoveryBuyReactionOk and
+     recoveryBuyH1Ok and
+     graphDiscount and
+     not finalBuySignal and
+     not ictSimpleBuyOk and
+     not ictSimpleBrutBuyOk
+
+smartRecoverySellRaw =
+     useSmartRecovery and
+     recoverySellModeOk and
+     recoverySellSweepOk and
+     recoverySellZoneOk and
+     recoverySellReactionOk and
+     recoverySellH1Ok and
+     graphPremium and
+     not finalSellSignal and
+     not ictSimpleSellOk and
+     not ictSimpleBrutSellOk
+
+// Pulses Recovery propres
+smartRecoveryBuyPulse =
+     barstate.isconfirmed and
+     sessionOk and
+     smartRecoveryBuyRaw and
+     not smartRecoverySellRaw and
+     not smartRecoveryBuyRaw[1] and
+     recoveryCooldownOk and
+     buySpamOk
+
+smartRecoverySellPulse =
+     barstate.isconfirmed and
+     sessionOk and
+     smartRecoverySellRaw and
+     not smartRecoveryBuyRaw and
+     not smartRecoverySellRaw[1] and
+     recoveryCooldownOk and
+     sellSpamOk
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// 4. PROTECTION H1 DIRECTIONNELLE
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+bridgeBuyH1Ok =
+     not bridgeUseH1Guard or
+     not h1Bear or
+     buyReversalReady
+
+bridgeSellH1Ok =
+     not bridgeUseH1Guard or
+     not h1Bull or
+     sellReversalReady
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// 4B. ANTI BAD SELL FILTER V4.12B-14
+// Évite les ventes trop basses proche d'une zone BUY / OB / FVG
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+bridgeSellNearBuyZone =
+     useAntiBadSellFilter and
+     not na(nearestBullZoneBelow) and
+     nearestBullZoneBelow <= atr * badSellZoneAtr
+
+bridgeSellInDiscountRisk =
+     useAntiBadSellFilter and
+     blockSellInDiscount and
+     graphDiscount and
+     bridgeSellNearBuyZone and
+     not sellReversalReady
+
+bridgeSellAfterSslRisk =
+     useAntiBadSellFilter and
+     graphDiscount and
+     (recentSslSweep or sslTaken) and
+     not recentBslSweep and
+     not sellReversalReady
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// 4C. H1 NARRATIVE SELL PROTECTION V4.12B-18B
+// Si H1 est baissier mais déjà en discount,
+// on bloque les SELL faibles en bas de range.
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+h1NarrativeBadSell =
+     useH1Narrative and
+     h1NarrativeMode != "Lecture seule" and
+     h1SellDiscountRecovery and
+     not (
+         recentBslSweep and
+         (touchBearZone or recentTouchBearZone) and
+         bearDisplacement
+     )
+
+bridgeBadSellBlock =
+     bridgeSellInDiscountRisk or
+     bridgeSellAfterSslRisk or
+     h1NarrativeBadSell
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// 4E. ANTI BAD BUY FILTER V44C-1
+// Miroir propre du Anti Bad Sell Filter
+// Évite les achats trop hauts proche d'une zone SELL / OB / FVG
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+bridgeBuyNearSellZone =
+     useAntiBadSellFilter and
+     not na(nearestBearZoneAbove) and
+     nearestBearZoneAbove <= atr * badSellZoneAtr
+
+bridgeBuyInPremiumRisk =
+     useAntiBadSellFilter and
+     graphPremium and
+     bridgeBuyNearSellZone and
+     not buyReversalReady
+
+bridgeBuyAfterBslRisk =
+     useAntiBadSellFilter and
+     graphPremium and
+     (recentBslSweep or bslTaken) and
+     not recentSslSweep and
+     not buyReversalReady
+
+h1NarrativeBadBuy =
+     useH1Narrative and
+     h1NarrativeMode != "Lecture seule" and
+     h1BuyPremiumRecovery and
+     not (
+         recentSslSweep and
+         (touchBullZone or recentTouchBullZone) and
+         bullDisplacement
+     )
+
+cleanBuyReversalBypass =
+     recentSslSweep and
+     (touchBullZone or recentTouchBullZone or nearBullZone) and
+     (recentBullChoch or recentBullBos or bullBreak or fastBullMss) and
+     (bullDisplacement or bullPattern)
+
+bridgeBadBuyBlock =
+     not cleanBuyReversalBypass and
+     (
+         bridgeBuyInPremiumRisk or
+         bridgeBuyAfterBslRisk or
+         h1NarrativeBadBuy
+     )
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// 4D. H1 NARRATIVE BUY RECOVERY V4.12B-18C
+// Si H1 est SELL mais en Discount,
+// on autorise un BUY M5 uniquement avec setup ICT propre.
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+h1NarrativeBuyRecoveryOk =
+     useH1Narrative and
+     h1NarrativeMode != "Lecture seule" and
+     h1SellDiscountRecovery and
+     graphDiscount and
+     (recentSslSweep or sslTaken) and
+     (touchBullZone or recentTouchBullZone or nearBullZone) and
+     ictSimpleBuyStructOk and
+     (bullDisplacement or bullPattern)
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// 5. SIGNAL BRUT BRIDGE
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// BUY RECLAIM BASE V47F — REJETÉ
+// Trop polluant dans le routeur : retour à false.
+buyArmedBaseOk = false
+entryBridgeBuyRaw =
+     useEntryBridge ?
+     (
+         entryBridgeMode == "ICT Simple Brut" ? ictSimpleBrutBuyOk :
+         entryBridgeMode == "ICT Simple" ? (ictSimpleBuyOk or ictRangeBuyOk or h1NarrativeBuyRecoveryOk or smartRecoveryBuyRaw) :
+         finalBuySignal or
+         bridgeBuySyncOk or
+         bridgeBuyJokerOk or
+         bridgeBuyPullbackOk or
+         smartRecoveryBuyRaw
+     ) :
+     finalBuySignal
+
+entryBridgeSellRaw =
+     useEntryBridge ?
+     (
+         entryBridgeMode == "ICT Simple Brut" ? ictSimpleBrutSellOk :
+         entryBridgeMode == "ICT Simple" ? (ictSimpleSellOk or ictRangeSellOk or smartRecoverySellRaw) :
+         finalSellSignal or
+         bridgeSellSyncOk or
+         bridgeSellJokerOk or
+         bridgeSellPullbackOk or
+         smartRecoverySellRaw
+     ) :
+     finalSellSignal
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// 6. PULSE ANTI-RÉPÉTITION
+// Évite que la mémoire Sync/Pullback relance plusieurs trades
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+entryBridgeBuyPulse =
+     barstate.isconfirmed and
+     sessionOk and
+     entryBridgeBuyRaw and
+     not entryBridgeSellRaw and
+     not entryBridgeBuyRaw[1] and
+     buySpamOk and
+     (
+         (buyContextOk and bridgeBuyH1Ok) or
+         h1NarrativeBuyRecoveryOk or
+         smartRecoveryBuyRaw or
+         ictRangeBuyOk
+     ) and
+     not bridgeBadBuyBlock
+
+entryBridgeSellPulse =
+     barstate.isconfirmed and
+     sessionOk and
+     entryBridgeSellRaw and
+     not entryBridgeBuyRaw and
+     not entryBridgeSellRaw[1] and
+     sellSpamOk and
+     (
+         (sellContextOk and bridgeSellH1Ok) or
+         ictRangeSellOk or
+         smartRecoverySellRaw
+     ) and
+     not bridgeBadSellBlock
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// 6B. PULSE ICT SIMPLE BRUT
+// Test pur : session + anti-répétition minimal
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+entryBridgeBuyPulseBrut =
+     barstate.isconfirmed and
+     sessionOk and
+     ictSimpleBrutBuyOk and
+     not ictSimpleBrutSellOk and
+     not ictSimpleBrutBuyOk[1]
+
+entryBridgeSellPulseBrut =
+     barstate.isconfirmed and
+     sessionOk and
+     ictSimpleBrutSellOk and
+     not ictSimpleBrutBuyOk and
+     not ictSimpleBrutSellOk[1]
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// 7. TEXTE LABEL SPÉCIFIQUE AU BRIDGE
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+bridgeBuyLabelTxt = entryBridgeMode == "ICT Simple" and h1NarrativeBuyRecoveryOk and not ictSimpleBuyOk ? "BUY H1 REC" : entryBridgeMode == "ICT Simple" and ictRangeBuyOk and not ictSimpleBuyOk ? "BUY RNG" : entryBridgeMode == "ICT Simple Brut" and ictSimpleBrutBuyOk ? "BUY BRUT" : entryBridgeMode == "ICT Simple" and buyArmedConfirm ? "BUY RECLAIM" : entryBridgeMode == "ICT Simple" and ictSimpleBuyOk ? "BUY ICT" : finalBuySignal ? labelTxtBuy : bridgeBuyPullbackOk ? "BUY PULL" : bridgeBuySyncOk ? "BUY SYNC" : bridgeBuyJokerOk ? "BUY BR" : labelTxtBuy
+
+bridgeSellLabelTxt =
+     entryBridgeMode == "ICT Simple" and ictRangeSellOk and not ictSimpleSellOk ? "SELL RNG" :
+     entryBridgeMode == "ICT Simple Brut" and ictSimpleBrutSellOk ? "SELL BRUT" :
+     entryBridgeMode == "ICT Simple" and ictSimpleSellOk ? "SELL ICT" :
+     finalSellSignal ? labelTxtSell :
+     bridgeSellPullbackOk ? "SELL PULL" :
+     bridgeSellSyncOk ? "SELL SYNC" :
+     bridgeSellJokerOk ? "SELL BR" :
+     labelTxtSell
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// OTE WATCH CORE V45 — NEUTRALISÉ
+// Ancien bloc de pré-alerte visuelle.
+// Variables conservées à false pour éviter les dépendances cassées.
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+sellOteWatchRaw = false
+buyOteWatchRaw = false
+
+sellOteWatchPulse = false
+buyOteWatchPulse = false
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// WATCH V1 CORE — NEUTRALISÉ
+// Ancien bloc de pré-alerte visuelle.
+// Variables conservées à false pour éviter les dépendances cassées.
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+sellWatchV1Raw = false
+buyWatchV1Raw = false
+
+sellWatchV1Pulse = false
+buyWatchV1Pulse = false
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// DEBUG ICT SIMPLE BLOCKERS V4.12B-19
+// Diagnostic visuel temporaire : pourquoi ICT Simple ne déclenche pas ?
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+debugNearBuyZone =
+     touchBullZone or recentTouchBullZone or nearBullZone
+
+debugNearSellZone =
+     touchBearZone or recentTouchBearZone or nearBearZone
+
+debugBuyCandidate =
+     showIctSimpleDebug and
+     entryBridgeMode == "ICT Simple" and
+     (not debugOnlyNearZones or debugNearBuyZone) and
+     graphDiscount and
+     bar_index % debugEveryBars == 0
+
+debugSellCandidate =
+     showIctSimpleDebug and
+     entryBridgeMode == "ICT Simple" and
+     (not debugOnlyNearZones or debugNearSellZone) and
+     graphPremium and
+     bar_index % debugEveryBars == 0
+debugBuyPulseGateOk =
+     (buyContextOk and bridgeBuyH1Ok) or
+     h1NarrativeBuyRecoveryOk or
+     smartRecoveryBuyRaw or
+     ictRangeBuyOk
+
+debugBuyRawDoorsTxt =
+     "\nSIMPLE:" + (ictSimpleBuyOk ? "✅" : "❌") +
+     " RANGE:" + (ictRangeBuyOk ? "✅" : "❌") +
+     "\nH1REC:" + (h1NarrativeBuyRecoveryOk ? "✅" : "❌") +
+     " SMART:" + (smartRecoveryBuyRaw ? "✅" : "❌")
+
+debugBuyScore =
+     (graphDiscount ? 1 : 0) +
+     (recentSslSweep or sslTaken ? 1 : 0) +
+     (ictSimpleBuyStructOk ? 1 : 0) +
+     (debugNearBuyZone ? 1 : 0) +
+     ((bullDisplacement or bullPattern or bullCandle) ? 1 : 0) +
+     (bridgeBuyH1Ok ? 1 : 0) +
+     (not bridgeBadBuyBlock ? 1 : 0) +
+     (entryBridgeBuyRaw ? 1 : 0)
+
+debugBuyTxt =
+     "BUY DEBUG " + str.tostring(debugBuyScore) + "/8" +
+     "\nD:" + (graphDiscount ? "OK" : "NO") +
+     " SSL:" + (recentSslSweep or sslTaken ? "OK" : "NO") +
+     "\nST:" + (ictSimpleBuyStructOk ? "OK" : "NO") +
+     " Z:" + (debugNearBuyZone ? "OK" : "NO") +
+     "\nRE:" + ((bullDisplacement or bullPattern or bullCandle) ? "OK" : "NO") +
+     " H1:" + (bridgeBuyH1Ok ? "OK" : "NO") +
+     "\nBAD:" + (bridgeBadBuyBlock ? "BLOCK" : "CLEAN") +
+     " RAW:" + (entryBridgeBuyRaw ? "OK" : "NO") +
+     "\nPULSE:" + (entryBridgeBuyPulse ? "OK" : "NO")
+
+debugSellTxt =
+     "SELL CHECK" +
+     "\nP:" + (graphPremium ? "OK" : "NO") +
+     " Z:" + (debugNearSellZone ? "OK" : "NO") +
+     "\nST:" + (ictSimpleSellStructOk ? "OK" : "NO") +
+     " RE:" + ((bearCandle or bearDisplacement) ? "OK" : "NO") +
+     "\nCTX:" + (sellContextOk ? "OK" : "NO") +
+     " H1:" + (bridgeSellH1Ok ? "OK" : "NO")
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// DEBUG STRUCTURE DIFF V44C-2
+// Audit différentiel BUY vs SELL : CHoCH / BOS / BREAK / MSS
+// Observation uniquement - ne modifie pas le backtest
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+debugStructDiffTxt =
+     "STRUCT DIFF" +
+     "\nBUY C:" + (recentBullChoch ? "1" : "0") +
+     " B:" + (recentBullBos ? "1" : "0") +
+     " BR:" + (bullBreak ? "1" : "0") +
+     " MSS:" + (fastBullMss ? "1" : "0") +
+     "\nSELL C:" + (recentBearChoch ? "1" : "0") +
+     " B:" + (recentBearBos ? "1" : "0") +
+     " BR:" + (bearBreak ? "1" : "0") +
+     " MSS:" + (fastBearMss ? "1" : "0") +
+     "\nBUY ST:" + (ictSimpleBuyStructOk ? "OK" : "NO") +
+     " SELL ST:" + (ictSimpleSellStructOk ? "OK" : "NO")
+
+debugStructDiffCandidate =
+     showIctSimpleDebug and
+     entryBridgeMode == "ICT Simple" and
+     bar_index % debugEveryBars == 0 and
+     (
+         debugNearBuyZone or
+         debugNearSellZone or
+         recentBullChoch or
+         recentBullBos or
+         recentBearChoch or
+         recentBearBos or
+         fastBullMss or
+         fastBearMss
+     )
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// BUY REV EARLY CORE V4.12B-37 — NEUTRALISÉ
+// Module trop large / trop polluant au BTM.
+// Variables conservées pour les dépendances CONT / routeur BTM.
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+buyRevEarlyRaw = false
+buyRevEarlyPulse = false
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// BUY CONT EARLY CORE V4.12B-38
+// Continuation BUY : BOS / impulsion / FVG / pullback / reclaim
+// Observation uniquement - ne modifie pas le backtest
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+// 1. Structure BUY de continuation
+buyContStructNow =
+     postBullBos or
+     newBullBreak or
+     (
+         fastBullMss and
+         (recentBullBos or bullFVG or recentBullFVG)
+     )
+
+// Invalidation par pression SELL fraîche
+buyContBearInvalidation =
+     bearChoch or
+     newBearBreak or
+     fastBearMss or
+     postBearBos
+
+var int buyContStructBar = na
+var float buyContStructPrice = na
+var float buyContHighSinceStruct = na
+
+var int buyContPullbackBar = na
+var float buyContPullbackHigh = na
+var float buyContPullbackLow = na
+
+var bool buyContFiredThisStruct = false
+var float buyContLastFireHigh = na
+
+// V38B — Réarmement contrôlé.
+// Après un signal BUY CONT, on ne réarme pas sur chaque micro-BOS.
+// Il faut un nouveau high significatif pour ouvrir une nouvelle séquence.
+buyContRearmOk =
+     not buyContRearmNeedNewHigh or
+     not buyContFiredThisStruct or
+     na(buyContLastFireHigh) or
+     high > buyContLastFireHigh + atr * buyContRearmNewHighAtr
+
+if buyContBearInvalidation
+    buyContStructBar := na
+    buyContStructPrice := na
+    buyContHighSinceStruct := na
+    buyContPullbackBar := na
+    buyContPullbackHigh := na
+    buyContPullbackLow := na
+    buyContFiredThisStruct := false
+    buyContLastFireHigh := na
+
+else if buyContStructNow and buyContRearmOk
+    buyContStructBar := bar_index
+    buyContStructPrice := close
+    buyContHighSinceStruct := high
+    buyContPullbackBar := na
+    buyContPullbackHigh := na
+    buyContPullbackLow := na
+    buyContFiredThisStruct := false
+
+buyContStructActive =
+     not na(buyContStructBar) and
+     bar_index - buyContStructBar <= buyContStructMemoryBars
+
+if buyContStructActive
+    buyContHighSinceStruct := na(buyContHighSinceStruct) ? high : math.max(buyContHighSinceStruct, high)
+
+// 2. Impulsion réelle après structure
+buyContImpulseOk =
+     buyContStructActive and
+     not na(buyContStructPrice) and
+     not na(buyContHighSinceStruct) and
+     buyContHighSinceStruct - buyContStructPrice >= atr * buyContMinImpulseAtr
+
+// 3. FVG BUY récent
+buyContFvgRecent =
+     bullFVG or
+     recentBullFVG or
+     (
+         not na(lastBullFvgBar) and
+         bar_index - lastBullFvgBar <= buyContStructMemoryBars
+     )
+
+buyContFvgOk =
+     not buyContRequireFvg or
+     buyContFvgRecent
+// V38C — Profondeur du pullback dans l'impulsion
+buyContImpulseRange =
+     not na(buyContStructPrice) and not na(buyContHighSinceStruct) ?
+     buyContHighSinceStruct - buyContStructPrice :
+     na
+
+buyContDepthPrice =
+     buyContPullbackDepthMode == "Corps" ?
+     math.min(open, close) :
+     low
+
+buyContPullbackDepth =
+     not na(buyContImpulseRange) and buyContImpulseRange > 0 ?
+     (buyContHighSinceStruct - buyContDepthPrice) / buyContImpulseRange :
+     na
+
+// V38D — Pullback continuation = profondeur contrôlée.
+// Trop faible = simple respiration.
+// Trop profond = plus une continuation, mais un autre setup.
+buyContPullbackDepthOk =
+     not buyContRequirePullbackDepth or
+     (
+         not na(buyContPullbackDepth) and
+         buyContPullbackDepth >= buyContMinPullbackDepth and
+         buyContPullbackDepth <= buyContMaxPullbackDepth
+     )     
+
+// 4. Pullback dans FVG / OB BUY après impulsion
+buyContPullbackNow =
+     buyContStructActive and
+     buyContImpulseOk and
+     buyContFvgOk and
+     buyContPullbackDepthOk and
+     bar_index > buyContStructBar and
+     (
+         touchBullZone or
+         recentTouchBullZone or
+         nearBullZone
+     )
+
+// On mémorise le pullback le plus profond
+if buyContPullbackNow and (na(buyContPullbackLow) or low < buyContPullbackLow)
+    buyContPullbackBar := bar_index
+    buyContPullbackHigh := high
+    buyContPullbackLow := low
+
+buyContPullbackRecent =
+     not na(buyContPullbackBar) and
+     bar_index - buyContPullbackBar <= buyContPullbackMemoryBars
+
+// 5. Reclaim après pullback
+buyContReclaimOk =
+     not buyContRequireReclaim or
+     (
+         buyContPullbackRecent and
+         not na(buyContPullbackHigh) and
+         bar_index > buyContPullbackBar and
+         close > buyContPullbackHigh
+     )
+
+// 6. Réaction haussière
+buyContReactionOk =
+     bullDisplacement or
+     bullPattern or
+     bullCandle or
+     (
+         lowerWick >= body * 0.50 and
+         close > open
+     )
+
+// 7. Évite continuation BUY dans pression SELL fraîche
+buyContNoFreshBearPressure =
+     not recentBearChoch and
+     not recentBearBos and
+     not fastBearMss and
+     not newBearBreak
+
+// 8. Espace avant zone SELL
+buyContRoomToSellAtr =
+     not na(nearestBearZoneAbove) ?
+     nearestBearZoneAbove / atr :
+     999.0
+
+buyContSellSpaceOk =
+     not buyContBlockNearSellZone or
+     buyContRoomToSellAtr >= buyContMinRoomSellAtr
+
+// 9. H1 : continuation BUY autorisée si H1 pas franchement SELL
+// ou si H1 SELL est déjà en discount / recovery.
+buyContH1Ok =
+     not h1Bear or
+     h1SellDiscountRecovery or
+     h1Bull
+
+// 10. Session propre au module
+buyContSessionOk =
+     not buyContRespectSession or sessionOk
+
+// 11. Anti-répétition
+var int lastBuyContEarlyBar = na
+
+buyContCooldownOk =
+     na(lastBuyContEarlyBar) or
+     bar_index - lastBuyContEarlyBar >= buyContCooldownBars
+
+buyContCanFire =
+     not buyContFiredThisStruct
+
+// 12. Signal final observation
+buyContEarlyRaw =
+     useBuyContEarly and
+     entryBridgeMode == "ICT Simple" and
+     buyContStructActive and
+     buyContImpulseOk and
+     buyContFvgOk and
+     buyContPullbackRecent and
+     buyContReclaimOk and
+     buyContReactionOk and
+     buyContNoFreshBearPressure and
+     buyContSellSpaceOk and
+     buyContH1Ok and
+     buyContCanFire and
+     not entryBridgeBuyPulse and
+     not buyRevEarlyPulse
+
+buyContEarlyPulse =
+     barstate.isconfirmed and
+     buyContSessionOk and
+     buyContEarlyRaw and
+     not buyContEarlyRaw[1] and
+     buyContCooldownOk and
+     buySpamOk
+
+if buyContEarlyPulse
+    lastBuyContEarlyBar := bar_index
+    buyContFiredThisStruct := true
+    buyContLastFireHigh := not na(buyContHighSinceStruct) ? buyContHighSinceStruct : high
+
+    if showBuyContEarlyLabels
+        buyContLabelTxt =
+             showBuyContDiagLabel ?
+             (
+                 "BUY CONT EARLY\n" +
+                 "D:" + str.tostring(buyContPullbackDepth, "#.##") +
+                 " IMP:" + (buyContImpulseOk ? "OK" : "NO") +
+                 "\nPB:" + (buyContPullbackRecent ? "OK" : "NO") +
+                 " RE:" + (buyContReclaimOk ? "OK" : "NO") +
+                 " SP:" + (buyContSellSpaceOk ? "OK" : "NO")
+             ) :
+             "BUY CONT EARLY\nFVG/PB"
+
+        label.new(
+             bar_index,
+             low,
+             buyContLabelTxt,
+             xloc=xloc.bar_index,
+             yloc=yloc.belowbar,
+             style=label.style_label_up,
+             textcolor=color.white,
+             color=color.new(color.blue, 0),
+             size=size.small)                  
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// BUY PREP → BUY EXP+ CORE V4.12B-23
+// Phase 1 : préparation BUY en zone Discount / OB-FVG / réaction
+// Phase 2 : confirmation BUY EXP+ par MSS/BOS/FVG/displacement
+// Observation uniquement : ne modifie pas le backtest
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// 1. BUY PREP
+// Zone d'achat potentielle, mais pas encore entrée
+// Correspond aux BUY CHECK : D OK / Z OK / RE OK / ST NO
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// BUY PREP GUARD V4.12B-25
+// Évite les BUY PREP dans une jambe baissière sans vraie preuve BUY
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+// Début de preuve BUY obligatoire
+buyPrepBullTrigger =
+     recentSslSweep or
+     recentBullChoch or
+     recentBullBos or
+     bullBreak or
+     fastBullMss or
+     postBullBos
+
+// Évite les simples retours sur zone SELL / FVG SELL / OB SELL
+buyPrepNotSellRetest =
+     not debugNearSellZone or
+     recentSslSweep or
+     recentBullChoch or
+     fastBullMss
+
+// Évite la continuité baissière fraîche
+buyPrepNoFreshBearPressure =
+     not bearBreak and
+     not fastBearMss and
+     not postBearBos and
+     not (bearDisplacement and not buyPrepBullTrigger)
+
+// BUY PREP V47 — indépendant de BUY EXP+
+// Préparation ICT : Discount + zone BUY + réaction + début de preuve BUY.
+// Ne déclenche pas directement un trade.
+
+buyPrepRaw =
+     entryBridgeMode == "ICT Simple" and
+     graphDiscount and
+     debugNearBuyZone and
+     buyPrepBullTrigger and
+     buyPrepNotSellRetest and
+     buyPrepNoFreshBearPressure and
+     (bullCandle or bullDisplacement or bullPattern) and
+     not ictSimpleBuyOk
+
+var int lastBuyPrepBar = na
+var float lastBuyPrepLow = na
+var float lastBuyPrepHigh = na
+var bool lastBuyPrepZoneOk = false
+
+buyPrepCooldownOk =
+     na(lastBuyPrepBar) or
+     bar_index - lastBuyPrepBar >= buyPrepCooldownBars
+
+buyPrepPulse =
+     barstate.isconfirmed and
+     sessionOk and
+     buyPrepRaw and
+     not buyPrepRaw[1] and
+     buyPrepCooldownOk
+
+if buyPrepPulse
+    lastBuyPrepBar := bar_index
+    lastBuyPrepLow := low
+    lastBuyPrepHigh := high
+    lastBuyPrepZoneOk := debugNearBuyZone
+// Confirmation après BUY PREP : on attend une reprise réelle.
+// Pas d'entrée directe sur PREP.
+
+buyPrepRecent =
+     not na(lastBuyPrepBar) and
+     bar_index - lastBuyPrepBar <= buyPrepMemoryBars
+// Invalidation PREP si pression SELL fraîche.
+// On évite qu'un vieux BUY PREP reste armé dans une nouvelle jambe baissière.
+buyPrepInvalidation =
+     bearChoch or
+     newBearBreak or
+     fastBearMss or
+     postBearBos
+
+if buyPrepInvalidation
+    lastBuyPrepBar := na
+    lastBuyPrepLow := na
+    lastBuyPrepHigh := na
+    lastBuyPrepZoneOk := false
+
+// PREP frais : on ne laisse pas une préparation survivre trop longtemps.
+buyPrepFreshConfirmOk =
+     not na(lastBuyPrepBar) and
+     bar_index - lastBuyPrepBar <= math.min(buyPrepMemoryBars, 8)
+
+// Le PREP doit venir d'une vraie zone basse, pas du milieu du range.
+
+// Le PREP ICT doit venir d'un vrai bas de range.
+// On retire graphMid, trop permissif.
+buyPrepLowLocationOk =
+     not na(lastBuyPrepLow) and
+     lastBuyPrepLow <= graphLo + rangeSize * 0.35
+
+/// La zone BUY doit être présente au moment du PREP.
+// Au moment du reclaim, le prix peut déjà avoir quitté la zone.
+buyPrepStillInBuyZone =
+     lastBuyPrepZoneOk or debugNearBuyZone
+
+// Liquidité basse travaillée ou PREP très bas dans le range.
+buyPrepLiquidityOk =
+     recentSslSweep or
+     sslTaken or
+     (
+         not na(lastBuyPrepLow) and
+         lastBuyPrepLow <= graphLo + rangeSize * 0.35
+     )
+
+// Confirmation PREP stricte validée.
+// Simple bougie verte insuffisante.
+buyPrepStrongConfirm =
+     bullDisplacement or
+     bullPattern or
+     bullEngulf or
+     hammer or
+     bullPin or
+     morningStar
+
+// Structure BUY réelle après PREP.
+buyPrepStructureConfirm =
+     recentBullChoch or
+     recentBullBos or
+     bullBreak or
+     fastBullMss or
+     postBullBos
+
+// Contexte H1 acceptable.
+buyPrepH1ConfirmOk =
+     not h1Bear or
+     h1SellDiscountRecovery or
+     h1Bull
+
+// Confirmation après BUY PREP : plus stricte.
+// Objectif : supprimer le PREP ICT perdant, garder uniquement les vrais bas.
+buyPrepConfirmNotExtended =
+     close <= graphMid + atr * 0.25
+
+
+
+buyPrepToIctConfirm =
+     buyPrepFreshConfirmOk and
+     not na(lastBuyPrepHigh) and
+     bar_index > lastBuyPrepBar and
+     close > lastBuyPrepHigh and
+     buyPrepLowLocationOk and
+     buyPrepConfirmNotExtended and
+     buyPrepStillInBuyZone and
+     buyPrepLiquidityOk and
+     buyPrepStrongConfirm and
+     buyPrepStructureConfirm and
+     buyPrepH1ConfirmOk and
+     not bridgeBadBuyBlock and
+     not entryBridgeSellRaw and
+     not entryBridgeBuyPulse and
+     not buyContEarlyPulse
+
+buyPrepToIctPulse =
+     barstate.isconfirmed and
+     sessionOk and
+     buyPrepToIctConfirm and
+     not buyPrepToIctConfirm[1] and
+     buySpamOk
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// BUY AUDIT MATH V48
+// Score objectif des candidats BUY non pris.
+// Ne route aucun trade.
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+buyAuditDiscount =
+     graphDiscount
+
+buyAuditEdge =
+     low <= graphLo + rangeSize * 0.35
+
+buyAuditZone =
+     debugNearBuyZone or lastBuyPrepZoneOk
+
+buyAuditSsl =
+     recentSslSweep or sslTaken
+
+buyAuditStruct =
+     recentBullChoch or recentBullBos or bullBreak or fastBullMss or postBullBos
+
+buyAuditReaction =
+     bullDisplacement or bullPattern or bullEngulf or hammer or bullPin or morningStar
+
+buyAuditH1Ok =
+     not h1Bear or h1SellDiscountRecovery or h1Bull
+
+buyAuditRoomOk =
+     na(nearestBearZoneAbove) or nearestBearZoneAbove / atr >= 1.20
+
+buyAuditNoFreshBear =
+     not recentBearChoch and
+     not recentBearBos and
+     not fastBearMss and
+     not newBearBreak and
+     not postBearBos
+
+buyAuditNotExtended =
+     close <= graphMid + atr * 0.25
+
+buyAuditScore =
+     (buyAuditDiscount ? 1 : 0) +
+     (buyAuditEdge ? 1 : 0) +
+     (buyAuditZone ? 1 : 0) +
+     (buyAuditSsl ? 1 : 0) +
+     (buyAuditStruct ? 1 : 0) +
+     (buyAuditReaction ? 1 : 0) +
+     (buyAuditH1Ok ? 1 : 0) +
+     (buyAuditRoomOk ? 1 : 0) +
+     (buyAuditNoFreshBear ? 1 : 0) +
+     (buyAuditNotExtended ? 1 : 0)
+
+buyAuditMissedCandidate =
+     showBuyAuditMath and
+     barstate.isconfirmed and
+     sessionOk and
+     entryBridgeMode == "ICT Simple" and
+     buyAuditScore >= buyAuditMinScore and
+     bar_index % buyAuditEveryBars == 0 and
+     not entryBridgeBuyPulse and
+     not buyContEarlyPulse and
+     not buyPrepToIctPulse
+
+buyAuditTxt =
+     "BUY AUDIT " + str.tostring(buyAuditScore) + "/10" +
+     "\nD:" + (buyAuditDiscount ? "1" : "0") +
+     " E:" + (buyAuditEdge ? "1" : "0") +
+     " Z:" + (buyAuditZone ? "1" : "0") +
+     " SSL:" + (buyAuditSsl ? "1" : "0") +
+     "\nST:" + (buyAuditStruct ? "1" : "0") +
+     " RE:" + (buyAuditReaction ? "1" : "0") +
+     " H1:" + (buyAuditH1Ok ? "1" : "0") +
+     "\nROOM:" + (buyAuditRoomOk ? "1" : "0") +
+     " BEAR:" + (buyAuditNoFreshBear ? "1" : "0") +
+     " EXT:" + (buyAuditNotExtended ? "1" : "0")
+
+var label[] buyAuditLabels = array.new_label()
+
+if buyAuditMissedCandidate
+    buyAuditLabel = label.new(bar_index, low, buyAuditTxt, xloc=xloc.bar_index, yloc=yloc.belowbar, style=label.style_label_up, textcolor=color.white, color=color.new(color.blue, 65), size=size.tiny)
+    array.push(buyAuditLabels, buyAuditLabel)
+
+    if array.size(buyAuditLabels) > buyAuditMaxLabels
+        oldBuyAuditLabel = array.shift(buyAuditLabels)
+        label.delete(oldBuyAuditLabel)
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// 2. BUY EXP+ CONFIRMATION
+// Déclenchement après préparation + confirmation structure / displacement
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+// Structure BUY récente pour expansion
+// V45C — mémoire structure dédiée BUY EXP+
+// Plus courte que structureWindow global pour éviter les entrées tardives en range.
+buyExpFreshBullChoch =
+     not na(lastBullChochBar) and
+     bar_index - lastBullChochBar <= buyExpStructMemoryBars
+
+buyExpFreshBullBos =
+     (
+         not na(lastBullBosBar) and
+         bar_index - lastBullBosBar <= buyExpStructMemoryBars
+     ) or
+     (
+         not na(lastPostBullBosVisualBar) and
+         bar_index - lastPostBullBosVisualBar <= buyExpStructMemoryBars
+     )
+
+buyExpStructRecent =
+     buyExpFreshBullChoch or
+     buyExpFreshBullBos or
+     bullBreak or
+     fastBullMss or
+     postBullBos
+
+// FVG BUY récent
+buyExpFvgRecent =
+     bullFVG or
+     recentBullFVG or
+     (not na(lastBullFvgBar) and bar_index - lastBullFvgBar <= buyExpLookback)
+
+// Zone BUY récente ou active
+buyExpZoneRecent =
+     touchBullZone or
+     recentTouchBullZone or
+     nearBullZone or
+     recentBullOB or
+     buyExpFvgRecent
+
+// Déclencheur réel maintenant : pas juste une mémoire
+buyExpTriggerNow =
+     bullDisplacement or
+     bullFVG or
+     bullBreak or
+     fastBullMss or
+     postBullBos
+
+// V45 — Confirmation après trigger BUY EXP+
+// Évite les entrées trop anticipées sur premier MSS / premier trigger
+var int lastBuyExpTriggerBar = na
+
+buyExpTriggerConfirmedOk =
+     not buyExpWaitAfterTrigger or
+     (
+         not na(lastBuyExpTriggerBar) and
+         bar_index > lastBuyExpTriggerBar and
+         bar_index - lastBuyExpTriggerBar <= buyExpConfirmMemoryBars
+     )
+
+if buyExpTriggerNow
+    lastBuyExpTriggerBar := bar_index
+
+// Réaction / déplacement haussier
+buyExpReaction =
+     bullDisplacement or
+     bullPattern or
+     bullEngulf or
+     hammer or
+     bullPin or
+     morningStar
+
+// Espace disponible avant obstacle SELL au-dessus
+buyExpSpaceOk =
+     not buyExpBlockNearSellZone or
+     na(nearestBearZoneAbove) or
+     nearestBearZoneAbove > atr * buyExpMinSpaceToSellAtr
+
+// FVG obligatoire ou non
+buyExpFvgOk =
+     not buyExpNeedFvg or
+     buyExpFvgRecent
+
+// H1 : exception autorisée seulement pour expansion M5 forte
+buyExpH1Ok =
+     buyExpAllowH1Counter or
+     not h1Bear or
+     h1SellDiscountRecovery or
+     h1Bull
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// 2B. BUY EXP+ DOUBLE CHEMIN V4.12B-24
+// Chemin A : BUY PREP récent puis confirmation
+// Chemin B : Power setup direct MSS/BOS + Displacement + FVG
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+// Chemin A : préparation détectée avant l'impulsion
+buyExpFromPrep =
+     buyPrepRecent and
+     buyExpStructRecent and
+     buyExpTriggerNow and
+     buyExpZoneRecent and
+     buyExpReaction
+
+// Chemin B : impulsion directe forte, mais plus d'achat de sommet.
+// La FVG seule ne suffit plus : il faut une zone BUY travaillée ou proche.
+buyExpPowerNow =
+     buyExpStructRecent and
+     (bullDisplacement or bullBreak or postBullBos) and
+     buyExpFvgRecent and
+     (
+         touchBullZone or
+         recentTouchBullZone or
+         nearBullZone
+     ) and
+     (
+         graphDiscount or
+         h1SellDiscountRecovery or
+         recentSslSweep or
+         sslTaken
+     )
+
+// V45 — Anti-range BUY EXP+
+// En range, BUY EXP+ exige cassure + displacement réel.
+buyExpRangeOk =
+     not buyExpBlockRange or
+     not isRange or
+     (
+         (bullBreak or postBullBos or recentBullBos) and
+         bullDisplacement
+     )
+
+// Anti-extension : pas d'achat trop haut dans le range local.
+buyExpLocationOk =
+     graphDiscount or
+     h1SellDiscountRecovery or
+     close <= graphMid + atr * 0.50
+
+// Pas de pression SELL fraîche.
+buyExpNoFreshBearPressure =
+     not recentBearChoch and
+     not recentBearBos and
+     not fastBearMss and
+     not newBearBreak and
+     not postBearBos and
+     not (bearDisplacement and not buyExpStructRecent)
+
+// Validation finale du setup BUY EXP+
+buyExpSetupOk =
+     (buyExpFromPrep or buyExpPowerNow) and
+     buyExpTriggerConfirmedOk and
+     buyExpRangeOk and
+     buyExpLocationOk and
+     buyExpNoFreshBearPressure
+
+// Setup BUY EXP+ confirmé
+buyExpPlusRaw =
+     useBuyExpPlus and
+     entryBridgeMode == "ICT Simple" and
+     buyExpSetupOk and
+     buyExpFvgOk and
+     buyExpH1Ok and
+     buyExpSpaceOk and
+     not ictSimpleBuyOk and
+     not entryBridgeBuyPulse
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// BUY EXP+ DIAGNOSTIC V4.12B-24B
+// Affiche pourquoi BUY EXP+ ne confirme pas
+// Observation uniquement
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+buyExpDiagTxt =
+     "BUY EXP DIAG" +
+     "\nPREP:" + (buyPrepRecent ? "OK" : "NO") +
+     " PWR:" + (buyExpPowerNow ? "OK" : "NO") +
+     "\nST:" + (buyExpStructRecent ? "OK" : "NO") +
+     " TRIG:" + (buyExpTriggerNow ? "OK" : "NO") +
+     "\nFVG:" + (buyExpFvgOk ? "OK" : "NO") +
+     " Z:" + (buyExpZoneRecent ? "OK" : "NO") +
+     "\nRE:" + (buyExpReaction ? "OK" : "NO") +
+     " H1:" + (buyExpH1Ok ? "OK" : "NO") +
+     "\nSP:" + (buyExpSpaceOk ? "OK" : "NO") +
+     " RAW:" + (buyExpPlusRaw ? "OK" : "NO")
+
+buyExpDiagCandidate =
+     showBuyExpDiag and
+     useBuyExpPlus and
+     entryBridgeMode == "ICT Simple" and
+     (buyPrepRecent or buyExpStructRecent or buyExpFvgRecent or buyExpZoneRecent) and
+     bar_index % buyExpDiagEveryBars == 0
+
+var label[] buyExpDiagLabels = array.new_label()
+
+if buyExpDiagCandidate
+    newBuyExpDiagLabel = label.new(
+         bar_index,
+         low,
+         buyExpDiagTxt,
+         xloc=xloc.bar_index,
+         yloc=yloc.belowbar,
+         style=label.style_label_up,
+         textcolor=color.white,
+         color=color.new(color.blue, 65),
+         size=size.tiny)
+
+    array.push(buyExpDiagLabels, newBuyExpDiagLabel)
+
+    if array.size(buyExpDiagLabels) > buyExpDiagMaxLabels
+        oldBuyExpDiagLabel = array.shift(buyExpDiagLabels)
+        label.delete(oldBuyExpDiagLabel)
+// Anti-répétition BUY EXP+
+var int lastBuyExpPlusBar = na
+
+buyExpPlusCooldownOk =
+     na(lastBuyExpPlusBar) or
+     bar_index - lastBuyExpPlusBar >= buyExpPlusCooldown
+
+// V46B EXP+ HYBRID — pulse brut filtré
+// On annule le retest/reclaim forcé : il a sélectionné les mauvais trades.
+// On garde buyExpPlusRaw comme source, avec les filtres anti-extension du bloc précédent.
+
+var int buyExpArmBar = na
+var float buyExpArmHigh = na
+var float buyExpHighSinceArm = na
+
+var int buyExpRetestBar = na
+var float buyExpRetestHigh = na
+var float buyExpRetestLow = na
+
+buyExpRetestAfterExpansion =
+     buyExpPlusRaw and
+     (
+         bullDisplacement or
+         bullPattern or
+         bullCandle
+     )
+
+buyExpPlusPulse =
+     barstate.isconfirmed and
+     sessionOk and
+     buyExpPlusRaw and
+     not buyExpPlusRaw[1] and
+     buyExpPlusCooldownOk and
+     buySpamOk
+
+// Affichage BUY EXP+ observation
+if buyExpPlusPulse
+    lastBuyExpPlusBar := bar_index
+
+    if showBuyExpPlusLabels
+        label.new(
+             bar_index,
+             low,
+             "BUY EXP+\nPREP/MSS",
+             xloc=xloc.bar_index,
+             yloc=yloc.belowbar,
+             style=label.style_label_up,
+             textcolor=color.white,
+             color=color.new(color.teal, 0),
+             size=size.small)
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// BUY RETEST+ CORE V45 — NEUTRALISÉ
+// Module rejeté par BTM : trop polluant dans le routeur.
+// On garde les variables principales à false pour préserver le backtest router.
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+buyRetestRaw = false
+buyRetestPlusPulse = false
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// BUY CORE V45/V48 — NEUTRALISÉ
+// Ancien module rejeté par BTM : 2/10, PF 0.60, Net -4R.
+// On garde seulement le pulse à false pour préserver le routeur BTM.
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+buyCoreV45Pulse = false
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// BUY PB+ PRO CORE V4.12B-32
+// Séquence stricte : structure BUY → expansion → retour OB/FVG BUY → confirmation post-retest
+// Observation uniquement : ne modifie pas le backtest
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// 1. Structure BUY fraîche
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+buyPbStructNow =
+     bullChoch or
+     newBullBreak or
+     fastBullMss or
+     postBullBos
+
+buyPbBearInvalidation =
+     bearChoch or
+     newBearBreak or
+     fastBearMss or
+     postBearBos
+
+var int buyPbStructBar = na
+var float buyPbStructPrice = na
+var float buyPbHighSinceStruct = na
+var int buyPbRetestBar = na
+var float buyPbRetestHigh = na
+var float buyPbRetestLow = na
+var bool buyPbFiredThisStruct = false
+
+if buyPbBearInvalidation
+    buyPbStructBar := na
+    buyPbStructPrice := na
+    buyPbHighSinceStruct := na
+    buyPbRetestBar := na
+    buyPbRetestHigh := na
+    buyPbRetestLow := na
+    buyPbFiredThisStruct := false
+
+if buyPbStructNow
+    buyPbStructBar := bar_index
+    buyPbStructPrice := close
+    buyPbHighSinceStruct := high
+    buyPbRetestBar := na
+    buyPbRetestHigh := na
+    buyPbRetestLow := na
+    buyPbFiredThisStruct := false
+
+buyPbStructActive =
+     not na(buyPbStructBar) and
+     bar_index - buyPbStructBar <= buyPbStructMemoryBars
+
+if buyPbStructActive
+    buyPbHighSinceStruct := na(buyPbHighSinceStruct) ? high : math.max(buyPbHighSinceStruct, high)
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// 2. Expansion réelle après structure
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+buyPbExpansionOk =
+     buyPbStructActive and
+     not na(buyPbStructPrice) and
+     not na(buyPbHighSinceStruct) and
+     buyPbHighSinceStruct - buyPbStructPrice >= atr * buyPbMinExpansionAtr
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// 3. Retour profond dans OB/FVG BUY après expansion V4.12B-36
+// On ne prend plus le premier contact.
+// On mémorise le retest le plus profond.
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+buyPbRealTouch =
+     touchBullZone
+
+buyPbNearTouch =
+     nearBullZone and
+     (
+         bullDisplacement or
+         bullPattern or
+         lowerWick >= body * 0.50
+     )
+
+buyPbRetestNow =
+     buyPbStructActive and
+     buyPbExpansionOk and
+     bar_index > buyPbStructBar and
+     (
+         buyPbRequireRealTouch ?
+             buyPbRealTouch :
+             (buyPbRealTouch or buyPbNearTouch or recentTouchBullZone)
+     )
+
+// Profondeur du pullback par rapport à l'impulsion structure → high
+buyPbImpulseRange =
+     not na(buyPbStructPrice) and not na(buyPbHighSinceStruct) ?
+     buyPbHighSinceStruct - buyPbStructPrice :
+     na
+
+buyPbPullbackDepth =
+     not na(buyPbImpulseRange) and buyPbImpulseRange > 0 ?
+     (buyPbHighSinceStruct - low) / buyPbImpulseRange :
+     na
+
+buyPbDeepRetestOk =
+     not buyPbUseDeepRetest or
+     (
+         not na(buyPbPullbackDepth) and
+         buyPbPullbackDepth >= buyPbMinPullbackDepth
+     )
+
+// On mémorise uniquement le retest le plus profond valide
+buyPbRetestCandidate =
+     buyPbRetestNow and
+     buyPbDeepRetestOk
+
+if buyPbRetestCandidate and (na(buyPbRetestLow) or low < buyPbRetestLow)
+    buyPbRetestBar := bar_index
+    buyPbRetestHigh := high
+    buyPbRetestLow := low
+
+buyPbRetestRecent =
+     not na(buyPbRetestBar) and
+     bar_index - buyPbRetestBar <= buyPbRetestMemoryBars
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// 4. Réaction haussière
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+buyPbStrongReaction =
+     bullDisplacement or
+     bullEngulf or
+     hammer or
+     bullPin or
+     morningStar
+
+buyPbSoftReaction =
+     bullCandle or
+     bullPattern
+
+buyPbReactionOk =
+     buyPbNeedStrongReaction ?
+     buyPbStrongReaction :
+     (buyPbStrongReaction or buyPbSoftReaction)
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// 4B. Confirmation après retest
+// Le label ne sort plus dans l'accumulation.
+// Il sort seulement après reprise au-dessus du high du retest.
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+buyPbPostRetestConfirm =
+     not buyPbRequirePostRetestConfirm or
+     (
+         buyPbRetestRecent and
+         not na(buyPbRetestBar) and
+         not na(buyPbRetestHigh) and
+         bar_index > buyPbRetestBar and
+         close > buyPbRetestHigh and
+         (bullCandle or bullDisplacement or buyPbStrongReaction)
+     )
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// 5. Liquidité basse optionnelle
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+buyPbLiquidityOk =
+     not buyPbNeedSsl or
+     recentSslSweep or
+     sslTaken
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// 6. H1 : autoriser contre H1 seulement si séquence M5 propre
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+buyPbH1Ok =
+     not h1Bear or
+     (
+         buyPbAllowH1Counter and
+         buyPbStructActive and
+         buyPbExpansionOk
+     )
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// 7. SELL SPACE GUARD V4.12B-34
+// Ne bloque plus juste parce qu'une zone SELL existe.
+// On mesure l'espace disponible avant la prochaine zone SELL.
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+// Distance disponible avant la prochaine zone SELL au-dessus
+buyPbRoomToSellAtr =
+     not na(nearestBearZoneAbove) ?
+     nearestBearZoneAbove / atr :
+     999.0
+
+// Filtre standard : espace minimal avant zone SELL
+buyPbSellSpaceOk =
+     not buyPbBlockNearSellZone or
+     buyPbRoomToSellAtr >= buyPbMinSpaceToSellAtr
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// 7B. BUY PB+ COUNTERTREND GUARD V4.12B-34
+// Si H1 est baissier, le setup M5 doit être plus fort.
+// Mais on ne bloque plus brutalement avec debugNearSellZone.
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+// Contexte contre-tendance : H1 baissier ou neutre selon réglage
+buyPbCounterContext =
+     buyPbTreatH1NeutralAsCounter ?
+     not h1Bull :
+     h1Bear
+
+// Expansion plus forte exigée contre tendance
+buyPbCounterExpansionOk =
+     not na(buyPbStructPrice) and
+     not na(buyPbHighSinceStruct) and
+     buyPbHighSinceStruct - buyPbStructPrice >= atr * buyPbCounterMinExpansionAtr
+
+// Contre-tendance : vraie structure, pas simple micro-rebond
+buyPbCounterStructureOk =
+     not buyPbCounterNeedChochBos or
+     (
+         (recentBullChoch or bullChoch) and
+         (recentBullBos or postBullBos or newBullBreak or fastBullMss)
+     )
+
+// Contre-tendance : espace suffisant avant zone SELL
+buyPbCounterSellSpaceOk =
+     not buyPbCounterBlockSellZone or
+     buyPbRoomToSellAtr >= buyPbCounterMinSpaceSellAtr
+
+// Validation finale du guard
+buyPbCounterGuardOk =
+     not buyPbUseCounterGuard or
+     not buyPbCounterContext or
+     (
+         buyPbCounterExpansionOk and
+         buyPbCounterStructureOk and
+         buyPbCounterSellSpaceOk
+     )
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// 7C. BUY PB+ MAJOR BREAK GUARD V4.12B-35
+// Quand H1 n'est pas clairement BUY, on exige la cassure d'un vrai swing high M5.
+// Objectif : filtrer les simples rebonds sous tendance baissière.
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+// Dernier swing high majeur confirmé
+buyPbMajorPivotHigh =
+     ta.pivothigh(high, buyPbMajorSwingLen, buyPbMajorSwingLen)
+
+var float buyPbLastMajorHigh = na
+
+if not na(buyPbMajorPivotHigh)
+    buyPbLastMajorHigh := buyPbMajorPivotHigh
+
+// Cassure réelle du swing high majeur
+buyPbMajorBreakNow =
+     not na(buyPbLastMajorHigh) and
+     close > buyPbLastMajorHigh + atr * buyPbMajorBreakBufferAtr
+
+var int buyPbLastMajorBreakBar = na
+
+if buyPbMajorBreakNow
+    buyPbLastMajorBreakBar := bar_index
+
+buyPbMajorBreakRecent =
+     not na(buyPbLastMajorBreakBar) and
+     bar_index - buyPbLastMajorBreakBar <= buyPbMajorBreakMemoryBars and
+     not na(buyPbStructBar) and
+     buyPbLastMajorBreakBar >= buyPbStructBar - 5
+
+// Application du guard : seulement si H1 n'est pas clairement BUY
+buyPbMajorBreakContext =
+     buyPbMajorGuardWhenH1NotBull ?
+     not h1Bull :
+     buyPbCounterContext
+
+buyPbMajorBreakGuardOk =
+     not buyPbUseMajorBreakGuard or
+     not buyPbMajorBreakContext or
+     buyPbMajorBreakRecent
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// 8. Un seul signal par structure
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+buyPbCanFire =
+     not buyPbOnePerStruct or
+     not buyPbFiredThisStruct
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// 9. BUY PB+ PRO final
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+buyPbProRaw =
+     useBuyPbPro and
+     entryBridgeMode == "ICT Simple" and
+     buyPbStructActive and
+     buyPbExpansionOk and
+     buyPbRetestRecent and
+     buyPbReactionOk and
+     buyPbPostRetestConfirm and
+     buyPbLiquidityOk and
+     buyPbH1Ok and
+     buyPbSellSpaceOk and
+     buyPbCounterGuardOk and
+     buyPbMajorBreakGuardOk and
+     buyPbCanFire and
+     not ictSimpleBuyOk and
+     not entryBridgeBuyPulse
+
+var int lastBuyPbProBar = na
+
+buyPbCooldownOk =
+     na(lastBuyPbProBar) or
+     bar_index - lastBuyPbProBar >= buyPbCooldownBars
+
+buyPbProPulse =
+     barstate.isconfirmed and
+     sessionOk and
+     buyPbProRaw and
+     not buyPbProRaw[1] and
+     buyPbCooldownOk and
+     buySpamOk
+
+if buyPbProPulse
+    lastBuyPbProBar := bar_index
+    buyPbFiredThisStruct := true
+
+    if showBuyPbProLabels
+        label.new(
+             bar_index,
+             low,
+             "BUY PB+ PRO\nCONFIRM",
+             xloc=xloc.bar_index,
+             yloc=yloc.belowbar,
+             style=label.style_label_up,
+             textcolor=color.white,
+             color=color.new(color.teal, 0),
+             size=size.small)
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// SELL TREND+ CORE V4.12B-21 — NEUTRALISÉ
+// Ancien module observation non validé.
+// Variables conservées à false pour éviter les dépendances cassées.
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+sellTrendPlusRaw = false
+sellTrendPlusPulse = false
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// AFFICHAGE DEBUG ICT SIMPLE V4.12B-19B
+// Labels debug limités pour éviter saturation TradingView
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+var label[] debugLabels = array.new_label()
+
+if debugBuyCandidate and not ictSimpleBuyOk
+    newDebugLabel = label.new(
+         bar_index,
+         low,
+         debugBuyTxt,
+         xloc=xloc.bar_index,
+         yloc=yloc.belowbar,
+         style=label.style_label_up,
+         textcolor=color.white,
+         color=color.new(color.green, 65),
+         size=size.tiny)
+
+    array.push(debugLabels, newDebugLabel)
+
+    if array.size(debugLabels) > debugMaxLabels
+        oldDebugLabel = array.shift(debugLabels)
+        label.delete(oldDebugLabel)
+
+if debugSellCandidate and not ictSimpleSellOk
+    newDebugLabel = label.new(
+         bar_index,
+         high,
+         debugSellTxt,
+         xloc=xloc.bar_index,
+         yloc=yloc.abovebar,
+         style=label.style_label_down,
+         textcolor=color.white,
+         color=color.new(color.red, 65),
+         size=size.tiny)
+
+    array.push(debugLabels, newDebugLabel)
+
+    if array.size(debugLabels) > debugMaxLabels
+        oldDebugLabel = array.shift(debugLabels)
+        label.delete(oldDebugLabel)
+
+if debugStructDiffCandidate
+    newStructDebugLabel = label.new(
+         bar_index,
+         close,
+         debugStructDiffTxt,
+         xloc=xloc.bar_index,
+         style=label.style_label_left,
+         textcolor=color.white,
+         color=color.new(color.gray, 65),
+         size=size.tiny)
+
+    array.push(debugLabels, newStructDebugLabel)
+
+    if array.size(debugLabels) > debugMaxLabels
+        oldStructDebugLabel = array.shift(debugLabels)
+        label.delete(oldStructDebugLabel)     
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// BACKTEST ROUTER V47 — BUY PREP ICT
+// Route BASE + CONT + PREP→ICT + modules BUY conservés.
+// Priorité stricte : BASE > CONT > PREP ICT > PB+ > EXP+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+baseBacktestBuyPulse =
+     entryBridgeMode == "ICT Simple Brut" ?
+     entryBridgeBuyPulseBrut :
+     entryBridgeBuyPulse
+
+baseBacktestSellPulse =
+     entryBridgeMode == "ICT Simple Brut" ?
+     entryBridgeSellPulseBrut :
+     entryBridgeSellPulse
+
+// BASE
+btBaseBuyPulse =
+     btIncludeBase and
+     baseBacktestBuyPulse
+
+btBaseSellPulse =
+     btIncludeBase and
+     baseBacktestSellPulse
+
+// BUY CONT EARLY
+btBuyContPulse =
+     btIncludeBuyContEarly and
+     buyContEarlyPulse and
+     not btBaseBuyPulse
+
+// BUY PREP confirmé.
+// Classé BASE dans les stats, mais label séparé pour audit visuel.
+btBuyPrepIctPulse =
+     btIncludeBuyPrepIct and
+     buyPrepToIctPulse and
+     not btBaseBuyPulse and
+     not btBuyContPulse
+     
+
+// BUY PB+ PRO
+btBuyPbPulse =
+     btIncludeBuyPbPro and
+     buyPbProPulse and
+     not btBaseBuyPulse and
+     not btBuyContPulse and
+     not btBuyPrepIctPulse
+
+// BUY EXP+
+btBuyExpPulse =
+     btIncludeBuyExpPlus and
+     buyExpPlusPulse and
+     not btBaseBuyPulse and
+     not btBuyContPulse and
+     not btBuyPrepIctPulse and
+     not btBuyPbPulse
+backtestBuyPulseRaw =
+     btBaseBuyPulse or
+     btBuyContPulse or
+     btBuyPrepIctPulse or
+     btBuyPbPulse or
+     btBuyExpPulse
+
+backtestSellPulseRaw =
+     btBaseSellPulse
+
+backtestBuyPulse =
+     btInDateWindow and
+     backtestBuyPulseRaw
+
+backtestSellPulse =
+     btInDateWindow and
+     backtestSellPulseRaw
+
+backtestBuyLabelTxt =
+     btBuyContPulse ? "BT BUY CONT" :
+     btBuyPrepIctPulse ? "BT BUY PREP ICT" :
+     btBuyPbPulse ? "BT BUY PB+" :
+     btBuyExpPulse ? "BT BUY EXP+" :
+     bridgeBuyLabelTxt
+         
+backtestSellLabelTxt =
+     bridgeSellLabelTxt
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// BACKTEST VISUEL
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+var bool inTrade = false
+var int tradeDir = 0
+var float entry = na
+var float sl = na
+var float tp = na
+
+var line entryLine = na
+var line slLine = na
+var line tpLine = na
+
+var int wins = 0
+var int losses = 0
+var int buyCount = 0
+var int sellCount = 0
+
+// V40 — source du trade actif — CLEAN
+// 0 = BASE / SELL ICT / BUY ICT existant
+// 2 = BUY CONT EARLY
+// 3 = BUY PB+ PRO
+// 4 = BUY EXP+
+var int tradeSource = 0
+
+var float netR = 0.0
+var float grossWinR = 0.0
+var float grossLossR = 0.0
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// V44 — TRADE ENGINE CENTRAL
+// Source unique pour label / stats / dashboard / alertes
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+tradeGoBuy  = backtestBuyPulse and not inTrade
+tradeGoSell = backtestSellPulse and not inTrade
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// V40 — STATS PAR MODULE BACKTEST
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+// BASE
+var int btBaseWins = 0
+var int btBaseLosses = 0
+var float btBaseNetR = 0.0
+var float btBaseGrossWinR = 0.0
+var float btBaseGrossLossR = 0.0
+
+// BUY REV EARLY — stats retirées, module neutralisé
+
+// BUY CONT EARLY
+var int btContWins = 0
+var int btContLosses = 0
+var float btContNetR = 0.0
+var float btContGrossWinR = 0.0
+var float btContGrossLossR = 0.0
+
+// BUY PB+ PRO
+var int btPbWins = 0
+var int btPbLosses = 0
+var float btPbNetR = 0.0
+var float btPbGrossWinR = 0.0
+var float btPbGrossLossR = 0.0
+
+// BUY EXP+
+var int btExpWins = 0
+var int btExpLosses = 0
+var float btExpNetR = 0.0
+var float btExpGrossWinR = 0.0
+var float btExpGrossLossR = 0.0
+// BUY PREP ICT
+var int btPrepWins = 0
+var int btPrepLosses = 0
+var float btPrepNetR = 0.0
+var float btPrepGrossWinR = 0.0
+var float btPrepGrossLossR = 0.0
+// BUY RETEST+ — stats retirées, module neutralisé
+
+// BUY CORE V45 — stats retirées, module neutralisé
+if tradeGoBuy
+    entry := close
+    baseSL = low - atr * atrBuffer
+    minSL = entry - atr * minStopAtr
+    sl := math.min(baseSL, minSL)
+    risk = entry - sl
+    tp := entry + risk * rr
+    inTrade := true
+    tradeDir := 1
+
+// V47 — source du BUY pris en backtest — PREP ICT séparé
+    tradeSource :=
+     btBuyContPulse ? 2 :
+     btBuyPrepIctPulse ? 7 :
+     btBuyPbPulse ? 3 :
+     btBuyExpPulse ? 4 :
+     0
+
+    lastSignalBar := bar_index
+    buyCount += 1
+
+    if showSignals
+        label.new(bar_index, low, backtestBuyLabelTxt, xloc=xloc.bar_index, yloc=yloc.belowbar, style=label.style_label_up, textcolor=color.white, color=color.new(color.green, 0), size=size.small)
+
+    if showJokerOnChart and buyJoker
+        label.new(bar_index, low, "J", xloc=xloc.bar_index, yloc=yloc.belowbar, style=label.style_none, textcolor=color.lime, size=size.small)
+
+    if showSLTP
+        entryLine := line.new(time, entry, futureTime(20), entry, xloc=xloc.bar_time, color=color.white)
+        slLine := line.new(time, sl, futureTime(20), sl, xloc=xloc.bar_time, color=color.red)
+        tpLine := line.new(time, tp, futureTime(20), tp, xloc=xloc.bar_time, color=color.green)
+
+if tradeGoSell
+    entry := close
+    baseSL = high + atr * atrBuffer
+    minSL = entry + atr * minStopAtr
+    sl := math.max(baseSL, minSL)
+    risk = sl - entry
+    tp := entry - risk * rr
+    inTrade := true
+    tradeDir := -1
+
+    // V40 — tous les SELL actuels restent classés BASE
+    tradeSource := 0
+
+    lastSignalBar := bar_index
+    sellCount += 1
+
+    if showSignals
+        label.new(bar_index, high, backtestSellLabelTxt, xloc=xloc.bar_index, yloc=yloc.abovebar, style=label.style_label_down, textcolor=color.white, color=color.new(color.red, 0), size=size.small)
+
+    if showJokerOnChart and sellJoker
+        label.new(bar_index, high, "J", xloc=xloc.bar_index, yloc=yloc.abovebar, style=label.style_none, textcolor=color.red, size=size.small)
+
+    if showSLTP
+        entryLine := line.new(time, entry, futureTime(20), entry, xloc=xloc.bar_time, color=color.white)
+        slLine := line.new(time, sl, futureTime(20), sl, xloc=xloc.bar_time, color=color.red)
+        tpLine := line.new(time, tp, futureTime(20), tp, xloc=xloc.bar_time, color=color.green)
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// STRATÉGIE S1 — AJOUT : ordres réels aux niveaux exacts du moteur V48
+// (entrée au close, SL et TP calculés ci-dessus, risque fixe en % du capital)
+// Frais : 0,15 par once et par sens, soit un spread d'environ 0,30 sur l'or.
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+strategyRiskPct = input.float(1.0, "Risque par trade (% du capital)", minval=0.1, step=0.1, group="Stratégie S1")
+if tradeGoBuy and entry > sl
+    strategy.entry("Long", strategy.long, qty=strategy.equity * strategyRiskPct / 100 / (entry - sl), comment=backtestBuyLabelTxt)
+    strategy.exit("Sortie Long", "Long", stop=sl, limit=tp)
+if tradeGoSell and sl > entry
+    strategy.entry("Short", strategy.short, qty=strategy.equity * strategyRiskPct / 100 / (sl - entry), comment=backtestSellLabelTxt)
+    strategy.exit("Sortie Short", "Short", stop=sl, limit=tp)
+
+if inTrade and showSLTP
+    line.set_x2(entryLine, futureTime(5))
+    line.set_x2(slLine, futureTime(5))
+    line.set_x2(tpLine, futureTime(5))
+
+longTP = inTrade and tradeDir == 1 and high >= tp
+longSL = inTrade and tradeDir == 1 and low <= sl
+shortTP = inTrade and tradeDir == -1 and low <= tp
+shortSL = inTrade and tradeDir == -1 and high >= sl
+
+exitWin = false
+exitLoss = false
+
+if inTrade and tradeDir == 1
+    if longTP and longSL
+        exitLoss := conservativeMode
+        exitWin := not conservativeMode
+    else if longTP
+        exitWin := true
+    else if longSL
+        exitLoss := true
+
+if inTrade and tradeDir == -1
+    if shortTP and shortSL
+        exitLoss := conservativeMode
+        exitWin := not conservativeMode
+    else if shortTP
+        exitWin := true
+    else if shortSL
+        exitLoss := true
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// V41 — HELPERS AUDIT MODULES
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+fBtSourceName(_src) =>
+     _src == 2 ? "CONT" :
+     _src == 3 ? "PB+" :
+     _src == 4 ? "EXP+" :
+     _src == 7 ? "PREP" :
+     "BASE"
+fBtShowAudit(_src) =>
+    showBtModuleExitLabels and (not btAuditOnlyDevModules or _src != 0)
+if exitWin
+    wins += 1
+    grossWinR += rr
+    netR += rr
+
+    // V40 — stats WIN par source — CLEAN
+    if tradeSource == 2
+        btContWins += 1
+        btContGrossWinR += rr
+        btContNetR += rr
+    else if tradeSource == 3
+        btPbWins += 1
+        btPbGrossWinR += rr
+        btPbNetR += rr
+    else if tradeSource == 4
+        btExpWins += 1
+        btExpGrossWinR += rr
+        btExpNetR += rr
+    else if tradeSource == 7
+        btPrepWins += 1
+        btPrepGrossWinR += rr
+        btPrepNetR += rr
+    else
+        btBaseWins += 1
+        btBaseGrossWinR += rr
+        btBaseNetR += rr
+    if showResults
+        label.new(bar_index, close, "WIN +" + str.tostring(rr) + "R", xloc=xloc.bar_index, style=label.style_label_left, textcolor=color.white, color=color.new(color.green, 0), size=size.tiny)
+    // V41 — label audit WIN par module
+    if fBtShowAudit(tradeSource)
+        label.new(
+             bar_index,
+             close,
+             fBtSourceName(tradeSource) + "\nWIN +" + str.tostring(rr) + "R",
+             xloc=xloc.bar_index,
+             style=label.style_label_left,
+             textcolor=color.white,
+             color=color.new(color.green, 0),
+             size=size.tiny)
+    inTrade := false
+    tradeDir := 0
+    tradeSource := 0
+
+if exitLoss
+    losses += 1
+    grossLossR += 1
+    netR -= 1
+
+    // V40 — stats LOSS par source — CLEAN
+    if tradeSource == 2
+        btContLosses += 1
+        btContGrossLossR += 1
+        btContNetR -= 1
+    else if tradeSource == 3
+        btPbLosses += 1
+        btPbGrossLossR += 1
+        btPbNetR -= 1
+    else if tradeSource == 4
+        btExpLosses += 1
+        btExpGrossLossR += 1
+        btExpNetR -= 1
+    else if tradeSource == 7
+        btPrepLosses += 1
+        btPrepGrossLossR += 1
+        btPrepNetR -= 1
+    else
+        btBaseLosses += 1
+        btBaseGrossLossR += 1
+        btBaseNetR -= 1    
+    if showResults
+        label.new(bar_index, close, "LOSS -1R", xloc=xloc.bar_index, style=label.style_label_left, textcolor=color.white, color=color.new(color.red, 0), size=size.tiny)
+    // V41 — label audit LOSS par module
+    if fBtShowAudit(tradeSource)
+        label.new(
+             bar_index,
+             close,
+             fBtSourceName(tradeSource) + "\nLOSS -1R",
+             xloc=xloc.bar_index,
+             style=label.style_label_left,
+             textcolor=color.white,
+             color=color.new(color.red, 0),
+             size=size.tiny)
+    inTrade := false
+    tradeDir := 0
+    tradeSource := 0
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// V40B — DASHBOARD STATS MODULES BACKTEST — CLEAN
+// Modules conservés : BASE / CONT / PB+ / EXP+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+fBtPf(_gw, _gl) =>
+    _gl > 0 ? str.tostring(_gw / _gl, "#.##") : _gw > 0 ? "∞" : "N/A"
+
+fBtWr(_w, _l) =>
+    _w + _l > 0 ? str.tostring(_w / (_w + _l) * 100, "#.##") + "%" : "N/A"
+
+fBtWl(_w, _l) =>
+    str.tostring(_w) + "/" + str.tostring(_l)
+
+fBtNet(_n) =>
+    str.tostring(_n, "#.##") + "R"
+
+var table btStatsDash = table.new(position.bottom_left, 5, 5, border_width=1, border_color=color.gray)
+
+if barstate.islast
+    if showBtModuleStats
+        table.cell(btStatsDash, 0, 0, "BT MOD", text_color=color.white, bgcolor=color.black, text_size=size.small)
+        table.cell(btStatsDash, 1, 0, "BASE", text_color=color.white, bgcolor=color.black, text_size=size.small)
+        table.cell(btStatsDash, 2, 0, "CONT", text_color=color.white, bgcolor=color.black, text_size=size.small)
+        table.cell(btStatsDash, 3, 0, "PB+", text_color=color.white, bgcolor=color.black, text_size=size.small)
+        table.cell(btStatsDash, 4, 0, "EXP+", text_color=color.white, bgcolor=color.black, text_size=size.small)
+
+        table.cell(btStatsDash, 0, 1, "W/L", text_color=color.white, bgcolor=color.black, text_size=size.small)
+        table.cell(btStatsDash, 1, 1, fBtWl(btBaseWins, btBaseLosses), text_color=color.white, bgcolor=color.new(#2A2E39, 0), text_size=size.small)
+        table.cell(btStatsDash, 2, 1, fBtWl(btContWins, btContLosses), text_color=color.white, bgcolor=color.new(#2A2E39, 0), text_size=size.small)
+        table.cell(btStatsDash, 3, 1, fBtWl(btPbWins, btPbLosses), text_color=color.white, bgcolor=color.new(#2A2E39, 0), text_size=size.small)
+        table.cell(btStatsDash, 4, 1, fBtWl(btExpWins, btExpLosses), text_color=color.white, bgcolor=color.new(#2A2E39, 0), text_size=size.small)
+
+        table.cell(btStatsDash, 0, 2, "WR", text_color=color.white, bgcolor=color.new(#131722, 0), text_size=size.small)
+        table.cell(btStatsDash, 1, 2, fBtWr(btBaseWins, btBaseLosses), text_color=color.white, bgcolor=color.new(#2A2E39, 0), text_size=size.small)
+        table.cell(btStatsDash, 2, 2, fBtWr(btContWins, btContLosses), text_color=color.white, bgcolor=color.new(#2A2E39, 0), text_size=size.small)
+        table.cell(btStatsDash, 3, 2, fBtWr(btPbWins, btPbLosses), text_color=color.white, bgcolor=color.new(#2A2E39, 0), text_size=size.small)
+        table.cell(btStatsDash, 4, 2, fBtWr(btExpWins, btExpLosses), text_color=color.white, bgcolor=color.new(#2A2E39, 0), text_size=size.small)
+
+        table.cell(btStatsDash, 0, 3, "PF", text_color=color.white, bgcolor=color.new(#131722, 0), text_size=size.small)
+        table.cell(btStatsDash, 1, 3, fBtPf(btBaseGrossWinR, btBaseGrossLossR), text_color=color.white, bgcolor=color.new(#2A2E39, 0), text_size=size.small)
+        table.cell(btStatsDash, 2, 3, fBtPf(btContGrossWinR, btContGrossLossR), text_color=color.white, bgcolor=color.new(#2A2E39, 0), text_size=size.small)
+        table.cell(btStatsDash, 3, 3, fBtPf(btPbGrossWinR, btPbGrossLossR), text_color=color.white, bgcolor=color.new(#2A2E39, 0), text_size=size.small)
+        table.cell(btStatsDash, 4, 3, fBtPf(btExpGrossWinR, btExpGrossLossR), text_color=color.white, bgcolor=color.new(#2A2E39, 0), text_size=size.small)
+
+        table.cell(btStatsDash, 0, 4, "NetR", text_color=color.white, bgcolor=color.new(#131722, 0), text_size=size.small)
+        table.cell(btStatsDash, 1, 4, fBtNet(btBaseNetR), text_color=btBaseNetR >= 0 ? color.lime : color.red, bgcolor=color.new(#2A2E39, 0), text_size=size.small)
+        table.cell(btStatsDash, 2, 4, fBtNet(btContNetR), text_color=btContNetR >= 0 ? color.lime : color.red, bgcolor=color.new(#2A2E39, 0), text_size=size.small)
+        table.cell(btStatsDash, 3, 4, fBtNet(btPbNetR), text_color=btPbNetR >= 0 ? color.lime : color.red, bgcolor=color.new(#2A2E39, 0), text_size=size.small)
+        table.cell(btStatsDash, 4, 4, fBtNet(btExpNetR), text_color=btExpNetR >= 0 ? color.lime : color.red, bgcolor=color.new(#2A2E39, 0), text_size=size.small)
+
+else
+    table.clear(btStatsDash, 0, 0, 4, 4)
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// V47B — MINI DASHBOARD PREP ICT
+// Audit séparé du BUY PREP ICT sans modifier le tableau principal.
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+var table btPrepDash = table.new(position.bottom_center, 2, 5, border_width=1, border_color=color.gray)
+
+if barstate.islast
+    if showBtModuleStats
+        table.cell(btPrepDash, 0, 0, "PREP ICT", text_color=color.white, bgcolor=color.black, text_size=size.small)
+        table.cell(btPrepDash, 1, 0, "STAT", text_color=color.white, bgcolor=color.black, text_size=size.small)
+
+        table.cell(btPrepDash, 0, 1, "W/L", text_color=color.white, bgcolor=color.black, text_size=size.small)
+        table.cell(btPrepDash, 1, 1, fBtWl(btPrepWins, btPrepLosses), text_color=color.white, bgcolor=color.new(#2A2E39, 0), text_size=size.small)
+
+        table.cell(btPrepDash, 0, 2, "WR", text_color=color.white, bgcolor=color.new(#131722, 0), text_size=size.small)
+        table.cell(btPrepDash, 1, 2, fBtWr(btPrepWins, btPrepLosses), text_color=color.white, bgcolor=color.new(#2A2E39, 0), text_size=size.small)
+
+        table.cell(btPrepDash, 0, 3, "PF", text_color=color.white, bgcolor=color.new(#131722, 0), text_size=size.small)
+        table.cell(btPrepDash, 1, 3, fBtPf(btPrepGrossWinR, btPrepGrossLossR), text_color=color.white, bgcolor=color.new(#2A2E39, 0), text_size=size.small)
+
+        table.cell(btPrepDash, 0, 4, "NetR", text_color=color.white, bgcolor=color.new(#131722, 0), text_size=size.small)
+        table.cell(btPrepDash, 1, 4, fBtNet(btPrepNetR), text_color=btPrepNetR >= 0 ? color.lime : color.red, bgcolor=color.new(#2A2E39, 0), text_size=size.small)
+else
+    table.clear(btPrepDash, 0, 0, 1, 4)    
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// H1 SIGNAL CONTEXT - VISUEL UNIQUEMENT
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+h1SignalDir = h1Bear ? -1 : h1Bull ? 1 : 0
+h1SignalTxt = h1SignalDir == 1 ? "H1 BUY" : h1SignalDir == -1 ? "H1 SELL" : "H1 NEUTRE"
+
+rawM5SignalDir = finalBuySignal ? 1 : finalSellSignal ? -1 : syncStatus == "BUY OK" ? 1 : syncStatus == "SELL OK" ? -1 : signalTxt == "BUY READY" ? 1 : signalTxt == "SELL READY" ? -1 : 0
+
+var int lastM5SignalDir = 0
+var int lastM5SignalBar = na
+
+if rawM5SignalDir != 0
+    lastM5SignalDir := rawM5SignalDir
+    lastM5SignalBar := bar_index
+
+m5SignalRecent = not na(lastM5SignalBar) and bar_index - lastM5SignalBar <= m5AlignMemoryBars
+m5SignalDir = m5SignalRecent ? lastM5SignalDir : 0
+
+m5AlignTxt = m5SignalDir == 0 ? "WAIT" : h1SignalDir == 0 ? "MIXTE" : m5SignalDir == h1SignalDir ? "ALIGNÉ" : "CONTRE H1"
+
+m5AlignBg = m5AlignTxt == "ALIGNÉ" ? color.new(color.green, 0) : m5AlignTxt == "CONTRE H1" ? color.new(color.red, 0) : m5AlignTxt == "MIXTE" ? color.new(color.orange, 0) : color.new(color.gray, 35)
+
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// ZONE RISK - TEXTE DASHBOARD AVEC MÉMOIRE
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+rawZoneRiskDir = m5SignalDir == -1 and sellHasOppositeBuyZoneNear ? -1 : m5SignalDir == 1 and buyHasOppositeSellZoneNear ? 1 : 0
+
+var int lastZoneRiskDir = 0
+var int lastZoneRiskBar = na
+
+if rawZoneRiskDir != 0
+    lastZoneRiskDir := rawZoneRiskDir
+    lastZoneRiskBar := bar_index
+
+zoneRiskRecent = not na(lastZoneRiskBar) and bar_index - lastZoneRiskBar <= zoneRiskMemoryBars
+activeZoneRiskDir = zoneRiskRecent ? lastZoneRiskDir : 0
+
+zoneRiskTxt = activeZoneRiskDir == -1 ? "DANGER BUY ZONE" : activeZoneRiskDir == 1 ? "DANGER SELL ZONE" : m5SignalDir != 0 ? "CLEAN" : "WAIT"
+zoneRiskBg = zoneRiskTxt == "CLEAN" ? color.new(color.green, 0) : zoneRiskTxt == "WAIT" ? color.new(color.gray, 35) : color.new(color.red, 0)
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// M5 EXEC QUALITY - VISUEL UNIQUEMENT
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+m5ExecDisplacementOk =
+     m5SignalDir == -1 ? (bearDisplacement or recentBearBos or bearBreak) :
+     m5SignalDir == 1 ? (bullDisplacement or recentBullBos or bullBreak) :
+     false
+
+m5ExecTxt =
+     m5SignalDir == 0 ? "WAIT" :
+     zoneRiskTxt == "CLEAN" ? "CLEAN" :
+     m5ExecDisplacementOk ? "OK DISPLACEMENT" :
+     "WAIT DISPLACEMENT"
+
+m5ExecBg =
+     m5ExecTxt == "CLEAN" ? color.new(color.green, 0) :
+     m5ExecTxt == "OK DISPLACEMENT" ? color.new(color.teal, 0) :
+     m5ExecTxt == "WAIT DISPLACEMENT" ? color.new(color.orange, 0) :
+     color.new(color.gray, 35)
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// FEU TRADE - MÉMOIRE ICT PULLBACK OB/FVG
+// VISUEL UNIQUEMENT - NE BLOQUE AUCUN TRADE
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+// Signal confirmé = label / signal moteur validé avec mémoire ICT Sync
+sellConfirmedFire = finalSellSignal or (syncStatus == "SELL OK" and syncLabelDir == -1)
+buyConfirmedFire  = finalBuySignal or (syncStatus == "BUY OK" and syncLabelDir == 1)
+
+// Structure brute : CHoCH / BOS / MSS / cassure locale
+rawSellFireStructure =
+     recentBearChoch or
+     recentBearBos or
+     recentBearStructure or
+     bearBreak or
+     fastBearMss
+
+rawBuyFireStructure =
+     recentBullChoch or
+     recentBullBos or
+     recentBullStructure or
+     bullBreak or
+     fastBullMss
+
+// Pullback brut : vrai contact OB/FVG, pas simple création de FVG
+rawSellFirePullback = touchBearZone or recentTouchBearZone
+rawBuyFirePullback  = touchBullZone or recentTouchBullZone
+
+// Mémoire séquentielle FEU
+var int lastSellFireStructBar = na
+var int lastBuyFireStructBar = na
+var int lastSellFirePullbackBar = na
+var int lastBuyFirePullbackBar = na
+var int lastSellFireConfirmedBar = na
+var int lastBuyFireConfirmedBar = na
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// CROSS-RESET FEU V4.12B-8
+// Un CHoCH opposé nettoie les anciennes mémoires FEU.
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+if bullChoch
+    lastSellFireStructBar := na
+    lastSellFirePullbackBar := na
+    lastSellFireConfirmedBar := na
+
+if bearChoch
+    lastBuyFireStructBar := na
+    lastBuyFirePullbackBar := na
+    lastBuyFireConfirmedBar := na
+
+if rawSellFireStructure
+    lastSellFireStructBar := bar_index
+
+if rawBuyFireStructure
+    lastBuyFireStructBar := bar_index
+
+if rawSellFirePullback
+    lastSellFirePullbackBar := bar_index
+
+if rawBuyFirePullback
+    lastBuyFirePullbackBar := bar_index
+
+if sellConfirmedFire
+    lastSellFireConfirmedBar := bar_index
+
+if buyConfirmedFire
+    lastBuyFireConfirmedBar := bar_index
+
+sellFireStructureRecent =
+     not na(lastSellFireStructBar) and
+     bar_index - lastSellFireStructBar <= fireMemoryBars
+
+buyFireStructureRecent =
+     not na(lastBuyFireStructBar) and
+     bar_index - lastBuyFireStructBar <= fireMemoryBars
+
+sellFirePullbackRecent =
+     not na(lastSellFirePullbackBar) and
+     bar_index - lastSellFirePullbackBar <= fireMemoryBars
+
+buyFirePullbackRecent =
+     not na(lastBuyFirePullbackBar) and
+     bar_index - lastBuyFirePullbackBar <= fireMemoryBars
+
+sellFireConfirmedRecent =
+     not na(lastSellFireConfirmedBar) and
+     bar_index - lastSellFireConfirmedBar <= fireMemoryBars
+
+buyFireConfirmedRecent =
+     not na(lastBuyFireConfirmedBar) and
+     bar_index - lastBuyFireConfirmedBar <= fireMemoryBars
+
+// Exécution propre
+sellFireExec = m5ExecTxt == "CLEAN" or m5ExecTxt == "OK DISPLACEMENT" or bearDisplacement
+buyFireExec  = m5ExecTxt == "CLEAN" or m5ExecTxt == "OK DISPLACEMENT" or bullDisplacement
+
+// Contexte pas opposé
+sellContextFireOk = h1SignalDir != 1
+buyContextFireOk  = h1SignalDir != -1
+
+// Risque visible
+sellRiskFire = zoneRiskTxt == "DANGER BUY ZONE"
+buyRiskFire  = zoneRiskTxt == "DANGER SELL ZONE"
+
+// Setup armé AVANT label confirmé
+sellArmedFire =
+     not sellFireConfirmedRecent and
+     sellFireStructureRecent and
+     sellFirePullbackRecent and
+     sellFireExec and
+     sellContextFireOk
+
+buyArmedFire =
+     not buyFireConfirmedRecent and
+     buyFireStructureRecent and
+     buyFirePullbackRecent and
+     buyFireExec and
+     buyContextFireOk
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// BUY REVERSAL FAST TRACK V45
+// Deuxième chemin vers GO BUY
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+buyFastTrackGo =
+     recentSslSweep and
+     (
+         recentBullChoch or
+         recentBullBos or
+         bullBreak or
+         fastBullMss
+     ) and
+     (
+         bullDisplacement or
+         bullCandle
+     ) and
+     buyContextFireOk
+// GO après label confirmé + séquence ICT mémorisée
+sellGoFire =
+     sellFireConfirmedRecent and
+     sellFireStructureRecent and
+     sellFirePullbackRecent and
+     sellFireExec and
+     sellContextFireOk
+
+buyGoFire =
+     (
+         buyFireConfirmedRecent and
+         buyFireStructureRecent and
+         buyFirePullbackRecent and
+         buyFireExec and
+         buyContextFireOk
+     )
+     or
+     buyFastTrackGo
+
+// Mémoire GO Dashboard Replay — affichage uniquement
+var int dashboardGoBar = na
+var int dashboardGoDir = 0
+
+if tradeGoBuy
+    dashboardGoBar := bar_index
+    dashboardGoDir := 1
+
+if tradeGoSell
+    dashboardGoBar := bar_index
+    dashboardGoDir := -1
+
+dashboardGoActive =
+     not na(dashboardGoBar) and
+     bar_index - dashboardGoBar <= 3
+
+string tradeFireTxt = "WAIT"
+
+if tradeGoBuy or (dashboardGoActive and dashboardGoDir == 1)
+    tradeFireTxt := "GO BUY"
+else if tradeGoSell or (dashboardGoActive and dashboardGoDir == -1)
+    tradeFireTxt := "GO SELL"
+else if sellArmedFire
+    tradeFireTxt := "ARMÉ SELL"
+else if buyArmedFire
+    tradeFireTxt := "ARMÉ BUY"
+else
+    tradeFireTxt := "WAIT"
+
+tradeFireBg = tradeFireTxt == "GO SELL" or tradeFireTxt == "GO BUY" ? color.new(color.green, 0) : tradeFireTxt == "PRUDENCE SELL" or tradeFireTxt == "PRUDENCE BUY" ? color.new(color.orange, 0) : tradeFireTxt == "ARMÉ SELL" or tradeFireTxt == "ARMÉ BUY" ? color.new(color.blue, 0) : color.new(color.gray, 35)
+
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// TRADE AUTORISÉ / NO TRADE V4.12B-10
+// Lecture dashboard uniquement - ne bloque aucun signal
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+tradePermissionDir =
+     str.contains(tradeFireTxt, "BUY") ? 1 :
+     str.contains(tradeFireTxt, "SELL") ? -1 :
+     0
+
+mixedContextNoTrade =
+     blockMixedContext and
+     (
+         ctxBuyScore == ctxSellScore or
+         ctxDetailTxt == "HTF MIXTE" or
+         m5AlignTxt == "MIXTE"
+     )
+
+// Zone danger directionnelle
+// Une zone BUY bloque seulement un BUY.
+// Une zone SELL bloque seulement un SELL.
+// Pour le sens opposé, c'est un objectif / TP proche, pas un blocage.
+dangerZoneNoTrade =
+     blockDangerZone and
+     (
+         (tradePermissionDir == 1 and zoneRiskTxt == "DANGER BUY ZONE") or
+         (tradePermissionDir == -1 and zoneRiskTxt == "DANGER SELL ZONE")
+     )
+
+oppositeBuyZoneForSell =
+     blockDangerZone and
+     tradePermissionDir == -1 and
+     zoneRiskTxt == "DANGER BUY ZONE"
+
+oppositeSellZoneForBuy =
+     blockDangerZone and
+     tradePermissionDir == 1 and
+     zoneRiskTxt == "DANGER SELL ZONE"
+
+waitExecutionNoTrade =
+     blockWaitExecution and
+     (
+         tradeFireTxt == "WAIT" or
+         m5ExecTxt == "WAIT" or
+         m5ExecTxt == "WAIT DISPLACEMENT"
+     )
+
+counterHtfNoTrade =
+     blockCounterHtf and
+     (
+         (tradePermissionDir == 1 and h1SignalDir == -1) or
+         (tradePermissionDir == -1 and h1SignalDir == 1)
+     )
+
+tradeNoTrade =
+     mixedContextNoTrade or
+     dangerZoneNoTrade or
+     waitExecutionNoTrade or
+     counterHtfNoTrade
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// ICT CHECKLIST V1 — Lecture décisionnelle
+// Ne modifie aucun signal ni backtest
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+ictCheckDirectionOk =
+     tradePermissionDir != 0
+
+ictCheckAmdOk =
+     tradePermissionDir == 1 ? amdSensTxt == "BUY" :
+     tradePermissionDir == -1 ? amdSensTxt == "SELL" :
+     false
+
+ictCheckPhaseOk =
+     amdCycleTxt == "MANIPULATION" or
+     amdCycleTxt == "DISTRIBUTION"
+
+ictCheckFireOk =
+     tradeFireTxt != "WAIT"
+
+ictCheckExecOk =
+     m5ExecTxt != "WAIT" and
+     m5ExecTxt != "WAIT DISPLACEMENT"
+
+ictCheckHtfOk =
+     not counterHtfNoTrade
+
+ictCheckZoneOk =
+     not dangerZoneNoTrade
+
+ictChecklistScore =
+     (ictCheckDirectionOk ? 1 : 0) +
+     (ictCheckAmdOk ? 1 : 0) +
+     (ictCheckPhaseOk ? 1 : 0) +
+     (ictCheckFireOk ? 1 : 0) +
+     (ictCheckExecOk ? 1 : 0) +
+     (ictCheckHtfOk ? 1 : 0) +
+     (ictCheckZoneOk ? 1 : 0)
+
+ictChecklistTxt =
+     tradePermissionDir == 0 ? "CHECK 0/7" :
+     "CHECK " + str.tostring(ictChecklistScore) + "/7"
+tradePermissionTxt =
+     not showTradePermission ? "-" :
+     tradeNoTrade ? "NO TRADE" :
+     tradePermissionDir == 1 ? "BUY AUTORISÉ" :
+     tradePermissionDir == -1 ? "SELL AUTORISÉ" :
+     "ATTENTE"
+
+tradeBlockReason =
+     mixedContextNoTrade and ctxBuyScore == ctxSellScore ? "MIXTE SCORE" :
+     mixedContextNoTrade and ctxDetailTxt == "HTF MIXTE" ? "HTF MIXTE" :
+     mixedContextNoTrade and m5AlignTxt == "MIXTE" ? "M5 MIXTE" :
+     dangerZoneNoTrade and tradePermissionDir == 1 ? "DANGER BUY" :
+     dangerZoneNoTrade and tradePermissionDir == -1 ? "DANGER SELL" :
+     counterHtfNoTrade and tradePermissionDir == 1 ? "BUY CONTRE H1" :
+     counterHtfNoTrade and tradePermissionDir == -1 ? "SELL CONTRE H1" :
+     waitExecutionNoTrade and m5ExecTxt == "WAIT DISPLACEMENT" ? "PAS DISPLACEMENT" :
+     waitExecutionNoTrade and m5ExecTxt == "WAIT" ? "ATTENTE M5" :
+     waitExecutionNoTrade and tradeFireTxt == "WAIT" ? "PAS DE FEU" :
+     oppositeBuyZoneForSell ? "TP BUY PROCHE" :
+     oppositeSellZoneForBuy ? "TP SELL PROCHE" :
+     tradePermissionDir == 0 ? "PAS DE SETUP" :
+     ictChecklistTxt
+tradePermissionBg =
+     tradePermissionTxt == "BUY AUTORISÉ" ? color.new(color.green, 0) :
+     tradePermissionTxt == "SELL AUTORISÉ" ? color.new(color.red, 0) :
+     tradePermissionTxt == "NO TRADE" ? color.new(color.orange, 0) :
+     color.new(color.gray, 35)
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// GRADE ICT ★ / ★★ / ★★★ V4.12B-10
+// Affichage seulement - ne bloque aucun signal
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+buyIctScore = 0
+sellIctScore = 0
+gradeObjectiveDir =
+     str.contains(tradeFireTxt, "BUY") ? 1 :
+     str.contains(tradeFireTxt, "SELL") ? -1 :
+     ctxBuyScore > ctxSellScore ? 1 :
+     ctxSellScore > ctxBuyScore ? -1 :
+     0
+// BUY SCORE
+buyIctScore += (recentSslSweep or sslTaken) ? 1 : 0
+buyIctScore += buyFireStructureRecent ? 1 : 0
+buyIctScore += m5ExecTxt == "OK DISPLACEMENT" and tradePermissionDir == 1 ? 1 : 0
+buyIctScore += touchBullZone ? 1 : 0
+buyIctScore += syncHtfZoneDir == 1 ? 1 : 0
+buyIctScore += gradeObjectiveDir == 1 ? 1 : 0
+
+// SELL SCORE
+sellIctScore += (recentBslSweep or bslTaken) ? 1 : 0
+sellIctScore += sellFireStructureRecent ? 1 : 0
+sellIctScore += m5ExecTxt == "OK DISPLACEMENT" and tradePermissionDir == -1 ? 1 : 0
+sellIctScore += touchBearZone ? 1 : 0
+sellIctScore += syncHtfZoneDir == -1 ? 1 : 0
+sellIctScore += gradeObjectiveDir == -1 ? 1 : 0
+
+fStars(_score) =>
+    _score >= 5 ? "★★★" :
+     _score >= 3 ? "★★" :
+     "★"
+
+buyStarsTxt = fStars(buyIctScore)
+sellStarsTxt = fStars(sellIctScore)
+
+activeGradeDir =
+     tradePermissionDir != 0 ? tradePermissionDir :
+     gradeObjectiveDir
+
+activeGradeScore =
+     activeGradeDir == 1 ? buyIctScore :
+     activeGradeDir == -1 ? sellIctScore :
+     math.max(buyIctScore, sellIctScore)
+
+activeGradeStars =
+     activeGradeDir == 1 ? buyStarsTxt :
+     activeGradeDir == -1 ? sellStarsTxt :
+     fStars(activeGradeScore)
+
+activeGradeTxt =
+     not showIctGrade ? "-" :
+     activeGradeDir == 1 ? "BUY " + activeGradeStars + " " + str.tostring(buyIctScore) + "/6" :
+     activeGradeDir == -1 ? "SELL " + activeGradeStars + " " + str.tostring(sellIctScore) + "/6" :
+     "NEUTRE " + activeGradeStars + " " + str.tostring(activeGradeScore) + "/6"
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// ENTRY ENGINE ICT LITE V4.12B-11
+// Synchronisation TRADE AUTORISÉ ↔ ENTRY
+// Observation uniquement - ne bloque aucun signal
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+// Direction HTF simple
+htfSellContext = h1SignalDir == -1 or syncHtfDir == -1
+htfBuyContext  = h1SignalDir == 1 or syncHtfDir == 1
+
+// Zones d'exécution M5
+m5BuyZoneActive  = touchBullZone
+m5SellZoneActive = touchBearZone
+
+// Liquidité travaillée
+buyLiquidityOk  = recentSslSweep or sslTaken
+sellLiquidityOk = recentBslSweep or bslTaken
+
+// Structure récente
+buyStructOk  = buyFireStructureRecent
+sellStructOk = sellFireStructureRecent
+
+// Displacement
+buyDispOk  = m5ExecTxt == "OK DISPLACEMENT" and activeGradeDir == 1
+sellDispOk = m5ExecTxt == "OK DISPLACEMENT" and activeGradeDir == -1
+
+/// Reversal simple
+buyReversalWatch =
+     m5BuyZoneActive and
+     buyLiquidityOk and
+     buyStructOk and
+     syncHtfZoneDir == 1
+
+sellReversalWatch =
+     m5SellZoneActive and
+     sellLiquidityOk and
+     sellStructOk and
+     syncHtfZoneDir == -1
+
+// BUY REV EARLY SETUP — dashboard uniquement
+// Prépare le BUY REV sans attendre trop tard
+var int buyRevSetupDashBar = na
+var float buyRevSetupDashHigh = na
+
+buyRevSetupDashNow =
+     buyReversalWatch and
+     (
+         bullDisplacement or
+         fastBullMss or
+         bullPattern or
+         buyRevEarlyPulse
+     )
+
+if buyRevSetupDashNow
+    buyRevSetupDashBar := bar_index
+    buyRevSetupDashHigh := high
+
+buyRevSetupDashActive =
+     not na(buyRevSetupDashBar) and
+     bar_index - buyRevSetupDashBar <= 5
+
+buyRevEarlyGoDash =
+     buyRevSetupDashActive and
+     not na(buyRevSetupDashHigh) and
+     bar_index > buyRevSetupDashBar and
+     close > buyRevSetupDashHigh
+
+
+
+// Continuation simple
+buyContinuationWatch =
+     htfBuyContext and
+     m5BuyZoneActive and
+     buyStructOk
+
+sellContinuationWatch =
+     htfSellContext and
+     m5SellZoneActive and
+     sellStructOk
+
+// Synchronisation avec le dashboard principal
+// Si le moteur principal autorise déjà le trade + OK displacement,
+// ENTRY ne doit pas rester NO ENTRY.
+buyTradeSync =
+     tradePermissionDir == 1 and
+     m5ExecTxt == "OK DISPLACEMENT" and
+     (
+         htfBuyContext or
+         activeGradeDir == 1 or
+         buyIctScore >= 3
+     )
+
+sellTradeSync =
+     tradePermissionDir == -1 and
+     m5ExecTxt == "OK DISPLACEMENT" and
+     (
+         htfSellContext or
+         activeGradeDir == -1 or
+         sellIctScore >= 3
+     )
+
+// Texte compact dashboard
+buySetupType =
+     buyRevEarlyGoDash or buyReversalWatch ? "REVERSAL" :
+     buyContinuationWatch ? "CONTINUATION" :
+     buyTradeSync ? "EXPANSION" :
+     "NONE"
+
+entryIctType =
+     buySetupType == "REVERSAL" ? "BUY REV" :
+     buySetupType == "CONTINUATION" ? "BUY CONT" :
+     buySetupType == "EXPANSION" ? "BUY EXP" :
+     tradeGoBuy ? "GO BUY" :
+     tradeGoSell ? "GO SELL" :
+     sellReversalWatch ? "SELL REV" :
+     sellContinuationWatch ? "SELL CONT" :
+     sellTradeSync ? "READY SELL" :
+     "NO ENTRY"
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// ICT LIQUIDITY STATUS V4.12B-10
+// BSL / SSL PRISE OU RESTANTE
+// Dashboard uniquement - ne bloque aucun signal
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+f_htf_liq_state(_lookback) =>
+    htfBsl = ta.highest(high[1], _lookback)
+    htfSsl = ta.lowest(low[1], _lookback)
+    htfMid = (htfBsl + htfSsl) / 2.0
+
+    htfBslTaken = not na(htfBsl) and high > htfBsl
+    htfSslTaken = not na(htfSsl) and low < htfSsl
+
+    int st = 0
+
+    if htfBslTaken and htfSslTaken
+        st := 3
+    else if htfBslTaken
+        st := -1
+    else if htfSslTaken
+        st := 1
+    else if not na(htfMid)
+        st := close <= htfMid ? -2 : 2
+    else
+        st := 0
+
+    st
+
+fLiqTxt(_state) =>
+    _state == 3 ? "BSL+SSL PRIS" :
+     _state == -1 ? "BSL PRIS" :
+     _state == 1 ? "SSL PRIS" :
+     _state == -2 ? "BSL RESTANT" :
+     _state == 2 ? "SSL RESTANT" :
+     "-"
+
+fLiqBg(_state, _bgOff, _bgBuy, _bgSell, _bgWarn) =>
+    _state == -1 ? _bgSell :
+     _state == 1 ? _bgBuy :
+     _state == 3 ? _bgWarn :
+     _state == -2 or _state == 2 ? _bgWarn :
+     _bgOff
+
+// Liquidité HTF selon la référence ICT CONTEXT affichée
+htfLiqState =
+     request.security(syminfo.tickerid, syncRefTf, f_htf_liq_state(20), barmerge.gaps_off, barmerge.lookahead_off)
+
+htfLiquidTxt = fLiqTxt(htfLiqState)
+
+// Liquidité LTF réelle basée sur les derniers pivots M5
+ltfBslPris = recentBslSweep or bslTaken
+ltfSslPris = recentSslSweep or sslTaken
+
+ltfBslRestant = not na(lastHigh) and close < lastHigh and not ltfBslPris
+ltfSslRestant = not na(lastLow) and close > lastLow and not ltfSslPris
+
+int ltfLiqState = 0
+
+if ltfBslPris and ltfSslPris
+    ltfLiqState := 3
+else if ltfBslPris
+    ltfLiqState := -1
+else if ltfSslPris
+    ltfLiqState := 1
+else if ltfBslRestant and ltfSslRestant
+    ltfLiqState := close <= graphMid ? -2 : 2
+else if ltfBslRestant
+    ltfLiqState := -2
+else if ltfSslRestant
+    ltfLiqState := 2
+else
+    ltfLiqState := 0
+
+ltfLiquidTxt = fLiqTxt(ltfLiqState)
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// HTF LIQUIDITY TAKEN LINE PRO V4.12B-10
+// Affiche uniquement la dernière liquidité HTF réellement prise
+// Ligne pointillée courte + label sur la bougie de prise
+// Ne marque jamais les états RESTANT
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+var line htfTakenLine = na
+var label htfTakenLabel = na
+var int lastHtfLiqTakenState = 0
+
+htfTakenNow =
+     showHtfLiqMarks and
+     (htfLiqState == -1 or htfLiqState == 1 or htfLiqState == 3) and
+     htfLiqState != lastHtfLiqTakenState
+
+if htfTakenNow
+    lastHtfLiqTakenState := htfLiqState
+
+    if not na(htfTakenLine)
+        line.delete(htfTakenLine)
+
+    if not na(htfTakenLabel)
+        label.delete(htfTakenLabel)
+
+    htfTakenTxt =
+         htfLiqState == -1 ? syncRefLabel + " BSL PRIS ✓" :
+         htfLiqState == 1 ? syncRefLabel + " SSL PRIS ✓" :
+         htfLiqState == 3 ? syncRefLabel + " BSL+SSL PRIS ✓" :
+         ""
+
+    htfTakenLevel =
+         htfLiqState == -1 ? high :
+         htfLiqState == 1 ? low :
+         close
+
+    htfTakenColor =
+         htfLiqState == -1 ? color.red :
+         htfLiqState == 1 ? color.lime :
+         color.orange
+
+    htfTakenStartBar = math.max(bar_index - 8, 0)
+    htfTakenEndBar = bar_index
+
+    if htfTakenTxt != ""
+        htfTakenLine := line.new(
+             htfTakenStartBar,
+             htfTakenLevel,
+             htfTakenEndBar,
+             htfTakenLevel,
+             xloc=xloc.bar_index,
+             extend=extend.none,
+             color=color.new(htfTakenColor, 35),
+             style=line.style_dotted,
+             width=1)
+
+        htfTakenLabel := label.new(
+             bar_index,
+             htfTakenLevel,
+             htfTakenTxt,
+             xloc=xloc.bar_index,
+             yloc=yloc.price,
+             style=label.style_none,
+             textcolor=htfTakenColor,
+             size=fLabelSize(htfLiqMarkSize))
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// OBJECTIF ICT V4.12B-10
+// Remplace l'ancien CTX par une cible opérationnelle
+// Dashboard uniquement - ne bloque aucun signal
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+objectiveIctDir =
+     str.contains(tradeFireTxt, "BUY") ? 1 :
+     str.contains(tradeFireTxt, "SELL") ? -1 :
+     ctxBuyScore > ctxSellScore ? 1 :
+     ctxSellScore > ctxBuyScore ? -1 :
+     0
+
+buyObjectiveTxt =
+     nearestCtxAboveTxt != "-" ? nearestCtxAboveTxt :
+     htfLiqState == -2 or ltfLiqState == -2 ? "BSL RESTANT" :
+     "HAUT RANGE"
+
+sellObjectiveTxt =
+     nearestCtxBelowTxt != "-" ? nearestCtxBelowTxt :
+     htfLiqState == 2 or ltfLiqState == 2 ? "SSL RESTANT" :
+     "BAS RANGE"
+
+objectiveIctTxt =
+     objectiveIctDir == 1 ? "BUY → " + buyObjectiveTxt :
+     objectiveIctDir == -1 ? "SELL → " + sellObjectiveTxt :
+     "WAIT TARGET"
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// VISUEL SESSIONS
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+inAsiaSession = not na(time(timeframe.period, asiaSession, "Europe/Paris"))
+inLondonSession = not na(time(timeframe.period, londonSession, "Europe/Paris"))
+inNySession = not na(time(timeframe.period, nySession, "Europe/Paris"))
+
+bgcolor(showSessionBg and showAsiaBg and inAsiaSession ? asiaBgColor : na, title="Fond Asie")
+bgcolor(showSessionBg and showLondonBg and inLondonSession ? londonBgColor : na, title="Fond Londres")
+bgcolor(showSessionBg and showNyBg and inNySession ? nyBgColor : na, title="Fond New York")
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// DASHBOARD PRINCIPAL
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+wr = wins + losses > 0 ? wins / (wins + losses) * 100 : na
+pf = grossLossR > 0 ? grossWinR / grossLossR : na
+
+
+fTrend(t) => t == 1 ? "HAUSSIER" : t == -1 ? "BAISSIER" : "NEUTRE"
+fPD(p) => p == 1 ? "PREMIUM" : "DISCOUNT"
+
+// Affichage dashboard principal synchronisé avec ICT SYNC
+mainSignalTxt =
+     tradeGoBuy ? "GO BUY" :
+     tradeGoSell ? "GO SELL" :
+     finalBuySignal ? "BUY ACTIVE" :
+     finalSellSignal ? "SELL ACTIVE" :
+     syncStatus == "BUY OK" and syncLabelDir == 1 ? "BUY OK" :
+     syncStatus == "SELL OK" and syncLabelDir == -1 ? "SELL OK" :
+     signalTxt
+
+mainSignalType =
+     tradeGoBuy or tradeGoSell ? "TRADE ENGINE" :
+     finalBuySignal or finalSellSignal ? "ACTIVE" :
+     syncStatus == "BUY OK" or syncStatus == "SELL OK" ? "SYNC OK" :
+     signalType
+
+dashPos = dashPosition == "Top Right" ? position.top_right : dashPosition == "Top Left" ? position.top_left : dashPosition == "Bottom Right" ? position.bottom_right : position.bottom_left
+var table dash = table.new(dashPos, 3, 15, border_width=1, border_color=color.gray)
+
+if showDashboard and barstate.islast
+    bg1 = color.new(#131722, 0)
+    bg2 = color.new(#2A2E39, 0)
+    bgBuy = color.new(color.green, 35)
+    bgSell = color.new(color.red, 35)
+    bgNeutral = color.new(color.gray, 45)
+    bgWarn = color.new(color.orange, 35)
+    txtSize = size.small
+
+    table.cell(dash, 0, 0, "V4.12B", text_color=color.white, bgcolor=color.black, text_size=txtSize)
+    table.cell(dash, 1, 0, syminfo.ticker, text_color=color.white, bgcolor=color.black, text_size=txtSize)
+    table.cell(dash, 2, 0, timeframe.period, text_color=color.white, bgcolor=color.black, text_size=txtSize)
+
+    table.cell(dash, 0, 1, "H4", text_color=color.white, bgcolor=bg1, text_size=txtSize)
+    table.cell(dash, 1, 1, fTrend(h4Trend), text_color=color.white, bgcolor=h4Trend == 1 ? bgBuy : h4Trend == -1 ? bgSell : bgNeutral, text_size=txtSize)
+    table.cell(dash, 2, 1, fPD(h4PD), text_color=color.white, bgcolor=h4PD == -1 ? bgBuy : bgSell, text_size=txtSize)
+
+    table.cell(dash, 0, 2, "H1", text_color=color.white, bgcolor=bg1, text_size=txtSize)
+    table.cell(dash, 1, 2, fTrend(h1Trend), text_color=color.white, bgcolor=h1Trend == 1 ? bgBuy : h1Trend == -1 ? bgSell : bgNeutral, text_size=txtSize)
+    table.cell(dash, 2, 2, fPD(h1PD), text_color=color.white, bgcolor=h1PD == -1 ? bgBuy : bgSell, text_size=txtSize)
+
+    table.cell(dash, 0, 3, "TF", text_color=color.white, bgcolor=bg1, text_size=txtSize)
+    table.cell(dash, 1, 3, fTrend(tfVisualTrend), text_color=color.white, bgcolor=tfVisualTrend == 1 ? bgBuy : tfVisualTrend == -1 ? bgSell : bgNeutral, text_size=txtSize)
+    table.cell(dash, 2, 3, graphPD == 1 ? "PREMIUM" : "DISCOUNT", text_color=color.white, bgcolor=graphPD == -1 ? bgBuy : bgSell, text_size=txtSize)
+
+    table.cell(dash, 0, 4, "SIGNAL", text_color=color.white, bgcolor=bg1, text_size=txtSize)
+
+    mainSignalBg =
+     mainSignalTxt == "GO BUY" or mainSignalTxt == "BUY ACTIVE" or mainSignalTxt == "BUY OK" ? bgBuy :
+     mainSignalTxt == "GO SELL" or mainSignalTxt == "SELL ACTIVE" or mainSignalTxt == "SELL OK" ? bgSell :
+     mainSignalTxt == "BUY READY" ? bgBuy :
+     mainSignalTxt == "SELL READY" ? bgSell :
+     mainSignalTxt == "MIXTE" ? bgWarn :
+     bg2
+
+    mainTypeBg =
+     mainSignalType == "TRADE ENGINE" ? bgWarn :
+     mainSignalType == "ACTIVE" ? bgWarn :
+     mainSignalType == "SYNC OK" ? bgWarn :
+     bgNeutral
+
+    table.cell(dash, 1, 4, mainSignalTxt, text_color=color.white, bgcolor=mainSignalBg, text_size=txtSize)
+    table.cell(dash, 2, 4, mainSignalType, text_color=color.white, bgcolor=mainTypeBg, text_size=txtSize)
+
+    table.cell(dash, 0, 5, "W / L", text_color=color.white, bgcolor=bg1, text_size=txtSize)
+    table.cell(dash, 1, 5, str.tostring(wins), text_color=color.lime, bgcolor=bg2, text_size=txtSize)
+    table.cell(dash, 2, 5, str.tostring(losses), text_color=color.red, bgcolor=bg2, text_size=txtSize)
+
+    table.cell(dash, 0, 6, "WR / PF", text_color=color.white, bgcolor=bg1, text_size=txtSize)
+    table.cell(dash, 1, 6, na(wr) ? "N/A" : str.tostring(wr, "#.##") + "%", text_color=wr >= 50 ? color.lime : color.red, bgcolor=bg2, text_size=txtSize)
+    table.cell(dash, 2, 6, na(pf) ? "N/A" : str.tostring(pf, "#.##"), text_color=pf >= 1.3 ? color.lime : color.yellow, bgcolor=bg2, text_size=txtSize)
+
+    table.cell(dash, 0, 7, "BUY / SELL", text_color=color.white, bgcolor=bg1, text_size=txtSize)
+    table.cell(dash, 1, 7, str.tostring(buyCount), text_color=color.lime, bgcolor=bg2, text_size=txtSize)
+    table.cell(dash, 2, 7, str.tostring(sellCount), text_color=color.red, bgcolor=bg2, text_size=txtSize)
+
+    table.cell(dash, 0, 8, "Net R", text_color=color.white, bgcolor=bg1, text_size=txtSize)
+    table.cell(dash, 1, 8, str.tostring(netR, "#.##") + "R", text_color=netR >= 0 ? color.lime : color.red, bgcolor=bg2, text_size=txtSize)
+    table.cell(dash, 2, 8, "RR " + str.tostring(rr), text_color=color.white, bgcolor=bg2, text_size=txtSize)
+    table.cell(dash, 0, 9, "H1 SIGNAL", text_color=color.white, bgcolor=color.black, text_size=txtSize)
+    table.cell(dash, 1, 9, h1SignalTxt, text_color=color.white, bgcolor=h1SignalDir == 1 ? bgBuy : h1SignalDir == -1 ? bgSell : bgNeutral, text_size=txtSize)
+    table.cell(dash, 2, 9, "", text_color=color.white, bgcolor=color.black, text_size=txtSize)
+
+    table.cell(dash, 0, 10, "M5 ALIGN", text_color=color.white, bgcolor=color.black, text_size=txtSize)
+    table.cell(dash, 1, 10, m5AlignTxt, text_color=color.white, bgcolor=m5AlignBg, text_size=txtSize)
+    table.cell(dash, 2, 10, "", text_color=color.white, bgcolor=color.black, text_size=txtSize)
+
+    table.cell(dash, 0, 11, "ZONE RISK", text_color=color.white, bgcolor=color.black, text_size=txtSize)
+    table.cell(dash, 1, 11, zoneRiskTxt, text_color=color.white, bgcolor=zoneRiskBg, text_size=txtSize)
+    table.cell(dash, 2, 11, zoneContextTxt, text_color=zoneContextTxt == "CLEAN" ? color.white : color.black, bgcolor=zoneContextTxt == "CLEAN" ? color.black : color.new(color.yellow, 0), text_size=txtSize)
+
+
+    table.cell(dash, 0, 12, "EXEC", text_color=color.white, bgcolor=color.black, text_size=txtSize)
+    table.cell(dash, 1, 12, m5ExecTxt, text_color=color.white, bgcolor=m5ExecBg, text_size=txtSize)
+    table.cell(dash, 2, 12, "", text_color=color.white, bgcolor=color.black, text_size=txtSize)
+    table.cell(dash, 0, 13, "TRADE", text_color=color.white, bgcolor=color.black, text_size=txtSize)
+    table.cell(dash, 1, 13, tradePermissionTxt, text_color=color.white, bgcolor=tradePermissionBg, text_size=txtSize)
+    table.cell(dash, 2, 13, tradeBlockReason, text_color=color.white, bgcolor=tradePermissionBg, text_size=txtSize)
+    h1NarrativeBg =
+      h1NarrativeDir == 1 ? bgBuy :
+         h1NarrativeDir == -1 ? bgSell :
+         h1NarrativeDir == 2 ? bgWarn :
+         h1NarrativeDir == -2 ? bgWarn :
+         bgNeutral
+
+    table.cell(dash, 0, 14, "H1 NARR", text_color=color.white, bgcolor=color.black, text_size=txtSize)
+    table.cell(dash, 1, 14, showH1NarrativeDashboard ? h1NarrativeTxt : "-", text_color=color.white, bgcolor=h1NarrativeBg, text_size=txtSize)
+    table.cell(dash, 2, 14, h1NarrativeMode, text_color=color.white, bgcolor=bg2, text_size=txtSize)
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// DASHBOARD ICT SYNC HTF / LTF - V4.12B-2
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+syncPos = syncDashPosition == "Top Right" ? position.top_right : syncDashPosition == "Top Left" ? position.top_left : syncDashPosition == "Bottom Right" ? position.bottom_right : position.bottom_left
+var table syncDash = table.new(syncPos, 3, 12, border_width=1, border_color=color.gray)
+
+if showSyncDashboard and barstate.islast
+    // Style ICT SYNC lisible - fond sombre
+    bgHeader = color.new(color.black, 0)
+    bgName = color.new(#131722, 0)
+    bgInfo = color.new(#1E222D, 0)
+    bgOff = color.new(#2A2E39, 0)
+
+    // Couleurs de validation plus franches
+    bgBuy = color.new(color.green, 30)
+    bgSell = color.new(color.red, 30)
+    bgWarn = color.new(color.orange, 25)
+    bgMixed = color.new(color.yellow, 25)
+
+    // Texte plus lisible
+    txt = size.small
+
+    // Couleurs HTF
+    htfBiasBg =
+         syncHtfDir == 1 ? bgBuy :
+         syncHtfDir == -1 ? bgSell :
+         bgOff
+
+    htfZoneBg =
+         syncHtfZoneDir == 1 ? bgBuy :
+         syncHtfZoneDir == -1 ? bgSell :
+         bgOff
+
+    // Couleurs LTF
+    ltfBiasBg =
+     syncLtfBiasVisualDir == 1 ? bgBuy :
+     syncLtfBiasVisualDir == -1 ? bgSell :
+     bgOff
+
+    ltfZoneBg =
+         syncLtfZoneTxt == "BUY" ? bgBuy :
+         syncLtfZoneTxt == "SELL" ? bgSell :
+         syncLtfZoneTxt == "MIXTE" ? bgMixed :
+         bgOff
+
+    ltfStructBg =
+         syncLtfStructDir == 1 ? bgBuy :
+         syncLtfStructDir == -1 ? bgSell :
+         syncLtfStructDir == 0 and syncLtfStructTxt != "-" ? bgMixed :
+         bgOff
+
+    labelBg =
+         syncLabelDir == 1 ? bgBuy :
+         syncLabelDir == -1 ? bgSell :
+         bgOff
+
+    syncBg = fSyncColor(syncStatus)
+
+    jokerBg =
+         syncJokerTxt == "BUY JOKER" ? bgBuy :
+         syncJokerTxt == "SELL JOKER" ? bgSell :
+         syncJokerTxt == "PRUDENCE" ? bgWarn :
+         syncJokerTxt == "MIXTE" ? bgMixed :
+         bgOff
+
+    bgOff
+
+
+
+
+
+    // Header
+    table.cell(syncDash, 0, 0, "ICT CONTEXT", text_color=color.white, bgcolor=bgHeader, text_size=txt)
+    table.cell(syncDash, 1, 0, syncRefLabel, text_color=color.white, bgcolor=bgHeader, text_size=txt)
+    table.cell(syncDash, 2, 0, syncLtfLabel, text_color=color.white, bgcolor=bgHeader, text_size=txt)
+
+    // STRUCT
+    table.cell(syncDash, 0, 1, "STRUCT", text_color=color.white, bgcolor=bgName, text_size=txt)
+    table.cell(syncDash, 1, 1, fBiasTxt(syncHtfBiasDir), text_color=color.white, bgcolor=htfBiasBg, text_size=txt)
+    table.cell(syncDash, 2, 1, syncLtfStructTxt, text_color=color.white, bgcolor=ltfStructBg, text_size=txt)
+
+        // LIQUID
+    htfLiquidBg = fLiqBg(htfLiqState, bgOff, bgBuy, bgSell, bgWarn)
+    ltfLiquidBg = fLiqBg(ltfLiqState, bgOff, bgBuy, bgSell, bgWarn)
+
+    table.cell(syncDash, 0, 2, "LIQUID", text_color=color.white, bgcolor=bgName, text_size=txt)
+    table.cell(syncDash, 1, 2, htfLiquidTxt, text_color=color.white, bgcolor=htfLiquidBg, text_size=txt)
+    table.cell(syncDash, 2, 2, ltfLiquidTxt, text_color=color.white, bgcolor=ltfLiquidBg, text_size=txt)
+
+    // OB
+    table.cell(syncDash, 0, 3, "OB", text_color=color.white, bgcolor=bgName, text_size=txt)
+    table.cell(syncDash, 1, 3, nearestCtxAboveTxt, text_color=color.white, bgcolor=bgOff, text_size=txt)
+    table.cell(syncDash, 2, 3, nearestCtxBelowTxt, text_color=color.white, bgcolor=bgOff, text_size=txt)
+
+    // FVG
+    table.cell(syncDash, 0, 4, "FVG", text_color=color.white, bgcolor=bgName, text_size=txt)
+    table.cell(syncDash, 1, 4, str.contains(nearestCtxAboveTxt, "FVG") ? nearestCtxAboveTxt : "-", text_color=color.white, bgcolor=str.contains(nearestCtxAboveTxt, "FVG") ? bgSell : bgOff, text_size=txt)
+    table.cell(syncDash, 2, 4, str.contains(nearestCtxBelowTxt, "FVG") ? nearestCtxBelowTxt : "-", text_color=color.white, bgcolor=str.contains(nearestCtxBelowTxt, "FVG") ? bgBuy : bgOff, text_size=txt)
+
+    // HTF
+    table.cell(syncDash, 0, 5, "HTF", text_color=color.white, bgcolor=bgName, text_size=txt)
+    table.cell(syncDash, 1, 5, ctxDetailTxt, text_color=color.white, bgcolor=ctxDetailTxt == "HTF SELL" ? bgSell : ctxDetailTxt == "HTF BUY" ? bgBuy : bgOff, text_size=txt)
+    table.cell(syncDash, 2, 5, ctxBiasTxt, text_color=color.white, bgcolor=bgOff, text_size=txt)
+
+        // SCORE
+    scoreSellBg = ctxSellScore > ctxBuyScore ? bgSell : bgOff
+    scoreBuyBg = ctxBuyScore > ctxSellScore ? bgBuy : bgOff
+
+        // ACTION
+    string actionTxt = "WAIT"
+
+    actionBlocked =
+         tradePermissionTxt == "NO TRADE"
+
+    if tradeFireTxt == "GO BUY"
+        actionTxt := "BUY GO"
+    else if tradeFireTxt == "GO SELL"
+        actionTxt := "SHORT GO"
+    else if tradeFireTxt == "ARMÉ BUY" and not actionBlocked
+        actionTxt := "BUY READY"
+    else if tradeFireTxt == "ARMÉ SELL" and not actionBlocked
+        actionTxt := "SHORT READY"
+    else
+        actionTxt := "WAIT"
+
+    actionBg =
+         str.contains(actionTxt, "BUY") ? bgBuy :
+         str.contains(actionTxt, "SHORT") ? bgSell :
+         bgOff
+
+    table.cell(syncDash, 0, 6, "SCORE", text_color=color.white, bgcolor=bgName, text_size=txt)
+    table.cell(syncDash, 1, 6, str.tostring(ctxSellScore) + " SELL", text_color=color.white, bgcolor=scoreSellBg, text_size=txt)
+    table.cell(syncDash, 2, 6, str.tostring(ctxBuyScore) + " BUY", text_color=color.white, bgcolor=scoreBuyBg, text_size=txt)
+
+    table.cell(syncDash, 0, 7, "ACTION", text_color=color.white, bgcolor=bgName, text_size=txt)
+    table.cell(syncDash, 1, 7, actionTxt, text_color=color.white, bgcolor=actionBg, text_size=txt)
+    table.cell(syncDash, 2, 7, actionTxt, text_color=color.white, bgcolor=actionBg, text_size=txt)
+
+    // OBJECTIF ICT
+    table.cell(syncDash, 0, 8, "OBJECTIF", text_color=color.white, bgcolor=bgName, text_size=txt)
+    table.cell(syncDash, 1, 8, marketState, text_color=color.white, bgcolor=bgInfo, text_size=txt)
+    table.cell(syncDash, 2, 8, objectiveIctTxt, text_color=color.white, bgcolor=bgOff, text_size=txt)
+        // TRADE / NO TRADE
+    table.cell(syncDash, 0, 9, "TRADE", text_color=color.white, bgcolor=bgName, text_size=txt)
+    table.cell(syncDash, 1, 9, tradePermissionTxt, text_color=color.white, bgcolor=tradePermissionBg, text_size=txt)
+    table.cell(syncDash, 2, 9, tradeBlockReason, text_color=color.white, bgcolor=tradePermissionBg, text_size=txt) 
+
+         // GRADE ICT
+    gradeBg =
+         activeGradeScore >= 5 ? bgBuy :
+         activeGradeScore >= 3 ? bgWarn :
+         bgOff
+
+    table.cell(syncDash, 0, 10, "GRADE", text_color=color.white, bgcolor=bgName, text_size=txt)
+    table.cell(syncDash, 1, 10, activeGradeTxt, text_color=color.white, bgcolor=gradeBg, text_size=txt)
+    table.cell(syncDash, 2, 10, entryIctType, text_color=color.white, bgcolor=bgOff, text_size=txt)
+// AMD PHASE
+amdDashBg =
+     str.contains(amdPhaseTxt, "DIST") ? color.new(color.green, 25) :
+     str.contains(amdPhaseTxt, "MANIP") ? color.new(color.orange, 25) :
+     str.contains(amdPhaseTxt, "ACC") ? color.new(color.blue, 45) :
+     color.new(color.gray, 65)
+
+amdM5Txt =
+     amdSensTxt == "NEUTRE" ? amdStepShortTxt :
+     amdSensTxt + " " + amdStepShortTxt
+
+amdM5Bg =
+     amdSensTxt == "BUY" ? color.new(color.green, 25) :
+     amdSensTxt == "SELL" ? color.new(color.red, 25) :
+     amdStepTxt == "RANGE" ? color.new(color.blue, 45) :
+     color.new(color.gray, 65)
+
+table.cell(syncDash, 0, 11, "AMD", text_color=color.white, bgcolor=color.new(color.black, 0), text_size=size.tiny)
+table.cell(syncDash, 1, 11, amdPhaseTxt, text_color=color.white, bgcolor=amdDashBg, text_size=size.tiny)
+table.cell(syncDash, 2, 11, amdM5Txt, text_color=color.white, bgcolor=amdM5Bg, text_size=size.tiny)
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// ALERTES V44 — synchronisées Trade Engine
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+if tradeGoBuy
+    alert("V44 GO BUY " + syminfo.ticker + " | Entry " + str.tostring(close), alert.freq_once_per_bar_close)
+
+if tradeGoSell
+    alert("V44 GO SELL " + syminfo.ticker + " | Entry " + str.tostring(close), alert.freq_once_per_bar_close)
+
+// [S1] alertcondition(tradeGoBuy, title="V44 GO BUY", message="V44 GO BUY — entrée réelle détectée")
+// [S1] alertcondition(tradeGoSell, title="V44 GO SELL", message="V44 GO SELL — entrée réelle détectée")

@@ -1,0 +1,197 @@
+//@version=5
+// ============================================================================
+// Rebond VWAP dans la tendance SMA 200 — V0.2 (stratégie de laboratoire M15)
+// ----------------------------------------------------------------------------
+// Règles figées avant le premier backtest :
+//   * Graphique 15 minutes.
+//   * Achat si le prix est au-dessus de la SMA 200, revient toucher le VWAP
+//     depuis le dessus, puis clôture au-dessus du VWAP.
+//   * Vente : règle symétrique sous la SMA 200 et sous le VWAP.
+//   * Une seule entrée par session : Londres 08:00-11:00 (heure de Londres)
+//     et New York 09:30-12:00 (heure de New York).
+//   * Stop fixe à 1 ATR(14), objectif fixe à 1,5 R.
+//   * Sortie forcée sur la dernière bougie de la session.
+//   * Taille de test : 10 % du capital, marge explicitée à 100 %.
+//
+// Les fuseaux Europe/London et America/New_York gèrent les changements d'heure.
+// TradingView est seul juge de la compilation. Ce fichier n'a pas encore été
+// compilé dans TradingView.
+// ============================================================================
+
+SCRIPT_VERSION = "VWAP-SMA200-SESSIONS V0.2"
+
+strategy("VWAP + SMA 200 — sessions V0.2", shorttitle="VWAP SMA200 V0.2",
+     overlay=true,
+     initial_capital=10000,
+     default_qty_type=strategy.percent_of_equity,
+     default_qty_value=10,
+     pyramiding=0,
+     margin_long=100,
+     margin_short=100,
+     calc_on_every_tick=false,
+     process_orders_on_close=true,
+     commission_type=strategy.commission.percent,
+     commission_value=0.02,
+     slippage=2,
+     max_labels_count=200)
+
+// ==========================================
+// 1. RÉGLAGES
+// ==========================================
+grp_sig = "Signal"
+sma_len  = input.int(200, "SMA de tendance", minval=20, group=grp_sig)
+atr_len  = input.int(14, "ATR : période", minval=2, group=grp_sig)
+stop_atr = input.float(1.0, "Stop en ATR", minval=0.1, step=0.1, group=grp_sig)
+target_r = input.float(1.5, "Objectif en R", minval=0.5, step=0.1, group=grp_sig)
+
+grp_ses = "Sessions"
+session_london = input.session("0800-1100:23456", "Londres", group=grp_ses)
+session_ny     = input.session("0930-1200:23456", "New York", group=grp_ses)
+
+grp_test = "Période de test"
+use_range = input.bool(false, "Limiter le test à une période", group=grp_test)
+t_start   = input.time(timestamp("2023-01-01 00:00"), "Début", group=grp_test)
+t_end     = input.time(timestamp("2026-12-31 23:59"), "Fin", group=grp_test)
+
+grp_ui = "Affichage"
+show_sessions = input.bool(true, "Colorer les sessions", group=grp_ui)
+show_signals  = input.bool(true, "Afficher les signaux", group=grp_ui)
+show_table    = input.bool(true, "Afficher le diagnostic", group=grp_ui)
+
+// ==========================================
+// 2. INDICATEURS ET SESSIONS
+// ==========================================
+sma200 = ta.sma(close, sma_len)
+vwap_d = ta.vwap(hlc3)
+atr_v  = ta.atr(atr_len)
+
+in_london = not na(time(timeframe.period, session_london, "Europe/London"))
+in_ny     = not na(time(timeframe.period, session_ny, "America/New_York"))
+in_session = in_london or in_ny
+in_range   = not use_range or (time >= t_start and time <= t_end)
+
+start_london = in_london and not in_london[1]
+start_ny     = in_ny and not in_ny[1]
+
+// La bougie 10:45-11:00 de Londres et la bougie 11:45-12:00 de New York
+// sont les dernières bougies autorisées de leur session respective.
+last_london_bar = in_london and hour(time_close, "Europe/London") == 11 and minute(time_close, "Europe/London") == 0
+last_ny_bar     = in_ny and hour(time_close, "America/New_York") == 12 and minute(time_close, "America/New_York") == 0
+last_session_bar = last_london_bar or last_ny_bar
+
+plot(sma200, "SMA 200", color=color.white, linewidth=2)
+plot(vwap_d, "VWAP journalier", color=color.aqua, linewidth=2)
+bgcolor(show_sessions and in_london ? color.new(color.blue, 91) : na, title="Session Londres")
+bgcolor(show_sessions and in_ny ? color.new(color.purple, 91) : na, title="Session New York")
+
+// ==========================================
+// 3. REBONDS VWAP
+// ==========================================
+// Le prix était du bon côté du VWAP sur la bougie précédente, le touche sur
+// la bougie courante, puis clôture de nouveau du côté de la tendance.
+long_bounce = close > sma200 and close[1] > vwap_d[1] and low <= vwap_d and close > vwap_d
+short_bounce = close < sma200 and close[1] < vwap_d[1] and high >= vwap_d and close < vwap_d
+
+var bool london_trade_fait = false
+var bool ny_trade_fait = false
+var int cnt_bougies_session = 0
+var int cnt_rebonds_long = 0
+var int cnt_rebonds_short = 0
+var int cnt_signaux = 0
+
+if in_session
+    cnt_bougies_session += 1
+if in_session and long_bounce
+    cnt_rebonds_long += 1
+if in_session and short_bounce
+    cnt_rebonds_short += 1
+
+if start_london
+    london_trade_fait := false
+if start_ny
+    ny_trade_fait := false
+
+session_disponible = (in_london and not london_trade_fait) or (in_ny and not ny_trade_fait)
+entree_autorisee = barstate.isconfirmed and timeframe.isminutes and timeframe.multiplier == 15 and in_range and in_session and not last_session_bar and session_disponible and strategy.position_size == 0
+
+signal_long  = entree_autorisee and long_bounce
+signal_short = entree_autorisee and short_bounce
+
+if signal_long or signal_short
+    cnt_signaux += 1
+
+var float prix_stop = na
+var float prix_cible = na
+
+if signal_long
+    risque = atr_v * stop_atr
+    prix_stop := close - risque
+    prix_cible := close + risque * target_r
+    strategy.entry("LONG", strategy.long)
+    strategy.exit("SORTIE LONG", "LONG", stop=prix_stop, limit=prix_cible)
+    if in_london
+        london_trade_fait := true
+    if in_ny
+        ny_trade_fait := true
+
+if signal_short
+    risque = atr_v * stop_atr
+    prix_stop := close + risque
+    prix_cible := close - risque * target_r
+    strategy.entry("SHORT", strategy.short)
+    strategy.exit("SORTIE SHORT", "SHORT", stop=prix_stop, limit=prix_cible)
+    if in_london
+        london_trade_fait := true
+    if in_ny
+        ny_trade_fait := true
+
+// Maintient les niveaux fixes pendant toute la position.
+if strategy.position_size > 0
+    strategy.exit("SORTIE LONG", "LONG", stop=prix_stop, limit=prix_cible)
+if strategy.position_size < 0
+    strategy.exit("SORTIE SHORT", "SHORT", stop=prix_stop, limit=prix_cible)
+
+// Aucune position n'est conservée après la session.
+if strategy.position_size != 0 and last_session_bar
+    strategy.close_all(comment="Fin de session")
+
+if strategy.position_size == 0 and strategy.position_size[1] != 0
+    prix_stop := na
+    prix_cible := na
+
+plot(strategy.position_size != 0 ? prix_stop : na, "Stop", color=color.red, style=plot.style_linebr)
+plot(strategy.position_size != 0 ? prix_cible : na, "Objectif 1,5 R", color=color.lime, style=plot.style_linebr)
+plotshape(show_signals and signal_long, "Achat", shape.triangleup, location.belowbar, color.lime, size=size.tiny, text="ACHAT")
+plotshape(show_signals and signal_short, "Vente", shape.triangledown, location.abovebar, color.red, size=size.tiny, text="VENTE")
+
+// ==========================================
+// 4. TABLEAU DE DIAGNOSTIC
+// ==========================================
+var table dash = table.new(position.top_right, 2, 11, border_width=1)
+if show_table and barstate.islast
+    bon_tf = timeframe.isminutes and timeframe.multiplier == 15
+    table.cell(dash, 0, 0, "Version", text_color=color.white, bgcolor=color.new(color.gray, 30))
+    table.cell(dash, 1, 0, SCRIPT_VERSION, text_color=color.white, bgcolor=color.new(color.gray, 30))
+    table.cell(dash, 0, 1, "Unité", text_color=color.white)
+    table.cell(dash, 1, 1, bon_tf ? "15 min (OK)" : "RÉGLER SUR 15 MIN", text_color=bon_tf ? color.lime : color.red)
+    table.cell(dash, 0, 2, "Trades clôturés", text_color=color.white)
+    table.cell(dash, 1, 2, str.tostring(strategy.closedtrades), text_color=color.white)
+    table.cell(dash, 0, 3, "Londres", text_color=color.white)
+    table.cell(dash, 1, 3, "08:00-11:00 locale", text_color=color.white)
+    table.cell(dash, 0, 4, "New York", text_color=color.white)
+    table.cell(dash, 1, 4, "09:30-12:00 locale", text_color=color.white)
+    table.cell(dash, 0, 5, "Stop / objectif", text_color=color.white)
+    table.cell(dash, 1, 5, str.tostring(stop_atr, "#.#") + " ATR / " + str.tostring(target_r, "#.#") + " R", text_color=color.white)
+    table.cell(dash, 0, 6, "VWAP disponible", text_color=color.white)
+    table.cell(dash, 1, 6, na(vwap_d) ? "NON" : "OUI", text_color=na(vwap_d) ? color.red : color.lime)
+    table.cell(dash, 0, 7, "Bougies en session", text_color=color.white)
+    table.cell(dash, 1, 7, str.tostring(cnt_bougies_session), text_color=color.white)
+    table.cell(dash, 0, 8, "Rebonds achat / vente", text_color=color.white)
+    table.cell(dash, 1, 8, str.tostring(cnt_rebonds_long) + " / " + str.tostring(cnt_rebonds_short), text_color=color.white)
+    table.cell(dash, 0, 9, "Signaux autorisés", text_color=color.white)
+    table.cell(dash, 1, 9, str.tostring(cnt_signaux), text_color=cnt_signaux > 0 ? color.lime : color.orange)
+    table.cell(dash, 0, 10, "Position", text_color=color.white)
+    table.cell(dash, 1, 10, strategy.position_size > 0 ? "ACHAT" : strategy.position_size < 0 ? "VENTE" : "À PLAT", text_color=color.white)
+
+
+

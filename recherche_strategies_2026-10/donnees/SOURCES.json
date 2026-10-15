@@ -1,0 +1,45 @@
+{
+  "recupere_le": "2026-10-14 21:59 UTC",
+  "actifs": {
+    "XAUUSD": {
+      "symbole": "OANDA:XAUUSD",
+      "barres": 9200
+    },
+    "SPX500": {
+      "symbole": "SP:SPX",
+      "barres": 9263
+    },
+    "US100": {
+      "symbole": "NASDAQ:NDX",
+      "barres": 9264
+    },
+    "GER40": {
+      "symbole": "XETR:DAX",
+      "barres": 9304
+    },
+    "FR40": {
+      "symbole": "TVC:CAC40",
+      "barres": 9331
+    },
+    "EURUSD": {
+      "symbole": "FX_IDC:EURUSD",
+      "barres": 9577
+    },
+    "USDJPY": {
+      "symbole": "FX_IDC:USDJPY",
+      "barres": 9575
+    },
+    "USOIL": {
+      "symbole": "NYMEX:CL1!",
+      "barres": 9246
+    },
+    "NATGAS": {
+      "symbole": "NYMEX:NG1!",
+      "barres": 9182
+    },
+    "BTCUSD": {
+      "symbole": "BITSTAMP:BTCUSD",
+      "barres": 5504
+    }
+  }
+}

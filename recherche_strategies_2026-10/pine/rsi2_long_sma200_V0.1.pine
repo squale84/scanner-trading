@@ -1,0 +1,103 @@
+//@version=5
+// ============================================================================
+// RSI(2) de Connors — long seulement, filtre SMA 200 — V0.1 (stratégie de TEST, journalière)
+// ----------------------------------------------------------------------------
+// Candidate 5 de l'étude du 15/10/2026 (PROTOCOLE_FIGE.md). Règles IDENTIQUES au moteur Python :
+//   * ACHAT à la CLÔTURE du jour si : clôture > SMA 200 jours ET RSI(2) de Wilder < 5, sans position.
+//   * SORTIE à la CLÔTURE du premier jour où la clôture repasse AU-DESSUS de la SMA 5 jours.
+//   * Long seulement, 1x (aucun levier), AUCUN stop, AUCUNE sortie sur durée.
+// À utiliser sur graphique 1 JOUR : SP:SPX, NASDAQ:NDX, XETR:DAX, TVC:CAC40 (les 4 indices testés).
+//
+// Conventions de frais (B7.1) : capital 10 000 · commission 0,02 % par côté · glissement 2 ticks.
+// ATTENTION : TradingView ne calcule PAS le swap (financement overnight d'un CFD). Le moteur Python en tient
+// compte (≈ 2,3 pb par nuit sur un indice long, soit ≈ 8 pb par trade de 3 à 4 jours). Le tableau ci-dessous
+// affiche une estimation du swap à retrancher.
+// NB Pine v5 : commission et glissement doivent être des constantes fixes dans strategy().
+// NON COMPILÉ dans TradingView à la livraison : TradingView est seul juge de la compilation.
+// ============================================================================
+SCRIPT_VERSION = "RSI2-LONG-SMA200 V0.1"
+
+strategy("RSI(2) long + SMA 200 — test V0.1", shorttitle="RSI2 V0.1", overlay=true,
+     initial_capital=10000,
+     default_qty_type=strategy.percent_of_equity,
+     default_qty_value=100,
+     pyramiding=1,
+     margin_long=0, margin_short=0,
+     calc_on_every_tick=false,
+     process_orders_on_close=true,
+     commission_type=strategy.commission.percent,
+     commission_value=0.02,
+     slippage=2,
+     max_labels_count=100)
+
+// ==========================================
+// 1. RÉGLAGES (valeurs de la littérature, non optimisées)
+// ==========================================
+grp_sig = "Signal"
+rsi_len   = input.int(2, title="RSI : période (Wilder)", minval=2, maxval=14, group=grp_sig)
+rsi_thr   = input.float(5.0, title="Achat si RSI <", minval=1.0, maxval=30.0, step=0.5, group=grp_sig)
+trend_len = input.int(200, title="Filtre de tendance : SMA (jours)", minval=20, maxval=400, group=grp_sig)
+exit_len  = input.int(5, title="Sortie : SMA (jours)", minval=2, maxval=50, group=grp_sig)
+
+grp_fr = "Estimation du swap (information, non appliquée au résultat)"
+swap_nuit = input.float(0.0233, title="Swap long par nuit (% du nominal)", minval=0.0, step=0.001, group=grp_fr)
+
+grp_rg = "Période de test"
+use_range = input.bool(false, title="Limiter le test à une période", group=grp_rg)
+t_start   = input.time(timestamp("1991-01-01 00:00"), title="Début", group=grp_rg)
+t_end     = input.time(timestamp("2023-09-30 23:59"), title="Fin", group=grp_rg)
+
+grp_ui = "Affichage"
+show_table = input.bool(true, title="Afficher le tableau de diagnostic", group=grp_ui)
+
+// ==========================================
+// 2. INDICATEURS ET SIGNAUX
+// ==========================================
+rsi_v    = ta.rsi(close, rsi_len)      // RSI de Wilder (RMA)
+sma_t    = ta.sma(close, trend_len)
+sma_x    = ta.sma(close, exit_len)
+in_range = not use_range or (time >= t_start and time <= t_end)
+
+plot(sma_t, title="SMA tendance", color=color.white, linewidth=2)
+plot(sma_x, title="SMA sortie", color=color.orange, linewidth=1)
+
+buy_sig  = barstate.isconfirmed and in_range and close > sma_t and rsi_v < rsi_thr
+exit_sig = barstate.isconfirmed and close > sma_x
+
+// ==========================================
+// 3. ORDRES (exécutés à la clôture de la bougie du signal)
+// ==========================================
+if strategy.position_size == 0 and buy_sig
+    strategy.entry("RSI2", strategy.long)
+if strategy.position_size > 0 and exit_sig
+    strategy.close("RSI2", comment="Sortie SMA " + str.tostring(exit_len))
+
+plotshape(buy_sig and strategy.position_size == 0, title="Achat", style=shape.triangleup,
+     location=location.belowbar, color=color.lime, size=size.tiny)
+
+// ==========================================
+// 4. TABLEAU DE DIAGNOSTIC
+// ==========================================
+var table dash = table.new(position.top_right, 2, 7, border_width=1)
+if show_table and barstate.islast
+    n = strategy.closedtrades
+    float tot_bars = 0.0
+    if n > 0
+        for i = 0 to n - 1
+            tot_bars += strategy.closedtrades.exit_bar_index(i) - strategy.closedtrades.entry_bar_index(i)
+    avg_bars = n > 0 ? tot_bars / n : 0.0
+    swap_est = avg_bars * swap_nuit
+    table.cell(dash, 0, 0, "Version", text_color=color.white, bgcolor=color.new(color.gray, 30))
+    table.cell(dash, 1, 0, SCRIPT_VERSION, text_color=color.white, bgcolor=color.new(color.gray, 30))
+    table.cell(dash, 0, 1, "Trades", text_color=color.white, bgcolor=color.new(color.gray, 30))
+    table.cell(dash, 1, 1, str.tostring(n), text_color=color.white, bgcolor=color.new(color.gray, 30))
+    table.cell(dash, 0, 2, "Durée moy. (jours de bourse)", text_color=color.white, bgcolor=color.new(color.gray, 30))
+    table.cell(dash, 1, 2, str.tostring(avg_bars, "#.#"), text_color=color.white, bgcolor=color.new(color.gray, 30))
+    table.cell(dash, 0, 3, "Swap estimé / trade (%)", text_color=color.white, bgcolor=color.new(color.gray, 30))
+    table.cell(dash, 1, 3, str.tostring(swap_est, "#.##"), text_color=color.white, bgcolor=color.new(color.gray, 30))
+    table.cell(dash, 0, 4, "Gain moyen / trade (%)", text_color=color.white, bgcolor=color.new(color.gray, 30))
+    table.cell(dash, 1, 4, str.tostring(n > 0 ? 100.0 * strategy.netprofit / strategy.initial_capital / n : 0.0, "#.##"), text_color=color.white, bgcolor=color.new(color.gray, 30))
+    table.cell(dash, 0, 5, "Timeframe", text_color=color.white, bgcolor=color.new(color.gray, 30))
+    table.cell(dash, 1, 5, timeframe.isdaily ? "1 JOUR (OK)" : "RÉGLER SUR 1 JOUR", text_color=timeframe.isdaily ? color.lime : color.red, bgcolor=color.new(color.gray, 30))
+    table.cell(dash, 0, 6, "Swap non inclus", text_color=color.white, bgcolor=color.new(color.gray, 30))
+    table.cell(dash, 1, 6, "voir en-tête", text_color=color.white, bgcolor=color.new(color.gray, 30))

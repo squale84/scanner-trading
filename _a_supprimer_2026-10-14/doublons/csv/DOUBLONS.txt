@@ -1,0 +1,8 @@
+Copies exactes (SHA-256 identique) ; l'exemplaire conservé est dans etude_backtests_2026-10.
+P1_B72_OPEN_CONT_FX_USDJPY_NY_2026-09-26.csv          = radar_B7.2-LAB/Test1_W1_2026-09-27/Backtest_ICT_B7.2-LAB_FX_USDJPY_2026-09-27.csv
+P1_B72_OPEN_CONT_FOREXCOM_XAUUSD_NY_2026-09-26.csv    = radar_B7.2-LAB/Test1_W1_2026-09-27/Backtest_ICT_B7.2-LAB_FOREXCOM_XAUUSD_2026-09-27.csv
+P1_B72_OPEN_CONT_CAPITALCOM_GER40_NY_2026-09-26.csv   = radar_B7.2-LAB/Test1_W1_2026-09-27/Backtest_ICT_B7.2-LAB_CAPITALCOM_GER40_2026-09-27.csv
+P1_B71_OPEN_CONT_FOREXCOM_XAUUSD_NY_2026-09-26.csv    = radar_B7.1/Backtest_ICT_B7.1_FOREXCOM_XAUUSD_2026-09-26.csv
+Backtest_ICT_B7.1_FOREXCOM_XAUUSD_2026-10-04 (1).csv  = radar_B7.1/Backtest_ICT_B7.1_FOREXCOM_XAUUSD_2026-10-04.csv
+Backtest_ICT_B7.1_BASE_FOREXCOM_XAUUSD_2026-10-02.csv..csv = radar_B7.1/Backtest_ICT_B7.1_FOREXCOM_XAUUSD_2026-10-04.csv
+(le préfixe P1_..._OPEN_CONT_ est l'étiquette du test « ouverture / continuation »)

@@ -1,0 +1,133 @@
+//@version=5
+// ==========================================================================================
+// CASSURE RANGE V0.1 — stratégie de TEST (Strategy Tester), indépendante du Radar et de B7.1.
+// Idée : le prix casse le HAUT du range -> ACHAT ; il casse le BAS -> VENTE.
+// Cahier des charges : CAHIER_DES_CHARGES_CASSURE-RANGE_V0.1.md (à valider avant tout réglage).
+//
+// Conventions IDENTIQUES à B7.1 pour que la comparaison soit juste :
+//   capital 10 000 · commission 0,02 % · glissement 2 ticks · risque 1 % de l'équité par trade
+//   taille de position = risque / distance du stop · expiration à 30 bougies · ordres au close.
+// NB Pine v5 : commission et glissement doivent être des constantes fixes dans strategy().
+//
+// Pas de repaint : le range vient des N jours TERMINÉS (décalage [1], lookahead_on).
+// Non inclus dans la V0.1 (voir le cahier des charges) : retest, range asiatique, TP en hauteur de range.
+// ==========================================================================================
+SCRIPT_VERSION = "CASSURE-V0.1"
+
+// Version EN TÊTE du nom : la liste « Mes scripts » de TradingView coupe les noms trop longs.
+strategy("Cassure Range V0.1 — range journalier (test)", shorttitle="Cassure V0.1", overlay=true,
+     initial_capital=10000,
+     default_qty_type=strategy.percent_of_equity,
+     default_qty_value=100,
+     commission_type=strategy.commission.percent,
+     commission_value=0.02,
+     slippage=2,
+     process_orders_on_close=true,
+     margin_long=0,
+     margin_short=0,
+     max_labels_count=200, max_bars_back=1000)
+
+// ==========================================
+// 1. RÉGLAGES
+// ==========================================
+grp_r = "Cassure de range"
+rng_days  = input.int(5, title="Range : nombre de jours terminés", minval=1, maxval=30, group=grp_r)
+conf_mode = input.string("Clôture", title="Cassure confirmée par", options=["Clôture", "Mèche"], group=grp_r)
+conf_atr  = input.float(0.1, title="Marge de confirmation (x ATR)", minval=0.0, step=0.05, group=grp_r)
+
+grp_s = "Stop, sortie et risque"
+stop_mode   = input.string("Niveau cassé", title="Stop placé", options=["Niveau cassé", "Milieu du range"], group=grp_s)
+stop_atr    = input.float(0.5, title="Marge du stop au-delà du niveau (x ATR)", minval=0.1, step=0.1, group=grp_s)
+atr_cap     = input.float(2.5, title="Plafond du stop (x ATR)", minval=0.5, step=0.1, group=grp_s)
+atr_floor   = input.float(0.5, title="Plancher du stop (x ATR)", minval=0.1, step=0.1, group=grp_s)
+rr_ratio    = input.float(2.0, title="Take-profit (en R)", minval=0.5, step=0.5, group=grp_s)
+expiry_bars = input.int(30, title="Expiration (bougies)", minval=5, maxval=200, group=grp_s)
+risk_pct_in = input.float(1.0, title="Risque par trade (% équité)", minval=0.1, step=0.1, group=grp_s)
+
+// ==========================================
+// 2. RANGE JOURNALIER (N jours terminés, sans regard vers l'avenir)
+// ==========================================
+atr_val  = ta.atr(14)
+range_hi = request.security(syminfo.tickerid, "D", ta.highest(high, rng_days)[1], lookahead=barmerge.lookahead_on)
+range_lo = request.security(syminfo.tickerid, "D", ta.lowest(low, rng_days)[1], lookahead=barmerge.lookahead_on)
+range_mid = (range_hi + range_lo) / 2
+
+plot(range_hi, title="Haut du range", color=color.new(color.green, 15), linewidth=1, style=plot.style_linebr)
+plot(range_lo, title="Bas du range", color=color.new(color.red, 15), linewidth=1, style=plot.style_linebr)
+
+// ==========================================
+// 3. DÉTECTION DE LA CASSURE (franchissement : la bougie précédente était encore dedans)
+// ==========================================
+buf       = conf_atr * atr_val
+long_src  = conf_mode == "Clôture" ? close : high
+short_src = conf_mode == "Clôture" ? close : low
+
+fresh_up   = long_src > range_hi + buf and long_src[1] <= range_hi + buf
+fresh_down = short_src < range_lo - buf and short_src[1] >= range_lo - buf
+
+// Un seul trade par niveau cassé et par jour
+var bool long_done  = false
+var bool short_done = false
+if timeframe.change("D")
+    long_done  := false
+    short_done := false
+
+var int   last_entry_bar = -1
+var float pos_sl = na
+var float pos_tp = na
+var int   cnt_up   = 0
+var int   cnt_down = 0
+var int   cnt_trd  = 0
+
+data_ok = not na(range_hi) and not na(range_lo) and not na(atr_val) and atr_val > 0
+flat    = strategy.position_size == 0
+
+// ==========================================
+// 4. ENTRÉES (ordres au close, taille par risque fixe comme B7.1)
+// ==========================================
+if data_ok and fresh_up
+    cnt_up += 1
+if data_ok and fresh_down
+    cnt_down += 1
+
+if data_ok and flat and last_entry_bar != bar_index and not long_done and fresh_up
+    sl_raw = stop_mode == "Niveau cassé" ? range_hi - stop_atr * atr_val : range_mid
+    risk   = math.max(math.min(close - sl_raw, atr_cap * atr_val), atr_floor * atr_val)
+    pos_sl := close - risk
+    pos_tp := close + rr_ratio * risk
+    qty = (strategy.equity * (risk_pct_in / 100)) / risk
+    strategy.entry("Long", strategy.long, qty=qty, comment="CASSURE BUY")
+    strategy.exit("Exit Long", "Long", stop=pos_sl, limit=pos_tp)
+    last_entry_bar := bar_index
+    long_done := true
+    cnt_trd += 1
+    label.new(bar_index, low, "CASSURE BUY", color=color.new(color.green, 70), textcolor=color.black, style=label.style_label_up, size=size.tiny)
+
+if data_ok and flat and last_entry_bar != bar_index and not short_done and fresh_down
+    sl_raw = stop_mode == "Niveau cassé" ? range_lo + stop_atr * atr_val : range_mid
+    risk   = math.max(math.min(sl_raw - close, atr_cap * atr_val), atr_floor * atr_val)
+    pos_sl := close + risk
+    pos_tp := close - rr_ratio * risk
+    qty = (strategy.equity * (risk_pct_in / 100)) / risk
+    strategy.entry("Short", strategy.short, qty=qty, comment="CASSURE SELL")
+    strategy.exit("Exit Short", "Short", stop=pos_sl, limit=pos_tp)
+    last_entry_bar := bar_index
+    short_done := true
+    cnt_trd += 1
+    label.new(bar_index, high, "CASSURE SELL", color=color.new(color.red, 70), textcolor=color.black, style=label.style_label_down, size=size.tiny)
+
+// ==========================================
+// 5. SORTIE PAR EXPIRATION (le stop et le TP sont gérés par strategy.exit)
+// ==========================================
+if strategy.position_size != 0 and last_entry_bar >= 0 and (bar_index - last_entry_bar) >= expiry_bars
+    strategy.close(strategy.position_size > 0 ? "Long" : "Short", comment="EXPIRED")
+
+// ==========================================
+// 6. TABLEAU D'INFORMATION (version affichée en permanence)
+// ==========================================
+var table info = table.new(position.top_right, 1, 4, bgcolor=color.new(color.black, 15))
+if barstate.islast
+    table.cell(info, 0, 0, "Version " + SCRIPT_VERSION, text_color=color.yellow, text_size=size.small, text_halign=text.align_left)
+    table.cell(info, 0, 1, "Range " + str.tostring(rng_days) + " j · " + conf_mode, text_color=color.white, text_size=size.small, text_halign=text.align_left)
+    table.cell(info, 0, 2, "Stop " + stop_mode + " · TP " + str.tostring(rr_ratio, "#.#") + " R", text_color=color.white, text_size=size.small, text_halign=text.align_left)
+    table.cell(info, 0, 3, "Cassures haut " + str.tostring(cnt_up) + " · bas " + str.tostring(cnt_down) + " · trades " + str.tostring(cnt_trd), text_color=color.white, text_size=size.small, text_halign=text.align_left)

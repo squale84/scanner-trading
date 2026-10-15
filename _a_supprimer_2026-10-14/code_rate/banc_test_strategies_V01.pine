@@ -1,0 +1,162 @@
+//@version=5
+// ============================================================================
+// BANC DE TEST — 3 stratégies intraday simples, paramètres FIGÉS (V0.1)
+// Objectif : comparer sur les mêmes bases (coût, risque, stop, objectif).
+// Mode 1 : ORB  (cassure des 30 premières minutes de Londres / New York)
+// Mode 2 : Croisement EMA 9/21 + filtre RSI 50
+// Mode 3 : MACD 12/26/9 + EMA200
+// Coût : 0.2 par côté et par once = 0.4 $ aller-retour, calibré pour XAUUSD.
+//        Sur un autre actif ce coût n'est PAS représentatif (voir note livrée).
+// Ce script n'est pas une preuve : c'est un outil de comparaison.
+// ============================================================================
+strategy("BANC TEST V0.1", shorttitle="BANC-V0.1", overlay=true,
+     initial_capital=200, currency=currency.EUR, pyramiding=0,
+     commission_type=strategy.commission.cash_per_contract, commission_value=0.2,
+     calc_on_every_tick=false, process_orders_on_close=false)
+
+SCRIPT_VERSION = "BANC V0.1"
+
+// ---------------- Entrées ----------------
+mode      = input.string("1 - ORB", "Stratégie", options=["1 - ORB", "2 - EMA + RSI", "3 - MACD + EMA200"])
+tz        = input.string("Europe/Paris", "Fuseau horaire")
+qty_units = input.float(1.0, "Quantité (unités, 1 = 1 oz or)", minval=0.01)
+risk_max  = input.float(22.0, "Perte max par trade (devise du graphique)", minval=1.0)
+tp_r      = input.float(2.0, "Objectif en multiples du risque (R)", minval=0.5)
+
+grp1 = "ORB"
+orb_a_h  = input.int(9,  "Session A — heure début", minval=0, maxval=23, group=grp1)
+orb_a_m  = input.int(0,  "Session A — minute début", minval=0, maxval=59, group=grp1)
+orb_b_h  = input.int(15, "Session B — heure début", minval=0, maxval=23, group=grp1)
+orb_b_m  = input.int(30, "Session B — minute début", minval=0, maxval=59, group=grp1)
+rng_min  = input.int(30, "Durée de la zone (min)", minval=5, group=grp1)
+ent_min  = input.int(120, "Fenêtre d'entrée après la zone (min)", minval=5, group=grp1)
+hold_min = input.int(240, "Sortie forcée après le début (min)", minval=30, group=grp1)
+
+grp2 = "EMA + RSI / MACD"
+atr_len  = input.int(14, "ATR période", group=grp2)
+atr_mult = input.float(1.5, "Stop = ATR ×", group=grp2)
+win_s_h  = input.int(9,  "Entrées autorisées dès (heure)", minval=0, maxval=23, group=grp2)
+win_e_h  = input.int(20, "Entrées autorisées jusqu'à (heure)", minval=0, maxval=23, group=grp2)
+flat_h   = input.int(21, "Tout fermer à (heure)", minval=0, maxval=23, group=grp2)
+
+// ---------------- Temps ----------------
+int mod = hour(time, tz) * 60 + minute(time, tz)   // minutes depuis minuit (fuseau choisi)
+int sa  = orb_a_h * 60 + orb_a_m
+int sb  = orb_b_h * 60 + orb_b_m
+
+// ---------------- Etat commun ----------------
+var float sl_px = na
+var float tp_px = na
+
+atr_v = ta.atr(atr_len)
+
+// ---------------- Mode 1 : ORB ----------------
+int sess_id = 0
+int sess_start = 0
+if mod >= sa and mod < sa + hold_min
+    sess_id := 1
+    sess_start := sa
+else if mod >= sb and mod < sb + hold_min
+    sess_id := 2
+    sess_start := sb
+
+var float rng_hi = na
+var float rng_lo = na
+var bool  traded = false
+
+new_sess = sess_id > 0 and (sess_id != nz(sess_id[1]))
+if new_sess
+    rng_hi := high
+    rng_lo := low
+    traded := false
+else if sess_id > 0 and mod < sess_start + rng_min
+    rng_hi := math.max(rng_hi, high)
+    rng_lo := math.min(rng_lo, low)
+
+bool in_entry = sess_id > 0 and mod >= sess_start + rng_min and mod < sess_start + rng_min + ent_min
+
+bool go_long  = false
+bool go_short = false
+float new_sl = na
+float new_tp = na
+
+if mode == "1 - ORB" and in_entry and not traded and strategy.position_size == 0 and not na(rng_hi)
+    if close > rng_hi
+        d = close - rng_lo
+        traded := true
+        if d * qty_units <= risk_max
+            go_long := true
+            new_sl := rng_lo
+            new_tp := close + tp_r * d
+    else if close < rng_lo
+        d = rng_hi - close
+        traded := true
+        if d * qty_units <= risk_max
+            go_short := true
+            new_sl := rng_hi
+            new_tp := close - tp_r * d
+
+// ---------------- Modes 2 et 3 ----------------
+bool in_win = mod >= win_s_h * 60 and mod < win_e_h * 60
+
+ema_f = ta.ema(close, 9)
+ema_s = ta.ema(close, 21)
+rsi_v = ta.rsi(close, 14)
+[macd_l, macd_s, macd_h] = ta.macd(close, 12, 26, 9)
+ema200 = ta.ema(close, 200)
+
+bool sig_long  = false
+bool sig_short = false
+if mode == "2 - EMA + RSI"
+    sig_long  := ta.crossover(ema_f, ema_s) and rsi_v > 50
+    sig_short := ta.crossunder(ema_f, ema_s) and rsi_v < 50
+else if mode == "3 - MACD + EMA200"
+    sig_long  := ta.crossover(macd_l, macd_s) and macd_l < 0 and close > ema200
+    sig_short := ta.crossunder(macd_l, macd_s) and macd_l > 0 and close < ema200
+
+if mode != "1 - ORB" and in_win and strategy.position_size == 0 and not na(atr_v)
+    d = atr_mult * atr_v
+    if d * qty_units <= risk_max
+        if sig_long
+            go_long := true
+            new_sl := close - d
+            new_tp := close + tp_r * d
+        else if sig_short
+            go_short := true
+            new_sl := close + d
+            new_tp := close - tp_r * d
+
+// ---------------- Ordres ----------------
+if go_long
+    sl_px := new_sl
+    tp_px := new_tp
+    strategy.entry("L", strategy.long, qty=qty_units)
+if go_short
+    sl_px := new_sl
+    tp_px := new_tp
+    strategy.entry("S", strategy.short, qty=qty_units)
+
+if not na(sl_px) and not na(tp_px)
+    strategy.exit("XL", "L", stop=sl_px, limit=tp_px)
+    strategy.exit("XS", "S", stop=sl_px, limit=tp_px)
+
+// Sortie forcée : fin de session (mode 1) ou heure de clôture (modes 2 et 3)
+bool force_flat = mode == "1 - ORB" ? (sess_id == 0) : (mod >= flat_h * 60)
+if force_flat and strategy.position_size != 0
+    strategy.close_all(comment="Fin de session")
+
+if strategy.position_size == 0 and not (go_long or go_short)
+    sl_px := na
+    tp_px := na
+
+// ---------------- Affichage ----------------
+plot(mode == "1 - ORB" and sess_id > 0 ? rng_hi : na, "ORB haut", color=color.new(color.teal, 20), style=plot.style_linebr)
+plot(mode == "1 - ORB" and sess_id > 0 ? rng_lo : na, "ORB bas",  color=color.new(color.orange, 20), style=plot.style_linebr)
+plot(mode == "2 - EMA + RSI" ? ema_f : na, "EMA 9", color=color.new(color.blue, 0))
+plot(mode == "2 - EMA + RSI" ? ema_s : na, "EMA 21", color=color.new(color.purple, 0))
+plot(mode == "3 - MACD + EMA200" ? ema200 : na, "EMA 200", color=color.new(color.gray, 0))
+
+var table t = table.new(position.top_right, 1, 2, bgcolor=color.new(color.black, 20))
+if barstate.islast
+    table.cell(t, 0, 0, SCRIPT_VERSION, text_color=color.white, text_size=size.small)
+    table.cell(t, 0, 1, mode + " | coût 0.4 $/oz A-R (or)", text_color=color.white, text_size=size.small)

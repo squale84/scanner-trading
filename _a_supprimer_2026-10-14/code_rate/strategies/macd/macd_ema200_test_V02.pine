@@ -1,0 +1,224 @@
+//@version=5
+// ============================================================================
+// MACD + EMA200 — V0.2 (stratégie de TEST, indépendante de MTF-POI)
+// ----------------------------------------------------------------------------
+// Règles tirées de la vidéo « JE TESTE UNE STRATÉGIE MACD + EMA » (extrait transcrit) :
+//   * MACD 12 / 26 / 9 (clôture) et EMA 200.
+//   * ACHAT : la ligne MACD croise le signal à la hausse, SOUS la ligne zéro, prix AU-DESSUS de l'EMA 200.
+//   * VENTE : croisement à la baisse, AU-DESSUS de zéro, prix SOUS l'EMA 200.
+// NON DONNÉS dans l'extrait : stop loss, cible, unité de temps exacte, résultats.
+// Les réglages de stop et de cible ci-dessous sont des CHOIX DE TEST, pas ceux de la vidéo.
+// Ordres au marché à l'ouverture de la bougie suivant le signal (signal sur bougie clôturée).
+// V0.2 : frais = spread simulé, 0.2 $ par once et par côté = 0.4 $ aller-retour (lot 0.01 = 1 once).
+//        Pour changer : modifier commission_value dans strategy() (2 x spread / 2 = spread par côté).
+// À utiliser sur XAUUSD. NON COMPILÉ dans TradingView à la livraison.
+// ============================================================================
+SCRIPT_VERSION = "MACD-EMA200 V0.2"
+
+strategy("MACD + EMA200 — test V0.2", shorttitle="MACD-EMA200 V0.2", overlay=true,
+     initial_capital=222,
+     default_qty_type=strategy.fixed,
+     default_qty_value=1,
+     pyramiding=1,
+     margin_long=1, margin_short=1,
+     calc_on_every_tick=false,
+     commission_type=strategy.commission.cash_per_contract,
+     commission_value=0.2,
+     max_labels_count=100)
+
+// ==========================================
+// 1. RÉGLAGES
+// ==========================================
+grp_sig = "Signal (règles de la vidéo)"
+macd_fast = input.int(12, title="MACD : rapide", minval=2, maxval=100, group=grp_sig)
+macd_slow = input.int(26, title="MACD : lente", minval=3, maxval=200, group=grp_sig)
+macd_sig  = input.int(9, title="MACD : signal", minval=2, maxval=100, group=grp_sig)
+ema_len   = input.int(200, title="EMA de tendance : période", minval=5, maxval=500, group=grp_sig)
+use_ema   = input.bool(true, title="Filtre EMA (achat au-dessus, vente en dessous)", group=grp_sig)
+use_zero  = input.bool(true, title="Filtre zéro (achat sous zéro, vente au-dessus de zéro)", group=grp_sig)
+
+grp_sl = "Stop et cible (CHOIX DE TEST)"
+sl_mode    = input.string("ATR", title="Mode du stop", options=["ATR", "Swing"], group=grp_sl)
+atr_len    = input.int(14, title="ATR : période", minval=2, maxval=100, group=grp_sl)
+atr_mult   = input.float(1.5, title="Stop ATR : multiple de l'ATR", minval=0.2, maxval=10.0, step=0.1, group=grp_sl)
+swing_lb   = input.int(10, title="Stop Swing : plus bas/haut des N bougies", minval=2, maxval=100, group=grp_sl)
+sl_margin  = input.float(0.3, title="Stop Swing : marge ($)", minval=0.0, maxval=10.0, step=0.1, group=grp_sl)
+tp_r       = input.float(2.0, title="Cible : multiple de R (1 = 1:1, 2 = 1:2)", minval=0.5, maxval=10.0, step=0.5, group=grp_sl)
+exit_opp   = input.bool(false, title="Sortir aussi sur croisement inverse", group=grp_sl)
+
+grp_sz = "Taille de position (XTB, hypothèses à vérifier)"
+lot_fixed    = input.float(0.01, title="Lot fixe", minval=0.01, maxval=1.0, step=0.01, group=grp_sz)
+risk_max_eur = input.float(20.0, title="Perte maximale par trade (EUR) : au-delà, trade refusé", minval=1.0, maxval=200.0, step=1.0, group=grp_sz)
+oz_per_lot   = input.float(100.0, title="HYPOTHESE : onces par lot", minval=1.0, maxval=1000.0, group=grp_sz)
+eur_per_usd  = input.float(0.9, title="HYPOTHESE : EUR pour 1 USD", minval=0.5, maxval=1.5, step=0.01, group=grp_sz)
+
+grp_rg = "Période de test"
+use_range = input.bool(false, title="Limiter le test à une période", group=grp_rg)
+t_start   = input.time(timestamp("2026-09-01 00:00"), title="Début", group=grp_rg)
+t_end     = input.time(timestamp("2026-10-31 23:59"), title="Fin", group=grp_rg)
+
+grp_ui = "Affichage"
+show_table = input.bool(true, title="Afficher le tableau de diagnostic", group=grp_ui)
+show_sig   = input.bool(true, title="Flèches sur les signaux retenus", group=grp_ui)
+
+// ==========================================
+// 2. INDICATEURS ET SIGNAUX
+// ==========================================
+[macd_l, sig_l, hist_l] = ta.macd(close, macd_fast, macd_slow, macd_sig)
+ema_v   = ta.ema(close, ema_len)
+atr_v   = ta.atr(atr_len)
+swing_lo = ta.lowest(low, swing_lb)
+swing_hi = ta.highest(high, swing_lb)
+
+cross_up = ta.crossover(macd_l, sig_l)
+cross_dn = ta.crossunder(macd_l, sig_l)
+in_range = not use_range or (time >= t_start and time <= t_end)
+
+zero_buy  = not use_zero or macd_l < 0
+zero_sell = not use_zero or macd_l > 0
+ema_buy   = not use_ema or close > ema_v
+ema_sell  = not use_ema or close < ema_v
+
+plot(ema_v, title="EMA tendance", color=color.white, linewidth=2)
+
+// Distance du stop (en $) pour une entrée au cours actuel.
+f_dist(is_long) =>
+    float d = na
+    if sl_mode == "ATR"
+        d := atr_mult * atr_v
+    else
+        d := is_long ? close - swing_lo + sl_margin : swing_hi - close + sl_margin
+    d
+
+// Lot retenu : lot fixe, ou 0 (refusé) si la perte au stop dépasse la perte maximale.
+f_lot(dist) =>
+    float lot = 0.0
+    if dist > 0
+        loss_eur = dist * oz_per_lot * eur_per_usd * lot_fixed
+        if loss_eur <= risk_max_eur + 0.000000001
+            lot := lot_fixed
+    lot
+
+// ==========================================
+// 3. ORDRES
+// ==========================================
+var int n_up = 0
+var int n_up_zero = 0
+var int n_up_ok = 0
+var int n_up_busy = 0
+var int n_up_ref = 0
+var int n_dn = 0
+var int n_dn_zero = 0
+var int n_dn_ok = 0
+var int n_dn_busy = 0
+var int n_dn_ref = 0
+var float trade_dist = na
+
+flat = strategy.position_size == 0
+bool ok_buy = false
+bool ok_sell = false
+
+if cross_up and in_range
+    n_up += 1
+    if zero_buy
+        n_up_zero += 1
+        if ema_buy
+            n_up_ok += 1
+            ok_buy := true
+            if not flat
+                n_up_busy += 1
+            else
+                dist_b = f_dist(true)
+                lot_b = f_lot(dist_b)
+                if lot_b == 0
+                    n_up_ref += 1
+                else
+                    trade_dist := dist_b
+                    strategy.entry("L", strategy.long, qty=lot_b * oz_per_lot)
+
+if cross_dn and in_range
+    n_dn += 1
+    if zero_sell
+        n_dn_zero += 1
+        if ema_sell
+            n_dn_ok += 1
+            ok_sell := true
+            if not flat
+                n_dn_busy += 1
+            else
+                dist_s = f_dist(false)
+                lot_s = f_lot(dist_s)
+                if lot_s == 0
+                    n_dn_ref += 1
+                else
+                    trade_dist := dist_s
+                    strategy.entry("S", strategy.short, qty=lot_s * oz_per_lot)
+
+// Stop et cible attachés à la position ouverte (calculés sur le prix d'entrée réel).
+if strategy.position_size > 0 and not na(trade_dist)
+    strategy.exit("XL", from_entry="L", stop=strategy.position_avg_price - trade_dist, limit=strategy.position_avg_price + tp_r * trade_dist)
+if strategy.position_size < 0 and not na(trade_dist)
+    strategy.exit("XS", from_entry="S", stop=strategy.position_avg_price + trade_dist, limit=strategy.position_avg_price - tp_r * trade_dist)
+
+// Sortie optionnelle sur croisement inverse.
+if exit_opp and strategy.position_size > 0 and cross_dn
+    strategy.close("L", comment="croisement inverse")
+if exit_opp and strategy.position_size < 0 and cross_up
+    strategy.close("S", comment="croisement inverse")
+
+plotshape(show_sig and ok_buy, title="Signal achat", style=shape.triangleup, location=location.belowbar, color=color.new(color.lime, 0), size=size.small)
+plotshape(show_sig and ok_sell, title="Signal vente", style=shape.triangledown, location=location.abovebar, color=color.new(color.red, 0), size=size.small)
+
+// ==========================================
+// 4. TABLEAU DE DIAGNOSTIC
+// ==========================================
+var table dbg = table.new(position.top_right, 3, 14, border_color=color.gray, border_width=1, bgcolor=color.new(color.black, 15))
+f_cell(col, row, txt, tcol) =>
+    table.cell(dbg, col, row, txt, text_color=tcol, text_size=size.small, text_halign=text.align_left)
+
+if barstate.islast and show_table
+    closed_n = strategy.closedtrades
+    wins_n = strategy.wintrades
+    net_usd = strategy.netprofit
+    f_cell(0, 0, SCRIPT_VERSION, color.yellow)
+    f_cell(1, 0, "ACHAT", color.lime)
+    f_cell(2, 0, "VENTE", color.red)
+    f_cell(0, 1, "Croisements MACD / signal", color.white)
+    f_cell(1, 1, str.tostring(n_up), color.white)
+    f_cell(2, 1, str.tostring(n_dn), color.white)
+    f_cell(0, 2, "Après filtre zéro", color.white)
+    f_cell(1, 2, str.tostring(n_up_zero), color.white)
+    f_cell(2, 2, str.tostring(n_dn_zero), color.white)
+    f_cell(0, 3, "Après filtre EMA (signaux retenus)", color.white)
+    f_cell(1, 3, str.tostring(n_up_ok), color.white)
+    f_cell(2, 3, str.tostring(n_dn_ok), color.white)
+    f_cell(0, 4, "Ignorés : position déjà ouverte", color.white)
+    f_cell(1, 4, str.tostring(n_up_busy), color.white)
+    f_cell(2, 4, str.tostring(n_dn_busy), color.white)
+    f_cell(0, 5, "Refusés : perte > max", color.white)
+    f_cell(1, 5, str.tostring(n_up_ref), color.white)
+    f_cell(2, 5, str.tostring(n_dn_ref), color.white)
+    f_cell(0, 6, "--- Strategy Tester (TradingView) ---", color.yellow)
+    f_cell(1, 6, "", color.white)
+    f_cell(2, 6, "", color.white)
+    f_cell(0, 7, "Trades clôturés / gagnants", color.white)
+    f_cell(1, 7, str.tostring(closed_n), color.white)
+    f_cell(2, 7, str.tostring(wins_n), color.white)
+    f_cell(0, 8, "Win rate (%)", color.white)
+    f_cell(1, 8, closed_n > 0 ? str.tostring(wins_n / closed_n * 100, "0.0") : "-", color.white)
+    f_cell(2, 8, "", color.white)
+    f_cell(0, 9, "Profit factor", color.white)
+    f_cell(1, 9, strategy.grossloss > 0 ? str.tostring(strategy.grossprofit / strategy.grossloss, "0.00") : "-", color.white)
+    f_cell(2, 9, "", color.white)
+    f_cell(0, 10, "Résultat net ($ / EUR hyp.)", color.white)
+    f_cell(1, 10, str.tostring(net_usd, "0.00"), color.white)
+    f_cell(2, 10, str.tostring(net_usd * eur_per_usd, "0.00"), color.white)
+    f_cell(0, 11, "Drawdown max ($ / EUR)", color.white)
+    f_cell(1, 11, str.tostring(strategy.max_drawdown, "0.00"), color.white)
+    f_cell(2, 11, str.tostring(strategy.max_drawdown * eur_per_usd, "0.00"), color.white)
+    f_cell(0, 12, "UT du graphique", color.white)
+    f_cell(1, 12, timeframe.period, color.white)
+    f_cell(2, 12, "", color.white)
+    f_cell(0, 13, "Stop : " + sl_mode + " | cible : " + str.tostring(tp_r, "0.0") + " R" + " | frais 0.4$ A/R", color.white)
+    f_cell(1, 13, "", color.white)
+    f_cell(2, 13, "", color.white)

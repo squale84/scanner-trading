@@ -1,0 +1,1621 @@
+//@version=5
+// NB Pine v5 : commission_value / slippage doivent être des constantes fixes
+// (impossible d'utiliser input.float ici). Modifie les 2 chiffres ci-dessous
+// directement si tu veux tester d'autres hypothèses de coûts.
+// VERSION DU SCRIPT — à comparer avec ce que Claude annonce à chaque envoi de fichier.
+// Visible en permanence dans le titre sur le graphique. Change ce numéro à CHAQUE
+// modification envoyée par Claude. Numérotée séparément du Radar (fichiers indépendants).
+SCRIPT_VERSION = "B7.2-LAB"
+ENGINE_BASE = "B7.1-DEBUG"   // moteur de référence : scanner_mtf_backtest.pine, SHA-256 921f919a…, commit bbca253
+
+// Version EN TÊTE du nom : la liste « Mes scripts » de TradingView coupe les noms trop longs.
+strategy("Backtest ICT B7.2-LAB — MTF H1-M5 (lab)", shorttitle="Backtest ICT B7.2-LAB", overlay=true,
+     initial_capital=10000,
+     default_qty_type=strategy.percent_of_equity,
+     default_qty_value=100,
+     commission_type=strategy.commission.percent,
+     commission_value=0,
+     slippage=0,
+     process_orders_on_close=true,
+     max_boxes_count=200, max_lines_count=200, max_labels_count=200, max_bars_back=1000)
+
+// ==========================================
+// VERSION BACKTEST — même logique de détection que scanner_mtf.pine,
+// mais les alert() sont remplacés par de vrais ordres strategy.entry/exit
+// pour pouvoir utiliser l'onglet "Strategy Tester" de TradingView.
+// Le fichier scanner_mtf.pine (production / webhooks) n'est pas modifié.
+// ==========================================
+
+// ==========================================
+// B7.2-LAB — couche d'expérimentation ajoutée à B7.1-DEBUG (le moteur, sections 2 à 5, est identique).
+// Ajouts autorisés, et seulement ceux-ci :
+//  1. coûts à zéro dans strategy() (commission_value=0, slippage=0) ;
+//  2. fenêtre de dates sur les ENTRÉES (aucune sortie nouvelle) avec échauffement actif de lab_warm_days jours
+//     avant W1 : les trades d'échauffement sont exécutés mais tagués WARMUP ; l'exclusion des statistiques se fait
+//     hors TradingView, d'après la date d'entrée ;
+//  3. commentaires d'ordres compacts (≈ 70 à 80 caractères) : entrée = étiquette de route ; sortie = TP, SL ou EXPIRED ;
+//  4. instrumentation LECTURE SEULE : fa = âge de la FVG causale, ra = âge réel depuis le premier passage à READY.
+//     Ces valeurs ne sont lues que par f_lab_tag (commentaire d'ordre), jamais par une condition ;
+//  5. lignes de contrôle dans le tableau DEBUG.
+// Fenêtre « Ouverte » (défaut) : mêmes trades que B7.1 si les coûts de B7.1 sont saisis dans Propriétés (0,02 % et 2 ticks).
+// Bras du Test 1 : is_crypto_247 = true (CONT) ou false (KZ). C'est le seul réglage qui change entre les deux bras.
+// ==========================================
+
+// ==========================================
+// 1. CONFIGURATION GÉNÉRALE & PARAMÈTRES
+// ==========================================
+grp_radar     = "Configuration Terminal Radar"
+rr_ratio      = input.float(2.0, title="Ratio Risque / Récompense (TP)", minval=1.0, step=0.5, group=grp_radar)
+is_crypto_247 = input.bool(true, title="Mode Métaux / Continu (Ignore Killzones)", group=grp_radar)
+min_grade_in  = input.string("A", title="Grade Minimum pour Alerte", options=["B", "A", "A+"], group=grp_radar)
+ema_flat_thr  = input.float(0.08, title="Seuil Pente EMA H1 (x ATR)", step=0.01, group=grp_radar)
+atr_cap_mult  = input.float(2.5, title="Plafond Stop-Loss (x ATR M5)", minval=0.5, step=0.1, group=grp_radar)
+atr_floor_mult = input.float(0.5, title="Plancher Stop-Loss (x ATR M5)", minval=0.1, step=0.1, group=grp_radar)
+risk_pct_in   = input.float(1.0, title="Risque par trade (% équité)", minval=0.1, step=0.1, group=grp_radar)
+zone_window_in   = input.int(20, title="Fenêtre de validité contexte H1 (barres M5)", minval=5, maxval=50, group=grp_radar)
+cooldown_bars_in = input.int(10, title="Cooldown entre signaux (barres M5)", minval=1, maxval=50, group=grp_radar)
+causal_fvg_window_in = input.int(3, title="Fenêtre de formation FVG causale après displacement (barres M5)", minval=1, maxval=10, group=grp_radar)
+disp_body_ratio_min_in = input.float(0.60, title="Displacement : ratio corps/range minimum", minval=0.3, maxval=0.9, step=0.05, group=grp_radar)
+disp_atr_mult_min_in   = input.float(1.0, title="Displacement : corps minimum (x ATR M5)", minval=0.3, maxval=2.0, step=0.05, group=grp_radar)
+sweep_to_mss_window_in  = input.int(18, title="Fenêtre sweep -> displacement (barres M5)", minval=6, maxval=40, group=grp_radar)
+fvg_to_retest_window_in = input.int(20, title="Fenêtre FVG causale -> retest (barres M5)", minval=5, maxval=50, group=grp_radar)
+fvg_mitigation_mode = input.string("Mèche", title="Mode de mitigation FVG/OB", options=["Mèche", "Corps", "Clôture"], group=grp_radar)
+
+grp_ui        = "Affichage Graphique ICT"
+show_fvg      = input.bool(true, title="Afficher FVG H1", group=grp_ui)
+show_fvg_m5   = input.bool(false, title="Afficher FVG M5", group=grp_ui)
+show_mss      = input.bool(true, title="Afficher CHoCH / BOS", group=grp_ui)
+show_ob       = input.bool(true, title="Afficher Order Blocks (M5)", group=grp_ui)
+show_eqh_eql  = input.bool(true, title="Afficher EQH / EQL (Liquidité)", group=grp_ui)
+show_levels   = input.bool(true, title="Afficher PDH / PDL / NY Midnight", group=grp_ui)
+
+grp_sessions  = "Sessions ICT (Heure New York UTC-4)"
+sess_london   = input.session("0200-0500:23456", title="London Open", group=grp_sessions)
+sess_ny       = input.session("0800-1130:23456", title="NY AM", group=grp_sessions)
+
+in_london    = not na(time(timeframe.period, sess_london, "America/New_York"))
+in_ny        = not na(time(timeframe.period, sess_ny, "America/New_York"))
+trade_window = is_crypto_247 or in_london or in_ny
+
+// ---- LAB B7.2 : fenêtre de dates + échauffement actif (bornes en heure de New York, UTC-4 sur W1) ----
+grp_lab       = "LAB B7.2 (fenêtre, échauffement, étiquettes)"
+lab_win_mode  = input.string("Ouverte (parité B7.1)", title="Fenêtre LAB", options=["Ouverte (parité B7.1)", "W1 (Test 1)"], group=grp_lab)
+lab_start     = input.time(1786939200000, title="Début W1 (heure New York)", group=grp_lab)   // 2026-08-17 00:00 New York (UTC-4) = 2026-08-17 04:00 UTC
+lab_end       = input.time(1789790400000, title="Fin W1, exclue (heure New York)", group=grp_lab)   // 2026-09-19 00:00 New York (UTC-4) = 2026-09-19 04:00 UTC
+lab_warm_days = input.int(7, title="Échauffement actif avant W1 (jours) : trades tagués WARMUP", minval=0, maxval=30, group=grp_lab)
+
+lab_open      = lab_win_mode == "Ouverte (parité B7.1)"
+in_lab_window = lab_open or (time >= lab_start - lab_warm_days * 86400000 and time < lab_end)
+lab_phase     = lab_open ? "OPEN" : (time < lab_start ? "WARMUP" : "W1")
+lab_win_txt   = lab_open ? "OUVERTE" : ("W1 " + str.format_time(lab_start, "MM-dd", "America/New_York") + ">" + str.format_time(lab_end, "MM-dd", "America/New_York") + " WU" + str.tostring(lab_warm_days) + "j")
+
+bgcolor(in_london ? color.new(#00bcd4, 96) : na, title="Bg Londres")
+bgcolor(in_ny ? color.new(#ff9800, 96) : na, title="Bg New York")
+
+// ==========================================
+// THÈME VISUEL
+// ==========================================
+color_lux_bull  = color.new(#00E676, 0)
+color_lux_bear  = color.new(#FF1744, 0)
+color_lux_liq   = color.new(#00E5FF, 0)
+color_lux_level = color.new(#B0BEC5, 30)
+
+// ==========================================
+// 2. EXTRACTION HTF H1 : FVG, BIAIS & BOS
+// ==========================================
+
+type H1Data
+    float bull_top
+    float bull_bot
+    float bear_top
+    float bear_bot
+    float atr
+    float ph
+    float pl
+    int b_sweep
+    int b_mss
+    int b_fvg
+    int b_fvg_exp
+    int b_poi
+    int b_poi_rej
+    int s_sweep
+    int s_mss
+    int s_fvg
+    int s_fvg_exp
+    int s_poi
+    int s_poi_rej
+
+f_get_h1_data() =>
+    h1_atr = ta.atr(14)
+    h1_ph = ta.pivothigh(high, 3, 3)
+    h1_pl = ta.pivotlow(low, 3, 3)
+    
+    var float h1_prev_ph = na
+    var float h1_last_ph = na
+    var float h1_prev_pl = na
+    var float h1_last_pl = na
+    
+    if not na(h1_ph)
+        h1_prev_ph := h1_last_ph
+        h1_last_ph := h1_ph
+    if not na(h1_pl)
+        h1_prev_pl := h1_last_pl
+        h1_last_pl := h1_pl
+        
+    h1_bias_bull = not na(h1_prev_ph) and not na(h1_prev_pl) and (h1_last_ph > h1_prev_ph) and (h1_last_pl > h1_prev_pl)
+    h1_bias_bear = not na(h1_prev_ph) and not na(h1_prev_pl) and (h1_last_ph < h1_prev_ph) and (h1_last_pl < h1_prev_pl)
+
+    h1_c_range = high - low
+    h1_c_body = math.abs(close - open)
+    wick_bot = math.min(open, close) - low
+    wick_top = high - math.max(open, close)
+    rej_buy = h1_c_range > 0 and (wick_bot / h1_c_range) >= 0.35 and close > open
+    rej_sell = h1_c_range > 0 and (wick_top / h1_c_range) >= 0.35 and close < open
+    
+    sweep_l = not na(h1_last_pl) and low < h1_last_pl and close > h1_last_pl and rej_buy
+    sweep_h = not na(h1_last_ph) and high > h1_last_ph and close < h1_last_ph and rej_sell
+    
+    is_disp = h1_c_range > 0 and (h1_c_body / h1_c_range >= 0.5)
+    
+    var int buy_state = 0
+    var float buy_sweep_low = na
+    var float buy_mss_level = na
+    var float buy_ob_top = na
+    var float buy_ob_bot = na
+    var float buy_range_high = na
+    var float buy_poi_top = na
+    var float buy_poi_bot = na
+    
+    var float last_bear_top = na
+    var float last_bear_bot = na
+    
+    
+    var int h1_cnt_buy_sweep = 0
+    var int h1_cnt_buy_mss = 0
+    var int h1_cnt_buy_fvg = 0
+    var int h1_cnt_buy_fvg_exp = 0
+    var int h1_cnt_buy_poi = 0
+    var int h1_cnt_buy_poi_rej = 0
+    
+    var int h1_cnt_sell_sweep = 0
+    var int h1_cnt_sell_mss = 0
+    var int h1_cnt_sell_fvg = 0
+    var int h1_cnt_sell_fvg_exp = 0
+    var int h1_cnt_sell_poi = 0
+    var int h1_cnt_sell_poi_rej = 0
+
+    var int buy_mss_bar = na
+    var int sell_mss_bar = na
+    
+    if close < open
+        last_bear_top := high
+        last_bear_bot := low
+        
+    if buy_state != 0
+        if not na(buy_sweep_low) and low < buy_sweep_low
+            buy_state := 0
+            
+    if buy_state == 0
+        if sweep_l and h1_bias_bull
+            buy_state := 1
+            buy_sweep_low := low
+            h1_cnt_buy_sweep += 1
+            buy_mss_level := h1_last_ph
+            buy_range_high := high
+    else if buy_state == 1
+        buy_range_high := math.max(buy_range_high, high)
+        if close > buy_mss_level and close > open and is_disp
+            buy_state := 2
+            buy_ob_top := last_bear_top
+            buy_ob_bot := last_bear_bot
+            buy_mss_bar := bar_index
+            h1_cnt_buy_mss += 1
+    else if buy_state == 2
+        buy_range_high := math.max(buy_range_high, high)
+        if low > high[2] and (low - high[2]) >= h1_atr * 0.15
+            buy_state := 3
+            h1_cnt_buy_fvg += 1
+        else if not na(buy_mss_bar) and (bar_index - buy_mss_bar) > 3
+            buy_state := 0
+            h1_cnt_buy_fvg_exp += 1 // Expiration FVG causale H1 (3 bougies)
+    else if buy_state == 3
+        buy_range_high := math.max(buy_range_high, high)
+        eq = buy_sweep_low + (buy_range_high - buy_sweep_low) * 0.5
+        
+        poi_top = math.min(buy_ob_top, eq)
+        poi_bot = buy_ob_bot
+        
+        if buy_ob_bot < eq
+            if poi_top >= poi_bot
+                buy_poi_top := poi_top
+                buy_poi_bot := poi_bot
+                buy_state := 4
+                h1_cnt_buy_poi += 1
+            else
+                buy_state := 0
+                h1_cnt_buy_poi_rej += 1
+        else
+            buy_state := 0
+            h1_cnt_buy_poi_rej += 1
+    else if buy_state == 4
+        if close < buy_ob_bot
+            buy_state := 0
+            
+    var int sell_state = 0
+    var float sell_sweep_high = na
+    var float sell_mss_level = na
+    var float sell_ob_top = na
+    var float sell_ob_bot = na
+    var float sell_range_low = na
+    var float sell_poi_top = na
+    var float sell_poi_bot = na
+    
+    var float last_bull_top = na
+    var float last_bull_bot = na
+    
+    if close > open
+        last_bull_top := high
+        last_bull_bot := low
+        
+    if sell_state != 0
+        if not na(sell_sweep_high) and high > sell_sweep_high
+            sell_state := 0
+            
+    if sell_state == 0
+        if sweep_h and h1_bias_bear
+            sell_state := 1
+            sell_sweep_high := high
+            h1_cnt_sell_sweep += 1
+            sell_mss_level := h1_last_pl
+            sell_range_low := low
+    else if sell_state == 1
+        sell_range_low := math.min(sell_range_low, low)
+        if close < sell_mss_level and close < open and is_disp
+            sell_state := 2
+            sell_ob_top := last_bull_top
+            sell_ob_bot := last_bull_bot
+            sell_mss_bar := bar_index
+            h1_cnt_sell_mss += 1
+    else if sell_state == 2
+        sell_range_low := math.min(sell_range_low, low)
+        if high < low[2] and (low[2] - high) >= h1_atr * 0.15
+            sell_state := 3
+            h1_cnt_sell_fvg += 1
+        else if not na(sell_mss_bar) and (bar_index - sell_mss_bar) > 3
+            sell_state := 0
+            h1_cnt_sell_fvg_exp += 1 // Expiration FVG causale H1 (3 bougies)
+    else if sell_state == 3
+        sell_range_low := math.min(sell_range_low, low)
+        eq = sell_sweep_high - (sell_sweep_high - sell_range_low) * 0.5
+        
+        poi_bot = math.max(sell_ob_bot, eq)
+        poi_top = sell_ob_top
+        
+        if sell_ob_top > eq
+            if poi_top >= poi_bot
+                sell_poi_top := poi_top
+                sell_poi_bot := poi_bot
+                sell_state := 4
+                h1_cnt_sell_poi += 1
+            else
+                sell_state := 0
+                h1_cnt_sell_poi_rej += 1
+        else
+            sell_state := 0
+            h1_cnt_sell_poi_rej += 1
+    else if sell_state == 4
+        if close > sell_ob_top
+            sell_state := 0
+
+    h1_poi_bull_top = buy_state == 4 ? buy_poi_top : na
+    h1_poi_bull_bot = buy_state == 4 ? buy_poi_bot : na
+    h1_poi_bear_top = sell_state == 4 ? sell_poi_top : na
+    h1_poi_bear_bot = sell_state == 4 ? sell_poi_bot : na
+
+    H1Data.new(h1_poi_bull_top, h1_poi_bull_bot, h1_poi_bear_top, h1_poi_bear_bot, h1_atr[1], h1_ph[1], h1_pl[1], h1_cnt_buy_sweep, h1_cnt_buy_mss, h1_cnt_buy_fvg, h1_cnt_buy_fvg_exp, h1_cnt_buy_poi, h1_cnt_buy_poi_rej, h1_cnt_sell_sweep, h1_cnt_sell_mss, h1_cnt_sell_fvg, h1_cnt_sell_fvg_exp, h1_cnt_sell_poi, h1_cnt_sell_poi_rej)
+
+h1_data_obj = request.security(syminfo.tickerid, "60", f_get_h1_data(), barmerge.gaps_off, barmerge.lookahead_off)
+h1_poi_bull_top = na(h1_data_obj) ? na : h1_data_obj.bull_top
+h1_poi_bull_bot = na(h1_data_obj) ? na : h1_data_obj.bull_bot
+h1_poi_bear_top = na(h1_data_obj) ? na : h1_data_obj.bear_top
+h1_poi_bear_bot = na(h1_data_obj) ? na : h1_data_obj.bear_bot
+h1_atr = na(h1_data_obj) ? na : h1_data_obj.atr
+h1_ph = na(h1_data_obj) ? na : h1_data_obj.ph
+h1_pl = na(h1_data_obj) ? na : h1_data_obj.pl
+h1_cnt_buy_sweep = na(h1_data_obj) ? 0 : h1_data_obj.b_sweep
+h1_cnt_buy_mss = na(h1_data_obj) ? 0 : h1_data_obj.b_mss
+h1_cnt_buy_fvg = na(h1_data_obj) ? 0 : h1_data_obj.b_fvg
+h1_cnt_buy_fvg_exp = na(h1_data_obj) ? 0 : h1_data_obj.b_fvg_exp
+h1_cnt_buy_poi = na(h1_data_obj) ? 0 : h1_data_obj.b_poi
+h1_cnt_buy_poi_rej = na(h1_data_obj) ? 0 : h1_data_obj.b_poi_rej
+h1_cnt_sell_sweep = na(h1_data_obj) ? 0 : h1_data_obj.s_sweep
+h1_cnt_sell_mss = na(h1_data_obj) ? 0 : h1_data_obj.s_mss
+h1_cnt_sell_fvg = na(h1_data_obj) ? 0 : h1_data_obj.s_fvg
+h1_cnt_sell_fvg_exp = na(h1_data_obj) ? 0 : h1_data_obj.s_fvg_exp
+h1_cnt_sell_poi = na(h1_data_obj) ? 0 : h1_data_obj.s_poi
+h1_cnt_sell_poi_rej = na(h1_data_obj) ? 0 : h1_data_obj.s_poi_rej
+
+
+
+var float h1_bull_zone_top = na
+var float h1_bull_zone_bot = na
+var bool  h1_bull_consumed = false
+var box   h1_bull_box      = na
+
+var float h1_bear_zone_top = na
+var float h1_bear_zone_bot = na
+var bool  h1_bear_consumed = false
+var box   h1_bear_box      = na
+
+color_fvg_hl = color.new(#FFFF00, 80)
+color_fvg_bd = color.new(#FFFF00, 30)
+
+if ta.change(time("60"))
+    if not na(h1_poi_bull_top)
+        is_new_poi = na(h1_bull_zone_top) or (h1_poi_bull_top != h1_bull_zone_top)
+        if is_new_poi
+            if not na(h1_bull_box)
+                box.set_extend(h1_bull_box, extend.none)
+                box.set_right(h1_bull_box, bar_index)
+            h1_bull_zone_top := h1_poi_bull_top
+            h1_bull_zone_bot := h1_poi_bull_bot
+            h1_bull_consumed := false
+            if show_fvg
+                h1_bull_box := box.new(bar_index, h1_bull_zone_top, bar_index + 1, h1_bull_zone_bot, border_color=color_fvg_bd, bgcolor=color_fvg_hl, extend=extend.right)
+
+    if not na(h1_poi_bear_top)
+        is_new_poi = na(h1_bear_zone_top) or (h1_poi_bear_top != h1_bear_zone_top)
+        if is_new_poi
+            if not na(h1_bear_box)
+                box.set_extend(h1_bear_box, extend.none)
+                box.set_right(h1_bear_box, bar_index)
+            h1_bear_zone_top := h1_poi_bear_top
+            h1_bear_zone_bot := h1_poi_bear_bot
+            h1_bear_consumed := false
+            if show_fvg
+                h1_bear_box := box.new(bar_index, h1_bear_zone_top, bar_index + 1, h1_bear_zone_bot, border_color=color_fvg_bd, bgcolor=color_fvg_hl, extend=extend.right)
+
+in_h1_bull_zone = not h1_bull_consumed and not na(h1_bull_zone_top) and (high >= h1_bull_zone_bot and low <= h1_bull_zone_top)
+in_h1_bear_zone = not h1_bear_consumed and not na(h1_bear_zone_top) and (high >= h1_bear_zone_bot and low <= h1_bear_zone_top)
+
+if in_h1_bull_zone and close < h1_bull_zone_bot
+    h1_bull_consumed := true
+if in_h1_bear_zone and close > h1_bear_zone_top
+    h1_bear_consumed := true
+
+// ==========================================
+// 2.5 NIVEAUX MAJEURS (PDH, PDL, NY MIDNIGHT)
+// ==========================================
+var float pdh = na
+var float pdl = na
+var int   pdh_bar = na
+var int   pdl_bar = na
+var float current_dh = na
+var float current_dl = na
+var int   current_dh_bar = na
+var int   current_dl_bar = na
+
+// Alignement sur le Radar (PATCH 1) : "America/New_York" était passé en paramètre `session`,
+// pas `timezone` -> la journée ne commençait pas à minuit New York. Même PDH / PDL que le Radar.
+is_new_ny_day = ta.change(time("D", "", "America/New_York"))
+
+if is_new_ny_day
+    pdh := current_dh
+    pdl := current_dl
+    pdh_bar := current_dh_bar
+    pdl_bar := current_dl_bar
+    current_dh := high
+    current_dl := low
+    current_dh_bar := bar_index
+    current_dl_bar := bar_index
+else
+    if high > current_dh
+        current_dh := high
+        current_dh_bar := bar_index
+    if low < current_dl
+        current_dl := low
+        current_dl_bar := bar_index
+
+var float midnight_open = na
+if is_new_ny_day
+    midnight_open := open
+
+if is_new_ny_day and show_levels
+    if not na(pdh)
+        line.new(pdh_bar, pdh, bar_index + 288, pdh, color=color_lux_level, width=1, style=line.style_dotted)
+        label.new(bar_index + 5, pdh, "PDH", color=color.new(color.white, 100), textcolor=color_lux_level, style=label.style_none, size=size.small)
+    if not na(pdl)
+        line.new(pdl_bar, pdl, bar_index + 288, pdl, color=color_lux_level, width=1, style=line.style_dotted)
+        label.new(bar_index + 5, pdl, "PDL", color=color.new(color.white, 100), textcolor=color_lux_level, style=label.style_none, size=size.small)
+
+if is_new_ny_day and show_levels
+    line.new(bar_index, open, bar_index + 288, open, color=color.new(#FFD600, 20), width=1, style=line.style_dashed)
+    label.new(bar_index + 5, open, "NY Open", color=color.new(color.white, 100), textcolor=color.new(#FFD600, 0), style=label.style_none, size=size.small)
+
+// ==========================================
+// 3. STRUCTURE M5 & CONFIRMATION DE REJET
+// ==========================================
+
+var float m5_last_bear_top = na
+var float m5_last_bear_bot = na
+var float m5_last_bull_top = na
+var float m5_last_bull_bot = na
+
+if close < open
+    m5_last_bear_top := high
+    m5_last_bear_bot := low
+if close > open
+    m5_last_bull_top := high
+    m5_last_bull_bot := low
+
+atr_val       = ta.atr(14)
+bar_confirmed = barstate.isconfirmed
+
+// --- Sonde de mitigation (Mèche/Corps/Clôture) — doit rester identique à scanner_mtf.pine pour que les deux scripts restent synchronisés ---
+mit_probe_bull = fvg_mitigation_mode == "Mèche" ? low : fvg_mitigation_mode == "Corps" ? math.min(open, close) : close
+mit_probe_bear = fvg_mitigation_mode == "Mèche" ? high : fvg_mitigation_mode == "Corps" ? math.max(open, close) : close
+
+ph = ta.pivothigh(high, 5, 5)
+pl = ta.pivotlow(low, 5, 5)
+
+var float last_ph     = na
+var int   last_ph_bar = na
+var float prev_ph     = na
+var int   prev_ph_bar = na
+var float lowest_since_ph = na
+var float ob_bull_top = na
+var float ob_bull_bot = na
+var int   ob_bull_bar = na
+
+if not na(ph)
+    prev_ph := last_ph
+    prev_ph_bar := last_ph_bar
+    last_ph := ph
+    last_ph_bar := bar_index - 5
+    ob_bull_bot := low
+    ob_bull_top := high
+    ob_bull_bar := bar_index
+    lowest_since_ph := low
+
+    if show_eqh_eql and not na(prev_ph) and math.abs(last_ph - prev_ph) <= (syminfo.mintick * 15)
+        line.new(prev_ph_bar, prev_ph, bar_index, prev_ph, color=color_lux_liq, width=1)
+        label.new(math.round((prev_ph_bar + bar_index)/2), prev_ph, "EQH 💧", color=color.new(color.white, 100), textcolor=color_lux_liq, style=label.style_none, size=size.small)
+else if not na(ob_bull_bot)
+    if low <= ob_bull_bot
+        ob_bull_bot := low
+        ob_bull_top := high
+        ob_bull_bar := bar_index
+        lowest_since_ph := low
+
+var float last_pl     = na
+var int   last_pl_bar = na
+var float prev_pl     = na
+var int   prev_pl_bar = na
+var float highest_since_pl = na
+var float ob_bear_top = na
+var float ob_bear_bot = na
+var int   ob_bear_bar = na
+var int   last_struct_dir = 0
+
+if not na(pl)
+    prev_pl := last_pl
+    prev_pl_bar := last_pl_bar
+    last_pl := pl
+    last_pl_bar := bar_index - 5
+    ob_bear_top := high
+    ob_bear_bot := low
+    ob_bear_bar := bar_index
+    highest_since_pl := high
+
+    if show_eqh_eql and not na(prev_pl) and math.abs(last_pl - prev_pl) <= (syminfo.mintick * 15)
+        line.new(prev_pl_bar, prev_pl, bar_index, prev_pl, color=color_lux_liq, width=1)
+        label.new(math.round((prev_pl_bar + bar_index)/2), prev_pl, "EQL 💧", color=color.new(color.white, 100), textcolor=color_lux_liq, style=label.style_none, size=size.small)
+else if not na(ob_bear_top)
+    if high >= ob_bear_top
+        ob_bear_top := high
+        ob_bear_bot := low
+        ob_bear_bar := bar_index
+        highest_since_pl := high
+
+c_range = high - low
+c_body  = math.abs(close - open)
+is_disp = c_range > 0 and ((c_body / c_range) >= 0.50)
+
+// --- Pivots persistants indépendants — JAMAIS réinitialisés par les événements MSS du moteur
+// (contrairement à last_ph/last_pl, consommés/remis à na dès que la détection d'affichage
+// mss_bull/mss_bear les utilise, laquelle a un seuil bien plus permissif — is_disp 50% —
+// que le moteur causal — is_disp_quant 65% + 1,25x ATR). Sans cette copie séparée, le moteur
+// causal capturait souvent un buy_mss_level/sell_mss_level déjà à na au moment du sweep,
+// bloquant silencieusement la détection de displacement. BUG CORRIGÉ : le sweep et le niveau
+// de cassure du moteur causal utilisent maintenant CES pivots, pas last_ph/last_pl.
+var float vis_last_ph = na
+var float vis_prev_ph = na
+var float vis_last_pl = na
+var float vis_prev_pl = na
+
+// --- AUTOPSIE SWEEP ---
+var int dbg_sweep_time = na
+var string dbg_sweep_dir = ""
+var float dbg_sweep_px = na
+var float dbg_sweep_liq = na
+var float dbg_mss_55 = na
+var float dbg_mss_33 = na
+var float dbg_mss_22 = na
+var float dbg_sweep_atr = na
+var string dbg_death_reason = ""
+var float dbg_max_reach = na
+var bool dbg_crossed_55_close = false
+var bool dbg_crossed_55_nodisp = false
+
+// Alternative pivots
+ph_33 = ta.pivothigh(high, 3, 3)
+pl_33 = ta.pivotlow(low, 3, 3)
+var float vis_last_ph_33 = na
+var float vis_last_pl_33 = na
+if not na(ph_33)
+    vis_last_ph_33 := ph_33
+if not na(pl_33)
+    vis_last_pl_33 := pl_33
+
+ph_22 = ta.pivothigh(high, 2, 2)
+pl_22 = ta.pivotlow(low, 2, 2)
+var float vis_last_ph_22 = na
+var float vis_last_pl_22 = na
+if not na(ph_22)
+    vis_last_ph_22 := ph_22
+if not na(pl_22)
+    vis_last_pl_22 := pl_22
+
+if not na(ph)
+    vis_prev_ph := vis_last_ph
+    vis_last_ph := ph
+if not na(pl)
+    vis_prev_pl := vis_last_pl
+    vis_last_pl := pl
+
+wick_top = high - math.max(open, close)
+wick_bot = math.min(open, close) - low
+rej_buy  = c_range > 0 and (wick_bot / c_range) >= 0.35 and close > open
+rej_sell = c_range > 0 and (wick_top / c_range) >= 0.35 and close < open
+
+sweep_l = not na(vis_last_pl) and low < vis_last_pl and close > vis_last_pl and rej_buy
+sweep_h = not na(vis_last_ph) and high > vis_last_ph and close < vis_last_ph and rej_sell
+
+
+tested_h1_bull  = in_h1_bull_zone
+tested_h1_bear  = in_h1_bear_zone
+
+valid_ctx_bull = tested_h1_bull
+valid_ctx_bear = tested_h1_bear
+
+var bool  is_ob_bull_active = false
+var float current_ob_bull_top = na
+var int   current_ob_bull_start = na
+var box   current_ob_bull = na
+
+var bool  is_ob_bear_active = false
+var float current_ob_bear_bot = na
+var int   current_ob_bear_start = na
+var box   current_ob_bear = na
+
+var bool  is_fvg_bull_active = false
+var float current_fvg_bull_m5_top = na
+var int   current_fvg_bull_m5_start = na
+var box   current_fvg_bull_m5 = na
+
+var bool  is_fvg_bear_active = false
+var float current_fvg_bear_m5_bot = na
+var int   current_fvg_bear_m5_start = na
+var box   current_fvg_bear_m5 = na
+
+mss_bull = not na(last_ph) and bar_confirmed and ta.crossover(close, last_ph) and is_disp
+if mss_bull
+    if tested_h1_bull
+        if show_mss
+            is_choch = (last_struct_dir != 1)
+            lbl_text = is_choch ? "CHoCH" : "BOS"
+            line.new(last_ph_bar, last_ph, bar_index, last_ph, color=color_lux_bull, width=1, style=line.style_dashed)
+            label.new(math.round((last_ph_bar + bar_index)/2), last_ph, lbl_text, color=color.new(color.white, 100), textcolor=color_lux_bull, style=label.style_none, size=size.small)
+
+        if not na(ob_bull_bot)
+            is_ob_bull_active := true
+            current_ob_bull_top := ob_bull_top
+            current_ob_bull_start := bar_index
+            if show_ob
+                if not na(current_ob_bull)
+                    box.set_extend(current_ob_bull, extend.none)
+                    box.set_right(current_ob_bull, bar_index)
+                current_ob_bull := box.new(ob_bull_bar, ob_bull_top, bar_index, ob_bull_bot, border_color=color_lux_bull, bgcolor=color.new(color_lux_bull, 85), extend=extend.right)
+    last_ph := na
+    last_struct_dir := 1
+
+mss_bear = not na(last_pl) and bar_confirmed and ta.crossunder(close, last_pl) and is_disp
+if mss_bear
+    if tested_h1_bear
+        if show_mss
+            is_choch = (last_struct_dir != -1)
+            lbl_text = is_choch ? "CHoCH" : "BOS"
+            line.new(last_pl_bar, last_pl, bar_index, last_pl, color=color_lux_bear, width=1, style=line.style_dashed)
+            label.new(math.round((last_pl_bar + bar_index)/2), last_pl, lbl_text, color=color.new(color.white, 100), textcolor=color_lux_bear, style=label.style_none, size=size.small)
+
+        if not na(ob_bear_top)
+            is_ob_bear_active := true
+            current_ob_bear_bot := ob_bear_bot
+            current_ob_bear_start := bar_index
+            if show_ob
+                if not na(current_ob_bear)
+                    box.set_extend(current_ob_bear, extend.none)
+                    box.set_right(current_ob_bear, bar_index)
+                current_ob_bear := box.new(ob_bear_bar, ob_bear_top, bar_index, ob_bear_bot, border_color=color_lux_bear, bgcolor=color.new(color_lux_bear, 85), extend=extend.right)
+    last_pl := na
+    last_struct_dir := -1
+
+fvg_bull_m5 = (low > high[2]) and (low - high[2] >= atr_val * 0.15)
+if fvg_bull_m5 and valid_ctx_bull
+    is_fvg_bull_active := true
+    current_fvg_bull_m5_top := high[2]
+    current_fvg_bull_m5_start := bar_index
+    if show_fvg_m5
+        if not na(current_fvg_bull_m5)
+            box.set_extend(current_fvg_bull_m5, extend.none)
+            box.set_right(current_fvg_bull_m5, bar_index)
+        current_fvg_bull_m5 := box.new(bar_index - 2, low, bar_index, high[2], border_color=na, bgcolor=color.new(color_lux_bull, 85), extend=extend.right)
+
+fvg_bear_m5 = (high < low[2]) and (low[2] - high >= atr_val * 0.15)
+if fvg_bear_m5 and valid_ctx_bear
+    is_fvg_bear_active := true
+    current_fvg_bear_m5_bot := low[2]
+    current_fvg_bear_m5_start := bar_index
+    if show_fvg_m5
+        if not na(current_fvg_bear_m5)
+            box.set_extend(current_fvg_bear_m5, extend.none)
+            box.set_right(current_fvg_bear_m5, bar_index)
+        current_fvg_bear_m5 := box.new(bar_index - 2, low[2], bar_index, high, border_color=na, bgcolor=color.new(color_lux_bear, 85), extend=extend.right)
+
+mitigated_ob_bull = false
+mitigated_ob_bear = false
+mitigated_fvg_bull = false
+mitigated_fvg_bear = false
+
+if is_ob_bull_active and bar_index > current_ob_bull_start and mit_probe_bull <= current_ob_bull_top
+    is_ob_bull_active := false
+    mitigated_ob_bull := true
+    if not na(current_ob_bull)
+        box.set_extend(current_ob_bull, extend.none)
+        box.set_right(current_ob_bull, bar_index)
+        current_ob_bull := na
+
+if is_ob_bear_active and bar_index > current_ob_bear_start and mit_probe_bear >= current_ob_bear_bot
+    is_ob_bear_active := false
+    mitigated_ob_bear := true
+    if not na(current_ob_bear)
+        box.set_extend(current_ob_bear, extend.none)
+        box.set_right(current_ob_bear, bar_index)
+        current_ob_bear := na
+
+if is_fvg_bull_active and bar_index > current_fvg_bull_m5_start and mit_probe_bull <= current_fvg_bull_m5_top
+    is_fvg_bull_active := false
+    mitigated_fvg_bull := true
+    if not na(current_fvg_bull_m5)
+        box.set_extend(current_fvg_bull_m5, extend.none)
+        box.set_right(current_fvg_bull_m5, bar_index)
+        current_fvg_bull_m5 := na
+
+if is_fvg_bear_active and bar_index > current_fvg_bear_m5_start and mit_probe_bear >= current_fvg_bear_m5_bot
+    is_fvg_bear_active := false
+    mitigated_fvg_bear := true
+    if not na(current_fvg_bear_m5)
+        box.set_extend(current_fvg_bear_m5, extend.none)
+        box.set_right(current_fvg_bear_m5, bar_index)
+        current_fvg_bear_m5 := na
+
+// ==========================================
+// 3.9 CIBLES DE LIQUIDITÉ (TP STRUCTURELS) — R6 / B7
+// ==========================================
+// Les TP ne sont plus des multiples fixes du risque : on vise la liquidité suivante dans le sens
+// du trade (buy-side au-dessus pour un achat, sell-side en dessous pour une vente) : pivots M5,
+// equal highs / equal lows, swing H1, plus haut / bas des sessions Asie et Londres, PDH / PDL,
+// FVG opposées non comblées (M5 et H1). Un trade n'est pris que s'il existe au moins une cible à
+// min_rr_in R ou plus. Bloc IDENTIQUE dans le Radar et le Backtest, indépendant des options
+// d'affichage (les FVG / EQH dessinées ne sont pas lues ici).
+grp_tp        = "Cibles de profit (liquidité)"
+tp_mode_in    = input.string("Liquidité", title="Mode des TP", options=["Liquidité", "Fixe (R:R)"], group=grp_tp)
+min_rr_in     = input.float(1.5, title="R:R minimum exigé pour prendre le trade", minval=0.5, step=0.1, group=grp_tp)
+min_tp_r_in   = input.float(1.0, title="Distance minimale d'un TP (en R)", minval=0.3, step=0.1, group=grp_tp)
+max_tp_in     = input.int(4, title="Nombre maximum de TP", minval=1, maxval=6, group=grp_tp)
+LIQ_MAX       = 40   // niveaux de liquidité mémorisés par côté
+FVG_MAX       = 30   // FVG M5 mémorisées par côté
+
+var float[]  liq_up_px    = array.new_float()   // buy-side : niveaux au-dessus du prix
+var string[] liq_up_ty    = array.new_string()
+var float[]  liq_dn_px    = array.new_float()   // sell-side : niveaux en dessous du prix
+var string[] liq_dn_ty    = array.new_string()
+var float[]  fvg_bear_bot = array.new_float()   // FVG baissières M5 (cible d'un achat = bord bas)
+var float[]  fvg_bull_top = array.new_float()   // FVG haussières M5 (cible d'une vente = bord haut)
+
+// Ajoute un niveau ; un niveau déjà présent à moins de `tol` est la même liquidité : on fusionne
+// (deux pivots M5 proches = equal highs / equal lows ; un type plus fort remplace « Pivot M5 »).
+f_liq_add(px_arr, ty_arr, price, typ, tol, is_up) =>
+    merged = false
+    n = array.size(px_arr)
+    if n > 0
+        for i = 0 to n - 1
+            p = array.get(px_arr, i)
+            if not merged and math.abs(p - price) <= tol
+                merged := true
+                old_ty = array.get(ty_arr, i)
+                if typ == "Pivot M5"
+                    if old_ty == "Pivot M5"
+                        array.set(ty_arr, i, is_up ? "Equal highs" : "Equal lows")
+                else if old_ty == "Pivot M5" or old_ty == "Equal highs" or old_ty == "Equal lows"
+                    array.set(ty_arr, i, typ)
+                array.set(px_arr, i, is_up ? math.max(p, price) : math.min(p, price))
+    if not merged
+        array.push(px_arr, price)
+        array.push(ty_arr, typ)
+        if array.size(px_arr) > LIQ_MAX
+            array.shift(px_arr)
+            array.shift(ty_arr)
+
+// Un niveau traversé par le prix est consommé (la liquidité a été prise) : il ne sert plus de cible.
+f_liq_sweep(px_arr, ty_arr, is_up) =>
+    n = array.size(px_arr)
+    if n > 0
+        for i = n - 1 to 0
+            p = array.get(px_arr, i)
+            if (is_up and high > p) or (not is_up and low < p)
+                array.remove(px_arr, i)
+                array.remove(ty_arr, i)
+
+f_fvg_mitigate(arr, is_bear_zone) =>
+    n = array.size(arr)
+    if n > 0
+        for i = n - 1 to 0
+            p = array.get(arr, i)
+            if (is_bear_zone and high >= p) or (not is_bear_zone and low <= p)
+                array.remove(arr, i)
+
+liq_tol = atr_val * 0.10
+
+// 1) Consommation des niveaux déjà pris par la bougie courante
+f_liq_sweep(liq_up_px, liq_up_ty, true)
+f_liq_sweep(liq_dn_px, liq_dn_ty, false)
+f_fvg_mitigate(fvg_bear_bot, true)
+f_fvg_mitigate(fvg_bull_top, false)
+
+// 2) Nouveaux niveaux : pivots M5 (confirmés 5 bougies plus tard, donc sous le prix actuel)
+if not na(ph)
+    f_liq_add(liq_up_px, liq_up_ty, ph, "Pivot M5", liq_tol, true)
+if not na(pl)
+    f_liq_add(liq_dn_px, liq_dn_ty, pl, "Pivot M5", liq_tol, false)
+
+// Swing H1 (une seule fois par heure)
+if ta.change(time("60"))
+    if not na(h1_ph)
+        f_liq_add(liq_up_px, liq_up_ty, h1_ph, "Swing H1", liq_tol, true)
+    if not na(h1_pl)
+        f_liq_add(liq_dn_px, liq_dn_ty, h1_pl, "Swing H1", liq_tol, false)
+
+// PDH / PDL (au changement de journée New York)
+if is_new_ny_day
+    if not na(pdh)
+        f_liq_add(liq_up_px, liq_up_ty, pdh, "PDH", liq_tol, true)
+    if not na(pdl)
+        f_liq_add(liq_dn_px, liq_dn_ty, pdl, "PDL", liq_tol, false)
+
+// Plus haut / plus bas des sessions Asie (19h-minuit NY) et Londres, ajoutés à la fin de la session
+in_asia_sess = not na(time(timeframe.period, "1900-2359:1234567", "America/New_York"))
+var float asia_run_hi = na
+var float asia_run_lo = na
+if in_asia_sess
+    asia_run_hi := not in_asia_sess[1] or na(asia_run_hi) ? high : math.max(asia_run_hi, high)
+    asia_run_lo := not in_asia_sess[1] or na(asia_run_lo) ? low : math.min(asia_run_lo, low)
+else if in_asia_sess[1] and not na(asia_run_hi)
+    f_liq_add(liq_up_px, liq_up_ty, asia_run_hi, "Haut Asie", liq_tol, true)
+    f_liq_add(liq_dn_px, liq_dn_ty, asia_run_lo, "Bas Asie", liq_tol, false)
+
+var float lon_run_hi = na
+var float lon_run_lo = na
+if in_london
+    lon_run_hi := not in_london[1] or na(lon_run_hi) ? high : math.max(lon_run_hi, high)
+    lon_run_lo := not in_london[1] or na(lon_run_lo) ? low : math.min(lon_run_lo, low)
+else if in_london[1] and not na(lon_run_hi)
+    f_liq_add(liq_up_px, liq_up_ty, lon_run_hi, "Haut Londres", liq_tol, true)
+    f_liq_add(liq_dn_px, liq_dn_ty, lon_run_lo, "Bas Londres", liq_tol, false)
+
+// FVG M5 (même seuil de taille que la FVG causale : 0,15 x ATR)
+if high < low[2] and (low[2] - high) >= atr_val * 0.15
+    array.push(fvg_bear_bot, high)
+    if array.size(fvg_bear_bot) > FVG_MAX
+        array.shift(fvg_bear_bot)
+if low > high[2] and (low - high[2]) >= atr_val * 0.15
+    array.push(fvg_bull_top, low)
+    if array.size(fvg_bull_top) > FVG_MAX
+        array.shift(fvg_bull_top)
+
+// Sélection des TP pour une entrée : cibles dans le sens du trade, triées par distance,
+// à min_tp_r_in R minimum, fusionnées si trop proches (< 0,15 R). ok = au moins une cible
+// à min_rr_in R ou plus ; elle est toujours conservée, même au-delà de max_tp_in.
+f_select_targets(is_buy, entry, risk) =>
+    c_px = array.new_float()
+    c_ty = array.new_string()
+    if is_buy
+        if array.size(liq_up_px) > 0
+            for i = 0 to array.size(liq_up_px) - 1
+                if array.get(liq_up_px, i) > entry
+                    array.push(c_px, array.get(liq_up_px, i))
+                    array.push(c_ty, array.get(liq_up_ty, i))
+        if array.size(fvg_bear_bot) > 0
+            for i = 0 to array.size(fvg_bear_bot) - 1
+                if array.get(fvg_bear_bot, i) > entry
+                    array.push(c_px, array.get(fvg_bear_bot, i))
+                    array.push(c_ty, "FVG M5")
+        if not h1_bear_consumed and not na(h1_bear_zone_bot) and h1_bear_zone_bot > entry
+            array.push(c_px, h1_bear_zone_bot)
+            array.push(c_ty, "FVG H1")
+    else
+        if array.size(liq_dn_px) > 0
+            for i = 0 to array.size(liq_dn_px) - 1
+                if array.get(liq_dn_px, i) < entry
+                    array.push(c_px, array.get(liq_dn_px, i))
+                    array.push(c_ty, array.get(liq_dn_ty, i))
+        if array.size(fvg_bull_top) > 0
+            for i = 0 to array.size(fvg_bull_top) - 1
+                if array.get(fvg_bull_top, i) < entry
+                    array.push(c_px, array.get(fvg_bull_top, i))
+                    array.push(c_ty, "FVG M5")
+        if not h1_bull_consumed and not na(h1_bull_zone_top) and h1_bull_zone_top < entry
+            array.push(c_px, h1_bull_zone_top)
+            array.push(c_ty, "FVG H1")
+
+    c_r = array.new_float()
+    if array.size(c_px) > 0
+        for i = 0 to array.size(c_px) - 1
+            array.push(c_r, risk > 0 ? math.abs(array.get(c_px, i) - entry) / risk : 0.0)
+
+    m_px = array.new_float()
+    m_ty = array.new_string()
+    m_r  = array.new_float()
+    if array.size(c_r) > 0
+        idx = array.sort_indices(c_r, order.ascending)
+        for k = 0 to array.size(idx) - 1
+            i = array.get(idx, k)
+            r = array.get(c_r, i)
+            if r >= min_tp_r_in
+                last = array.size(m_r) - 1
+                // Pine évalue les DEUX côtés d'un « and » : lecture de m_r seulement si elle contient une cible.
+                too_close = false
+                if last >= 0
+                    too_close := r - array.get(m_r, last) < 0.15
+                if too_close
+                    old = array.get(m_ty, last)
+                    if not str.contains(old, array.get(c_ty, i))
+                        array.set(m_ty, last, old + " + " + array.get(c_ty, i))
+                else
+                    array.push(m_px, array.get(c_px, i))
+                    array.push(m_ty, array.get(c_ty, i))
+                    array.push(m_r, r)
+
+    first_ok = -1
+    if array.size(m_r) > 0
+        for k = 0 to array.size(m_r) - 1
+            if first_ok < 0 and array.get(m_r, k) >= min_rr_in
+                first_ok := k
+
+    o_px = array.new_float()
+    o_ty = array.new_string()
+    o_r  = array.new_float()
+    if first_ok >= 0
+        keep = math.min(array.size(m_r), max_tp_in)
+        for k = 0 to keep - 1
+            // Si la 1re cible valable (>= min_rr_in) est au-delà de max_tp_in, elle prend la dernière place.
+            src = (k == keep - 1 and first_ok > keep - 1) ? first_ok : k
+            array.push(o_px, array.get(m_px, src))
+            array.push(o_ty, array.get(m_ty, src))
+            array.push(o_r, array.get(m_r, src))
+    [o_px, o_ty, o_r, first_ok >= 0]
+
+// TP retenus pour le trade : cibles de liquidité, ou un TP unique à rr_ratio en mode « Fixe (R:R) »
+// (comportement du R5). ok = false -> pas de cible de liquidité à min_rr_in R : trade abandonné.
+f_trade_targets(is_buy, entry, risk) =>
+    [t_px, t_ty, t_r, t_ok] = f_select_targets(is_buy, entry, risk)
+    fixed = tp_mode_in != "Liquidité"
+    if fixed
+        array.clear(t_px)
+        array.clear(t_ty)
+        array.clear(t_r)
+        array.push(t_px, entry + (is_buy ? 1 : -1) * risk * rr_ratio)
+        array.push(t_ty, "R:R fixe")
+        array.push(t_r, rr_ratio)
+    [t_px, t_ty, t_r, fixed or t_ok]
+
+// ==========================================
+// 4. LOGIQUE CAUSALE ICT 2022 (MACHINE D'ETATS) & ENTREE
+// ==========================================
+// États de la séquence ICT 2022 :
+// IDLE -> SWEEP_ARMED -> MSS_CONFIRMED -> CAUSAL_FVG_CONFIRMED -> WAIT_RETEST -> READY -> RESET
+
+var bool   in_pos       = false
+var float  pos_entry    = 0.0
+var float  pos_sl       = 0.0
+var float  pos_tp       = 0.0
+var string pos_dir      = "NONE"
+var int    last_sig_bar = 0
+
+int STATE_IDLE                = 0
+int STATE_IN_POI              = 10
+int STATE_SWEEP_ARMED         = 1
+int STATE_MSS_CONFIRMED       = 2
+int STATE_CAUSAL_FVG_CONFIRMED = 3
+int STATE_READY               = 5
+int STATE_PENDING_LIMIT       = 6
+
+// --- Machine d'état BUY (Long) ---
+var int   buy_state            = STATE_IDLE
+var int   buy_sweep_bar        = na
+var float buy_sweep_low        = na
+var float buy_mss_level        = na
+var int   buy_displacement_bar = na
+var float buy_pre_disp_high    = na
+var float buy_fvg_top          = na
+var float buy_fvg_bottom       = na
+var int   buy_fvg_bar          = na
+var float buy_ob_top           = na
+var float buy_ob_bot           = na
+var int   buy_limit_bar        = na
+var int   buy_poi_bar          = na
+
+// --- Machine d'état SELL (Short) ---
+var int   sell_state            = STATE_IDLE
+var int   sell_sweep_bar        = na
+var float sell_sweep_high       = na
+var float sell_mss_level        = na
+var int   sell_displacement_bar = na
+var float sell_pre_disp_low     = na
+var float sell_fvg_top          = na
+var float sell_fvg_bottom       = na
+var int   sell_fvg_bar          = na
+var float sell_ob_top           = na
+var float sell_ob_bot           = na
+var int   sell_limit_bar        = na
+var int   sell_poi_bar          = na
+
+// --- Compteurs de diagnostic (DEBUG) — pour localiser précisément où la séquence perd ses
+// candidats. Purement additif, aucun effet sur la logique de trading. À retirer une fois le
+// diagnostic terminé.
+
+var int cnt_buy_in_poi = 0
+var int cnt_sell_in_poi = 0
+var int cnt_buy_ob_rej = 0
+var int cnt_sell_ob_rej = 0
+var int cnt_buy_limit_sent = 0
+var int cnt_sell_limit_sent = 0
+var int cnt_buy_limit_filled = 0
+var int cnt_sell_limit_filled = 0
+var int cnt_buy_limit_cancel = 0
+var int cnt_sell_limit_cancel = 0
+var int cnt_sweep_l    = 0
+var int cnt_sweep_h    = 0
+var int cnt_buy_mss    = 0
+var int cnt_sell_mss   = 0
+var int cnt_buy_fvg    = 0
+var int cnt_sell_fvg   = 0
+var int cnt_buy_ready  = 0
+var int cnt_sell_ready = 0
+var int cnt_buy_no_target  = 0
+var int cnt_buy_expired_limit = 0
+var int cnt_buy_sl_invalid = 0 // setups READY abandonnés : aucune cible de liquidité >= min_rr_in
+var int cnt_sell_no_target = 0
+var int cnt_sell_expired_limit = 0
+var int cnt_sell_sl_invalid = 0
+
+// Définition quantitative du Displacement (M5) — seuils réglables (diagnostic du 18/09 : ce
+// filtre éliminait plus de 90% des sweeps à lui seul, goulot d'étranglement principal du moteur).
+// Référence ATR : atr_val[1]
+disp_body_ratio = c_range > 0 ? (c_body / c_range) : 0.0
+is_disp_quant   = (disp_body_ratio >= disp_body_ratio_min_in) and (c_body >= disp_atr_mult_min_in * atr_val[1])
+
+// Timeouts maximaux (en barres M5) — réglables
+MAX_BARS_SWEEP_TO_MSS = sweep_to_mss_window_in
+MAX_BARS_FVG_TO_RETEST = fvg_to_retest_window_in
+
+// -------------------------------------------------------------
+// ÉVOLUTION MACHINE D'ÉTATS : BUY
+// -------------------------------------------------------------
+
+// 1. Resets / Invalidations BUY
+if buy_state != STATE_IDLE
+    if not na(buy_sweep_low) and low < buy_sweep_low
+        if buy_state == STATE_SWEEP_ARMED and dbg_death_reason == "PENDING"
+            dbg_death_reason := "SL Structurel (low < sweep)"
+        if buy_state == STATE_PENDING_LIMIT
+            strategy.cancel("Long")
+            cnt_buy_limit_cancel += 1
+        buy_state := STATE_IDLE
+    else if sweep_h
+        if buy_state == STATE_SWEEP_ARMED and dbg_death_reason == "PENDING"
+            dbg_death_reason := "Sweep opposé (sweep_h)"
+        if buy_state == STATE_PENDING_LIMIT
+            strategy.cancel("Long")
+            cnt_buy_limit_cancel += 1
+        buy_state := STATE_IDLE
+    else if buy_state == STATE_SWEEP_ARMED and (bar_index - buy_sweep_bar > MAX_BARS_SWEEP_TO_MSS)
+        if dbg_death_reason == "PENDING"
+            dbg_death_reason := "Expiration 18 barres"
+        buy_state := STATE_IDLE
+    else if (buy_state == STATE_CAUSAL_FVG_CONFIRMED) and not na(buy_ob_bot) and close < buy_ob_bot
+        buy_state := STATE_IDLE
+    else if h1_bull_consumed
+        if buy_state == STATE_SWEEP_ARMED and dbg_death_reason == "PENDING"
+            dbg_death_reason := "H1 POI consommé"
+        if buy_state == STATE_PENDING_LIMIT
+            strategy.cancel("Long")
+            cnt_buy_limit_cancel += 1
+        buy_state := STATE_IDLE
+
+// 2. Transitions BUY
+if buy_state == STATE_IDLE
+    if in_h1_bull_zone
+        buy_state := STATE_IN_POI
+        buy_poi_bar := bar_index
+        cnt_buy_in_poi += 1
+
+if buy_state == STATE_IN_POI
+    if sweep_l
+        buy_state            := STATE_SWEEP_ARMED
+        buy_sweep_bar        := bar_index
+        buy_sweep_low        := low
+        buy_mss_level        := vis_last_ph
+        buy_displacement_bar := na
+        buy_fvg_top          := na
+        buy_fvg_bottom       := na
+        buy_fvg_bar          := na
+        buy_ob_top           := na
+        buy_ob_bot           := na
+        buy_limit_bar        := na
+        cnt_sweep_l += 1
+        
+        dbg_sweep_time := time
+        dbg_sweep_dir := "BUY"
+        dbg_sweep_px := low
+        dbg_sweep_liq := vis_last_pl
+        dbg_mss_55 := vis_last_ph
+        dbg_mss_33 := vis_last_ph_33
+        dbg_mss_22 := vis_last_ph_22
+        dbg_sweep_atr := atr_val[1]
+        dbg_death_reason := "PENDING"
+        dbg_max_reach := high
+        dbg_crossed_55_close := false
+        dbg_crossed_55_nodisp := false
+
+    else if bar_index - buy_poi_bar >= 20 or h1_bull_consumed
+        buy_state := STATE_IDLE
+else if buy_state == STATE_SWEEP_ARMED
+    if dbg_death_reason == "PENDING"
+        dbg_max_reach := math.max(dbg_max_reach, high)
+        if bar_confirmed and not na(buy_mss_level) and close > buy_mss_level
+            dbg_crossed_55_close := true
+            if not (close > open and is_disp_quant)
+                dbg_crossed_55_nodisp := true
+
+    if sweep_l
+        buy_sweep_bar := bar_index
+        buy_sweep_low := low
+        buy_mss_level := vis_last_ph
+        
+        dbg_sweep_time := time
+        dbg_sweep_dir := "BUY"
+        dbg_sweep_px := low
+        dbg_sweep_liq := vis_last_pl
+        dbg_mss_55 := vis_last_ph
+        dbg_mss_33 := vis_last_ph_33
+        dbg_mss_22 := vis_last_ph_22
+        dbg_sweep_atr := atr_val[1]
+        dbg_death_reason := "PENDING"
+        dbg_max_reach := high
+        dbg_crossed_55_close := false
+        dbg_crossed_55_nodisp := false
+
+    else if bar_confirmed and not na(buy_mss_level) and close > buy_mss_level and close > open and is_disp_quant
+        if dbg_death_reason == "PENDING"
+            dbg_death_reason := "SUCCESS (MSS_CONFIRMED)"
+        buy_state            := STATE_MSS_CONFIRMED
+        buy_displacement_bar := bar_index
+        buy_pre_disp_high    := high[1]
+        buy_ob_top           := m5_last_bear_top
+        buy_ob_bot           := m5_last_bear_bot
+        cnt_buy_mss += 1
+else if buy_state == STATE_MSS_CONFIRMED
+    if bar_confirmed and bar_index >= buy_displacement_bar + 1 and bar_index <= buy_displacement_bar + causal_fvg_window_in
+        has_causal_fvg = (low > buy_pre_disp_high) and ((low - buy_pre_disp_high) >= atr_val[1] * 0.15)
+        if has_causal_fvg
+            buy_fvg_top    := low
+            buy_fvg_bottom := buy_pre_disp_high
+            buy_fvg_bar    := bar_index
+            buy_state      := STATE_CAUSAL_FVG_CONFIRMED
+            cnt_buy_fvg += 1
+        else if bar_index == buy_displacement_bar + causal_fvg_window_in
+            buy_state := STATE_IDLE
+    else if bar_index > buy_displacement_bar + causal_fvg_window_in
+        buy_state := STATE_IDLE
+else if buy_state == STATE_CAUSAL_FVG_CONFIRMED
+    buy_ob_mid = buy_ob_bot + (buy_ob_top - buy_ob_bot) * 0.5
+    if not na(h1_bull_zone_top) and buy_ob_mid <= h1_bull_zone_top and buy_ob_mid >= h1_bull_zone_bot
+        buy_state := STATE_READY
+        cnt_buy_ready += 1
+    else
+        buy_state := STATE_IDLE
+        cnt_buy_ob_rej += 1
+else if buy_state == STATE_PENDING_LIMIT
+    if strategy.opentrades > 0 and strategy.position_size > 0
+        buy_state := STATE_IDLE
+        in_pos := true
+        cnt_buy_limit_filled += 1
+        last_sig_bar := bar_index
+        h1_bull_consumed := true
+    else if bar_index - buy_limit_bar >= 12
+        strategy.cancel("Long")
+        buy_state := STATE_IDLE
+        cnt_buy_expired_limit += 1
+
+if buy_state == STATE_IDLE
+    buy_sweep_low := na
+
+// -------------------------------------------------------------
+// ÉVOLUTION MACHINE D'ÉTATS : SELL
+// -------------------------------------------------------------
+
+// 1. Resets / Invalidations SELL
+if sell_state != STATE_IDLE
+    if not na(sell_sweep_high) and high > sell_sweep_high
+        if sell_state == STATE_SWEEP_ARMED and dbg_death_reason == "PENDING"
+            dbg_death_reason := "SL Structurel (high > sweep)"
+        if sell_state == STATE_PENDING_LIMIT
+            strategy.cancel("Short")
+            cnt_sell_limit_cancel += 1
+        sell_state := STATE_IDLE
+    else if sweep_l
+        if sell_state == STATE_SWEEP_ARMED and dbg_death_reason == "PENDING"
+            dbg_death_reason := "Sweep opposé (sweep_l)"
+        if sell_state == STATE_PENDING_LIMIT
+            strategy.cancel("Short")
+            cnt_sell_limit_cancel += 1
+        sell_state := STATE_IDLE
+    else if sell_state == STATE_SWEEP_ARMED and (bar_index - sell_sweep_bar > MAX_BARS_SWEEP_TO_MSS)
+        if dbg_death_reason == "PENDING"
+            dbg_death_reason := "Expiration 18 barres"
+        sell_state := STATE_IDLE
+    else if (sell_state == STATE_CAUSAL_FVG_CONFIRMED) and not na(sell_ob_top) and close > sell_ob_top
+        sell_state := STATE_IDLE
+    else if h1_bear_consumed
+        if sell_state == STATE_SWEEP_ARMED and dbg_death_reason == "PENDING"
+            dbg_death_reason := "H1 POI consommé"
+        if sell_state == STATE_PENDING_LIMIT
+            strategy.cancel("Short")
+            cnt_sell_limit_cancel += 1
+        sell_state := STATE_IDLE
+
+// 2. Transitions SELL
+if sell_state == STATE_IDLE
+    if in_h1_bear_zone
+        sell_state := STATE_IN_POI
+        sell_poi_bar := bar_index
+        cnt_sell_in_poi += 1
+
+if sell_state == STATE_IN_POI
+    if sweep_h
+        sell_state            := STATE_SWEEP_ARMED
+        sell_sweep_bar        := bar_index
+        sell_sweep_high       := high
+        sell_mss_level        := vis_last_pl
+        sell_displacement_bar := na
+        sell_fvg_top          := na
+        sell_fvg_bottom       := na
+        sell_fvg_bar          := na
+        sell_ob_top           := na
+        sell_ob_bot           := na
+        sell_limit_bar        := na
+        cnt_sweep_h += 1
+        
+        dbg_sweep_time := time
+        dbg_sweep_dir := "SELL"
+        dbg_sweep_px := high
+        dbg_sweep_liq := vis_last_ph
+        dbg_mss_55 := vis_last_pl
+        dbg_mss_33 := vis_last_pl_33
+        dbg_mss_22 := vis_last_pl_22
+        dbg_sweep_atr := atr_val[1]
+        dbg_death_reason := "PENDING"
+        dbg_max_reach := low
+        dbg_crossed_55_close := false
+        dbg_crossed_55_nodisp := false
+
+    else if bar_index - sell_poi_bar >= 20 or h1_bear_consumed
+        sell_state := STATE_IDLE
+else if sell_state == STATE_SWEEP_ARMED
+    if dbg_death_reason == "PENDING"
+        dbg_max_reach := math.min(dbg_max_reach, low)
+        if bar_confirmed and not na(sell_mss_level) and close < sell_mss_level
+            dbg_crossed_55_close := true
+            if not (close < open and is_disp_quant)
+                dbg_crossed_55_nodisp := true
+
+    if sweep_h
+        sell_sweep_bar := bar_index
+        sell_sweep_high := high
+        sell_mss_level := vis_last_pl
+        
+        dbg_sweep_time := time
+        dbg_sweep_dir := "SELL"
+        dbg_sweep_px := high
+        dbg_sweep_liq := vis_last_ph
+        dbg_mss_55 := vis_last_pl
+        dbg_mss_33 := vis_last_pl_33
+        dbg_mss_22 := vis_last_pl_22
+        dbg_sweep_atr := atr_val[1]
+        dbg_death_reason := "PENDING"
+        dbg_max_reach := low
+        dbg_crossed_55_close := false
+        dbg_crossed_55_nodisp := false
+
+    else if bar_confirmed and not na(sell_mss_level) and close < sell_mss_level and close < open and is_disp_quant
+        if dbg_death_reason == "PENDING"
+            dbg_death_reason := "SUCCESS (MSS_CONFIRMED)"
+        sell_state            := STATE_MSS_CONFIRMED
+        sell_displacement_bar := bar_index
+        sell_pre_disp_low     := low[1]
+        sell_ob_top           := m5_last_bull_top
+        sell_ob_bot           := m5_last_bull_bot
+        cnt_sell_mss += 1
+else if sell_state == STATE_MSS_CONFIRMED
+    if bar_confirmed and bar_index >= sell_displacement_bar + 1 and bar_index <= sell_displacement_bar + causal_fvg_window_in
+        has_causal_fvg = (high < sell_pre_disp_low) and ((sell_pre_disp_low - high) >= atr_val[1] * 0.15)
+        if has_causal_fvg
+            sell_fvg_top    := sell_pre_disp_low
+            sell_fvg_bottom := high
+            sell_fvg_bar    := bar_index
+            sell_state      := STATE_CAUSAL_FVG_CONFIRMED
+            cnt_sell_fvg += 1
+        else if bar_index == sell_displacement_bar + causal_fvg_window_in
+            sell_state := STATE_IDLE
+    else if bar_index > sell_displacement_bar + causal_fvg_window_in
+        sell_state := STATE_IDLE
+else if sell_state == STATE_CAUSAL_FVG_CONFIRMED
+    sell_ob_mid = sell_ob_bot + (sell_ob_top - sell_ob_bot) * 0.5
+    if not na(h1_bear_zone_bot) and sell_ob_mid <= h1_bear_zone_top and sell_ob_mid >= h1_bear_zone_bot
+        sell_state := STATE_READY
+        cnt_sell_ready += 1
+    else
+        sell_state := STATE_IDLE
+        cnt_sell_ob_rej += 1
+else if sell_state == STATE_PENDING_LIMIT
+    if strategy.opentrades > 0 and strategy.position_size < 0
+        sell_state := STATE_IDLE
+        in_pos := true
+        cnt_sell_limit_filled += 1
+        last_sig_bar := bar_index
+        h1_bear_consumed := true
+    else if bar_index - sell_limit_bar >= 12
+        strategy.cancel("Short")
+        sell_state := STATE_IDLE
+        cnt_sell_expired_limit += 1
+
+if sell_state == STATE_IDLE
+    sell_sweep_high := na
+
+// ---- LAB B7.2 : instrumentation LECTURE SEULE + étiquettes d'ordres ----
+// ra (âge réel) = barres écoulées depuis le PREMIER passage à READY de l'épisode en cours ; fa (âge FVG) = barres
+// écoulées depuis la FVG causale. Détectés après les transitions, lus uniquement par f_lab_tag : aucune condition
+// du moteur ne les utilise.
+var int lab_buy_ready_bar  = na
+var int lab_sell_ready_bar = na
+if buy_state == STATE_READY and buy_state[1] != STATE_READY
+    lab_buy_ready_bar := bar_index
+if sell_state == STATE_READY and sell_state[1] != STATE_READY
+    lab_sell_ready_bar := bar_index
+
+// Abrège le type de la cible finale (PDH / PDL inchangés)
+f_lab_ty(s) =>
+    s == "Pivot M5" ? "PVM5" : s == "Swing H1" ? "SWH1" : s == "Equal highs" ? "EQH" : s == "Equal lows" ? "EQL" : s == "Haut Asie" ? "HAS" : s == "Bas Asie" ? "BAS" : s == "Haut Londres" ? "HLO" : s == "Bas Londres" ? "BLO" : s == "FVG M5" ? "FVM5" : s == "FVG H1" ? "FVH1" : s == "R:R fixe" ? "RRFX" : s
+
+f_lab_age(b0) =>
+    na(b0) ? "-" : str.tostring(bar_index - b0)
+
+// Étiquette d'entrée (sans virgule ni guillemet), champs séparés par | :
+// B72|phase|symbole|route|grade|session|HHmm New York (ouverture de la barre)|s<SL>|t<TP final>|R<R planifié>|type de la cible finale|n<nb de cibles>|k<risque en ATR>|f<âge FVG>|r<âge READY>|bras
+// phase = OPEN, WARMUP ou W1 ; route = MTF (contexte H1 testé) ou ICT ; session = LDN, NY ou OFF ; bras = CONT ou KZ.
+f_lab_tag(is_mtf, grade, sl_px, tp_px, tpr, tpt, ntp, rk, fa_bar, ra_bar) =>
+    ses  = in_london ? "LDN" : (in_ny ? "NY" : "OFF")
+    head = "B72|" + lab_phase + "|" + syminfo.ticker + "|" + (is_mtf ? "MTF" : "ICT") + "|" + grade + "|" + ses + "|" + str.format_time(time, "HHmm", "America/New_York")
+    lvls = "|s" + str.tostring(sl_px, format.mintick) + "|t" + str.tostring(tp_px, format.mintick) + "|R" + str.tostring(tpr, "#.#") + "|" + f_lab_ty(tpt)
+    tail = "|n" + str.tostring(ntp) + "|k" + str.tostring(rk, "#.#") + "|f" + f_lab_age(fa_bar) + "|r" + f_lab_age(ra_bar) + "|" + (is_crypto_247 ? "CONT" : "KZ")
+    head + lvls + tail
+
+
+cooldown_ok = na(last_sig_bar) or (bar_index - last_sig_bar > cooldown_bars_in)
+
+// Déclencheurs de signal alimentés STRICTEMENT par la séquence causale ICT 2022
+// BUY/SELL mutuellement exclusifs à l'exécution
+cand_buy  = trade_window and in_lab_window and not in_pos and cooldown_ok and bar_confirmed and (buy_state == STATE_READY)
+cand_sell = trade_window and in_lab_window and not in_pos and cooldown_ok and bar_confirmed and (sell_state == STATE_READY)
+
+raw_buy  = cand_buy and not cand_sell
+raw_sell = cand_sell and not cand_buy
+
+calc_score(is_mtf) =>
+    score = is_mtf ? 3 : 2
+    grade_str = score == 3 ? "A+" : "A"
+    stars_str = score == 3 ? "★★★★★" : "★★★★☆"
+    [score, grade_str, stars_str]
+
+// ---- ENTREE LONG (remplace l'alert() par un vrai ordre pour le backtest) ----
+if raw_buy
+    [score, grade_txt, stars_txt] = calc_score(tested_h1_bull)
+    grade_ok = (min_grade_in == "B") or (min_grade_in == "A" and score >= 2) or (min_grade_in == "A+" and score == 3)
+
+    if grade_ok
+        b_entry  = buy_ob_bot + (buy_ob_top - buy_ob_bot) * 0.5
+        b_raw_sl = not na(buy_sweep_low) ? (buy_sweep_low - syminfo.mintick * 10) : (ta.lowest(low, 15) - syminfo.mintick * 10)
+        b_risk   = b_entry - b_raw_sl
+        
+        if b_risk > atr_val * atr_cap_mult or b_risk < atr_val * atr_floor_mult
+            buy_state := STATE_IDLE
+            buy_sweep_low := na
+            cnt_buy_sl_invalid += 1
+            label.new(bar_index, low - (syminfo.mintick * 5), "✖ SL ATR (" + str.tostring(b_risk / atr_val, "#.#") + "a)", color=color.new(color.gray, 55), textcolor=color.white, style=label.style_label_up, size=size.tiny)
+        else
+            [t_px, t_ty, t_r, t_ok] = f_trade_targets(true, b_entry, b_risk)
+            if not t_ok
+                buy_state := STATE_IDLE
+                buy_sweep_low := na
+                cnt_buy_no_target += 1
+                label.new(bar_index, low - (syminfo.mintick * 5), "✖ sans cible", color=color.new(color.gray, 55), textcolor=color.white, style=label.style_label_up, size=size.tiny)
+            else
+                setup_name   = tested_h1_bull ? "MTF FVG BUY" : "ICT 2022 BUY"
+                pos_entry    := b_entry
+                pos_sl       := b_raw_sl
+                pos_tp       := array.get(t_px, array.size(t_px) - 1)
+                pos_dir      := "BUY"
+                
+                buy_state := STATE_PENDING_LIMIT
+                buy_limit_bar := bar_index
+
+                lbl_text = stars_txt + " " + setup_name + " · TP " + str.tostring(array.get(t_r, array.size(t_r) - 1), "#.#") + "R (Lim)"
+                label.new(bar_index, low - (syminfo.mintick * 5), lbl_text, color=color.new(color_lux_bull, 80), textcolor=color.black, style=label.style_label_up, size=size.tiny)
+
+                // Dimensionnement universel (Pointvalue + Conversion de devise automatique par TV)
+                risk_amount_acct = strategy.equity * (risk_pct_in / 100)
+                risk_amount_quote = strategy.convert_to_symbol(risk_amount_acct)
+                qty = risk_amount_quote / (b_risk * syminfo.pointvalue)
+                
+                lab_tag = f_lab_tag(tested_h1_bull, grade_txt, pos_sl, pos_tp, array.get(t_r, array.size(t_r) - 1), array.get(t_ty, array.size(t_ty) - 1), array.size(t_px), b_risk / atr_val, buy_fvg_bar, lab_buy_ready_bar)
+                strategy.entry("Long", strategy.long, qty=qty, limit=b_entry, comment=lab_tag)
+                cnt_buy_limit_sent += 1
+                strategy.exit("Exit Long", "Long", stop=pos_sl, limit=pos_tp, comment_profit="TP", comment_loss="SL")
+
+// ---- ENTREE SHORT (remplace l'alert() par un vrai ordre pour le backtest) ----
+if raw_sell
+    [score, grade_txt, stars_txt] = calc_score(tested_h1_bear)
+    grade_ok = (min_grade_in == "B") or (min_grade_in == "A" and score >= 2) or (min_grade_in == "A+" and score == 3)
+
+    if grade_ok
+        s_entry  = sell_ob_bot + (sell_ob_top - sell_ob_bot) * 0.5
+        s_raw_sl = not na(sell_sweep_high) ? (sell_sweep_high + syminfo.mintick * 10) : (ta.highest(high, 15) + syminfo.mintick * 10)
+        s_risk   = s_raw_sl - s_entry
+        
+        if s_risk > atr_val * atr_cap_mult or s_risk < atr_val * atr_floor_mult
+            sell_state := STATE_IDLE
+            sell_sweep_high := na
+            cnt_sell_sl_invalid += 1
+            label.new(bar_index, high + (syminfo.mintick * 5), "✖ SL ATR (" + str.tostring(s_risk / atr_val, "#.#") + "a)", color=color.new(color.gray, 55), textcolor=color.white, style=label.style_label_down, size=size.tiny)
+        else
+            [t_px, t_ty, t_r, t_ok] = f_trade_targets(false, s_entry, s_risk)
+            if not t_ok
+                sell_state := STATE_IDLE
+                sell_sweep_high := na
+                cnt_sell_no_target += 1
+                label.new(bar_index, high + (syminfo.mintick * 5), "✖ sans cible", color=color.new(color.gray, 55), textcolor=color.white, style=label.style_label_down, size=size.tiny)
+            else
+                setup_name   = tested_h1_bear ? "MTF FVG SELL" : "ICT 2022 SELL"
+                pos_entry    := s_entry
+                pos_sl       := s_raw_sl
+                pos_tp       := array.get(t_px, array.size(t_px) - 1)
+                pos_dir      := "SELL"
+
+                sell_state := STATE_PENDING_LIMIT
+                sell_limit_bar := bar_index
+
+                lbl_text = stars_txt + " " + setup_name + " · TP " + str.tostring(array.get(t_r, array.size(t_r) - 1), "#.#") + "R (Lim)"
+                label.new(bar_index, high + (syminfo.mintick * 5), lbl_text, color=color.new(color_lux_bear, 80), textcolor=color.black, style=label.style_label_down, size=size.tiny)
+
+                // Dimensionnement universel (Pointvalue + Conversion de devise automatique par TV)
+                risk_amount_acct = strategy.equity * (risk_pct_in / 100)
+                risk_amount_quote = strategy.convert_to_symbol(risk_amount_acct)
+                qty = risk_amount_quote / (s_risk * syminfo.pointvalue)
+
+                lab_tag = f_lab_tag(tested_h1_bear, grade_txt, pos_sl, pos_tp, array.get(t_r, array.size(t_r) - 1), array.get(t_ty, array.size(t_ty) - 1), array.size(t_px), s_risk / atr_val, sell_fvg_bar, lab_sell_ready_bar)
+                strategy.entry("Short", strategy.short, qty=qty, limit=s_entry, comment=lab_tag)
+                cnt_sell_limit_sent += 1
+                strategy.exit("Exit Short", "Short", stop=pos_sl, limit=pos_tp, comment_profit="TP", comment_loss="SL")
+
+// ==========================================
+// 5. SORTIES : timeout 30 barres + resynchro de in_pos avec le broker
+// ==========================================
+if in_pos
+    pos_expired = (bar_index - last_sig_bar) >= 30
+    if pos_expired
+        strategy.close(pos_dir == "BUY" ? "Long" : "Short", comment="EXPIRED")
+
+// Resynchronise notre état interne (in_pos) avec le vrai état du broker emulator
+// (que la sortie vienne du TP, du SL ou du timeout ci-dessus).
+// BUG CORRIGÉ (revue ChatGPT du 18/09) : strategy.opentrades ne reflète le fill d'un ordre
+// qu'à partir de la bougie SUIVANTE (comportement documenté de Pine), pas immédiatement dans
+// la même exécution que strategy.entry(). Sans le garde-fou bar_index > last_sig_bar, ce bloc
+// repassait in_pos à false dès la bougie d'entrée elle-même — cassant la garde "not in_pos" et
+// laissant la machine à états se réarmer ou déclencher un retournement sur une position réelle.
+if in_pos and strategy.opentrades == 0 and bar_index > last_sig_bar
+    in_pos  := false
+    pos_dir := "NONE"
+
+
+// ==========================================
+// 6. TABLEAU DE DIAGNOSTIC (DEBUG) — funnel de la séquence causale sur toute la période testée.
+// Purement informatif, à retirer une fois le diagnostic terminé.
+// ==========================================
+var table dbg = table.new(position.bottom_right, 6, 30, border_color=color.gray, border_width=1, bgcolor=color.new(color.black, 15))
+if barstate.islast
+    // COLONNE 1: BUY
+    table.cell(dbg, 0, 0, "DIAGNOSTIC BUY", text_color=color.yellow, text_size=size.small, text_halign=text.align_left)
+    table.cell(dbg, 1, 0, "", bgcolor=color.new(color.black,15))
+    table.cell(dbg, 0, 1, "H1 Sweeps détectés", text_color=color.white, text_size=size.small, text_halign=text.align_left)
+    table.cell(dbg, 1, 1, str.tostring(h1_cnt_buy_sweep), text_color=color.white, text_size=size.small, text_halign=text.align_right)
+    table.cell(dbg, 0, 2, "H1 MSS confirmés", text_color=color.white, text_size=size.small, text_halign=text.align_left)
+    table.cell(dbg, 1, 2, str.tostring(h1_cnt_buy_mss), text_color=color.white, text_size=size.small, text_halign=text.align_right)
+    table.cell(dbg, 0, 3, "H1 FVG validées", text_color=color.white, text_size=size.small, text_halign=text.align_left)
+    table.cell(dbg, 1, 3, str.tostring(h1_cnt_buy_fvg), text_color=color.white, text_size=size.small, text_halign=text.align_right)
+    table.cell(dbg, 0, 4, "H1 FVG expirées", text_color=color.gray, text_size=size.small, text_halign=text.align_left)
+    table.cell(dbg, 1, 4, str.tostring(h1_cnt_buy_fvg_exp), text_color=color.gray, text_size=size.small, text_halign=text.align_right)
+    table.cell(dbg, 0, 5, "H1 POI Validés (Discount)", text_color=color.lime, text_size=size.small, text_halign=text.align_left)
+    table.cell(dbg, 1, 5, str.tostring(h1_cnt_buy_poi), text_color=color.lime, text_size=size.small, text_halign=text.align_right)
+    table.cell(dbg, 0, 6, "H1 POI Rejetés (Eq)", text_color=color.red, text_size=size.small, text_halign=text.align_left)
+    table.cell(dbg, 1, 6, str.tostring(h1_cnt_buy_poi_rej), text_color=color.red, text_size=size.small, text_halign=text.align_right)
+    
+    table.cell(dbg, 0, 7, "---", text_color=color.gray, text_size=size.small, text_halign=text.align_left)
+    
+    table.cell(dbg, 0, 8, "M5 Entrées dans POI", text_color=color.white, text_size=size.small, text_halign=text.align_left)
+    table.cell(dbg, 1, 8, str.tostring(cnt_buy_in_poi), text_color=color.white, text_size=size.small, text_halign=text.align_right)
+    table.cell(dbg, 0, 9, "M5 Sweeps", text_color=color.white, text_size=size.small, text_halign=text.align_left)
+    table.cell(dbg, 1, 9, str.tostring(cnt_sweep_l), text_color=color.white, text_size=size.small, text_halign=text.align_right)
+    table.cell(dbg, 0, 10, "M5 MSS confirmés", text_color=color.white, text_size=size.small, text_halign=text.align_left)
+    table.cell(dbg, 1, 10, str.tostring(cnt_buy_mss), text_color=color.white, text_size=size.small, text_halign=text.align_right)
+    table.cell(dbg, 0, 11, "M5 FVG causales", text_color=color.white, text_size=size.small, text_halign=text.align_left)
+    table.cell(dbg, 1, 11, str.tostring(cnt_buy_fvg), text_color=color.white, text_size=size.small, text_halign=text.align_right)
+    table.cell(dbg, 0, 12, "M5 OB Rejetés (hors POI)", text_color=color.red, text_size=size.small, text_halign=text.align_left)
+    table.cell(dbg, 1, 12, str.tostring(cnt_buy_ob_rej), text_color=color.red, text_size=size.small, text_halign=text.align_right)
+    table.cell(dbg, 0, 13, "M5 READY / Limit préparé", text_color=color.lime, text_size=size.small, text_halign=text.align_left)
+    table.cell(dbg, 1, 13, str.tostring(cnt_buy_ready), text_color=color.lime, text_size=size.small, text_halign=text.align_right)
+    table.cell(dbg, 0, 14, "M5 Abandon : SL hors ATR", text_color=color.gray, text_size=size.small, text_halign=text.align_left)
+    table.cell(dbg, 1, 14, str.tostring(cnt_buy_sl_invalid), text_color=color.gray, text_size=size.small, text_halign=text.align_right)
+    table.cell(dbg, 0, 15, "M5 Abandon : pas de cible", text_color=color.gray, text_size=size.small, text_halign=text.align_left)
+    table.cell(dbg, 1, 15, str.tostring(cnt_buy_no_target), text_color=color.gray, text_size=size.small, text_halign=text.align_right)
+    
+    table.cell(dbg, 0, 16, "M5 Limit Envoyés", text_color=color.yellow, text_size=size.small, text_halign=text.align_left)
+    table.cell(dbg, 1, 16, str.tostring(cnt_buy_limit_sent), text_color=color.yellow, text_size=size.small, text_halign=text.align_right)
+    table.cell(dbg, 0, 17, "M5 Limit Exécutés", text_color=color.lime, text_size=size.small, text_halign=text.align_left)
+    table.cell(dbg, 1, 17, str.tostring(cnt_buy_limit_filled), text_color=color.lime, text_size=size.small, text_halign=text.align_right)
+    table.cell(dbg, 0, 18, "M5 Limit Annulés (contexte)", text_color=color.red, text_size=size.small, text_halign=text.align_left)
+    table.cell(dbg, 1, 18, str.tostring(cnt_buy_limit_cancel), text_color=color.red, text_size=size.small, text_halign=text.align_right)
+    table.cell(dbg, 0, 19, "M5 Limit Expirés (12 barres)", text_color=color.gray, text_size=size.small, text_halign=text.align_left)
+    table.cell(dbg, 1, 19, str.tostring(cnt_buy_expired_limit), text_color=color.gray, text_size=size.small, text_halign=text.align_right)
+
+    // COLONNE 2: SELL
+    table.cell(dbg, 2, 0, "DIAGNOSTIC SELL", text_color=color.yellow, text_size=size.small, text_halign=text.align_left)
+    table.cell(dbg, 3, 0, "", bgcolor=color.new(color.black,15))
+    table.cell(dbg, 2, 1, "H1 Sweeps détectés", text_color=color.white, text_size=size.small, text_halign=text.align_left)
+    table.cell(dbg, 3, 1, str.tostring(h1_cnt_sell_sweep), text_color=color.white, text_size=size.small, text_halign=text.align_right)
+    table.cell(dbg, 2, 2, "H1 MSS confirmés", text_color=color.white, text_size=size.small, text_halign=text.align_left)
+    table.cell(dbg, 3, 2, str.tostring(h1_cnt_sell_mss), text_color=color.white, text_size=size.small, text_halign=text.align_right)
+    table.cell(dbg, 2, 3, "H1 FVG validées", text_color=color.white, text_size=size.small, text_halign=text.align_left)
+    table.cell(dbg, 3, 3, str.tostring(h1_cnt_sell_fvg), text_color=color.white, text_size=size.small, text_halign=text.align_right)
+    table.cell(dbg, 2, 4, "H1 FVG expirées", text_color=color.gray, text_size=size.small, text_halign=text.align_left)
+    table.cell(dbg, 3, 4, str.tostring(h1_cnt_sell_fvg_exp), text_color=color.gray, text_size=size.small, text_halign=text.align_right)
+    table.cell(dbg, 2, 5, "H1 POI Validés (Premium)", text_color=color.lime, text_size=size.small, text_halign=text.align_left)
+    table.cell(dbg, 3, 5, str.tostring(h1_cnt_sell_poi), text_color=color.lime, text_size=size.small, text_halign=text.align_right)
+    table.cell(dbg, 2, 6, "H1 POI Rejetés (Eq)", text_color=color.red, text_size=size.small, text_halign=text.align_left)
+    table.cell(dbg, 3, 6, str.tostring(h1_cnt_sell_poi_rej), text_color=color.red, text_size=size.small, text_halign=text.align_right)
+    
+    table.cell(dbg, 2, 7, "---", text_color=color.gray, text_size=size.small, text_halign=text.align_left)
+    
+    table.cell(dbg, 2, 8, "M5 Entrées dans POI", text_color=color.white, text_size=size.small, text_halign=text.align_left)
+    table.cell(dbg, 3, 8, str.tostring(cnt_sell_in_poi), text_color=color.white, text_size=size.small, text_halign=text.align_right)
+    table.cell(dbg, 2, 9, "M5 Sweeps", text_color=color.white, text_size=size.small, text_halign=text.align_left)
+    table.cell(dbg, 3, 9, str.tostring(cnt_sweep_h), text_color=color.white, text_size=size.small, text_halign=text.align_right)
+    table.cell(dbg, 2, 10, "M5 MSS confirmés", text_color=color.white, text_size=size.small, text_halign=text.align_left)
+    table.cell(dbg, 3, 10, str.tostring(cnt_sell_mss), text_color=color.white, text_size=size.small, text_halign=text.align_right)
+    table.cell(dbg, 2, 11, "M5 FVG causales", text_color=color.white, text_size=size.small, text_halign=text.align_left)
+    table.cell(dbg, 3, 11, str.tostring(cnt_sell_fvg), text_color=color.white, text_size=size.small, text_halign=text.align_right)
+    table.cell(dbg, 2, 12, "M5 OB Rejetés (hors POI)", text_color=color.red, text_size=size.small, text_halign=text.align_left)
+    table.cell(dbg, 3, 12, str.tostring(cnt_sell_ob_rej), text_color=color.red, text_size=size.small, text_halign=text.align_right)
+    table.cell(dbg, 2, 13, "M5 READY / Limit préparé", text_color=color.lime, text_size=size.small, text_halign=text.align_left)
+    table.cell(dbg, 3, 13, str.tostring(cnt_sell_ready), text_color=color.lime, text_size=size.small, text_halign=text.align_right)
+    table.cell(dbg, 2, 14, "M5 Abandon : SL hors ATR", text_color=color.gray, text_size=size.small, text_halign=text.align_left)
+    table.cell(dbg, 3, 14, str.tostring(cnt_sell_sl_invalid), text_color=color.gray, text_size=size.small, text_halign=text.align_right)
+    table.cell(dbg, 2, 15, "M5 Abandon : pas de cible", text_color=color.gray, text_size=size.small, text_halign=text.align_left)
+    table.cell(dbg, 3, 15, str.tostring(cnt_sell_no_target), text_color=color.gray, text_size=size.small, text_halign=text.align_right)
+    
+    table.cell(dbg, 2, 16, "M5 Limit Envoyés", text_color=color.yellow, text_size=size.small, text_halign=text.align_left)
+    table.cell(dbg, 3, 16, str.tostring(cnt_sell_limit_sent), text_color=color.yellow, text_size=size.small, text_halign=text.align_right)
+    table.cell(dbg, 2, 17, "M5 Limit Exécutés", text_color=color.lime, text_size=size.small, text_halign=text.align_left)
+    table.cell(dbg, 3, 17, str.tostring(cnt_sell_limit_filled), text_color=color.lime, text_size=size.small, text_halign=text.align_right)
+    table.cell(dbg, 2, 18, "M5 Limit Annulés (contexte)", text_color=color.red, text_size=size.small, text_halign=text.align_left)
+    table.cell(dbg, 3, 18, str.tostring(cnt_sell_limit_cancel), text_color=color.red, text_size=size.small, text_halign=text.align_right)
+    table.cell(dbg, 2, 19, "M5 Limit Expirés (12 barres)", text_color=color.gray, text_size=size.small, text_halign=text.align_left)
+    table.cell(dbg, 3, 19, str.tostring(cnt_sell_expired_limit), text_color=color.gray, text_size=size.small, text_halign=text.align_right)
+
+    // COLONNE 4: AUTOPSIE SWEEP
+    table.cell(dbg, 4, 0, "AUTOPSIE DU DERNIER SWEEP", text_color=color.orange, text_size=size.small, text_halign=text.align_left)
+    table.cell(dbg, 5, 0, "", bgcolor=color.new(color.black,15))
+    
+    table.cell(dbg, 4, 1, "Sens", text_color=color.white, text_size=size.small, text_halign=text.align_left)
+    table.cell(dbg, 5, 1, dbg_sweep_dir, text_color=color.white, text_size=size.small, text_halign=text.align_right)
+    
+    time_str = na(dbg_sweep_time) ? "-" : str.format_time(dbg_sweep_time, "MM-dd HH:mm", "America/New_York")
+    table.cell(dbg, 4, 2, "Date (New York)", text_color=color.white, text_size=size.small, text_halign=text.align_left)
+    table.cell(dbg, 5, 2, time_str, text_color=color.white, text_size=size.small, text_halign=text.align_right)
+
+    table.cell(dbg, 4, 3, "Prix Sweep", text_color=color.white, text_size=size.small, text_halign=text.align_left)
+    table.cell(dbg, 5, 3, str.tostring(dbg_sweep_px), text_color=color.white, text_size=size.small, text_halign=text.align_right)
+    
+    if dbg_sweep_dir == "BUY"
+        dist_55 = na(dbg_mss_55) or na(dbg_sweep_px) ? na : (dbg_mss_55 - dbg_sweep_px) / dbg_sweep_atr
+        dist_33 = na(dbg_mss_33) or na(dbg_sweep_px) ? na : (dbg_mss_33 - dbg_sweep_px) / dbg_sweep_atr
+        dist_22 = na(dbg_mss_22) or na(dbg_sweep_px) ? na : (dbg_mss_22 - dbg_sweep_px) / dbg_sweep_atr
+        
+        table.cell(dbg, 4, 4, "Niveau MSS 5/5", text_color=color.white, text_size=size.small, text_halign=text.align_left)
+        table.cell(dbg, 5, 4, str.tostring(dbg_mss_55) + " (" + str.tostring(dist_55, "#.#") + "a)", text_color=color.white, text_size=size.small, text_halign=text.align_right)
+        
+        table.cell(dbg, 4, 5, "Niveau MSS 3/3", text_color=color.silver, text_size=size.small, text_halign=text.align_left)
+        table.cell(dbg, 5, 5, str.tostring(dbg_mss_33) + " (" + str.tostring(dist_33, "#.#") + "a)", text_color=color.silver, text_size=size.small, text_halign=text.align_right)
+        
+        table.cell(dbg, 4, 6, "Niveau MSS 2/2", text_color=color.gray, text_size=size.small, text_halign=text.align_left)
+        table.cell(dbg, 5, 6, str.tostring(dbg_mss_22) + " (" + str.tostring(dist_22, "#.#") + "a)", text_color=color.gray, text_size=size.small, text_halign=text.align_right)
+        
+        table.cell(dbg, 4, 7, "Plus haut atteint", text_color=color.white, text_size=size.small, text_halign=text.align_left)
+        table.cell(dbg, 5, 7, str.tostring(dbg_max_reach), text_color=color.white, text_size=size.small, text_halign=text.align_right)
+        
+    else if dbg_sweep_dir == "SELL"
+        dist_55 = na(dbg_mss_55) or na(dbg_sweep_px) ? na : (dbg_sweep_px - dbg_mss_55) / dbg_sweep_atr
+        dist_33 = na(dbg_mss_33) or na(dbg_sweep_px) ? na : (dbg_sweep_px - dbg_mss_33) / dbg_sweep_atr
+        dist_22 = na(dbg_mss_22) or na(dbg_sweep_px) ? na : (dbg_sweep_px - dbg_mss_22) / dbg_sweep_atr
+        
+        table.cell(dbg, 4, 4, "Niveau MSS 5/5", text_color=color.white, text_size=size.small, text_halign=text.align_left)
+        table.cell(dbg, 5, 4, str.tostring(dbg_mss_55) + " (" + str.tostring(dist_55, "#.#") + "a)", text_color=color.white, text_size=size.small, text_halign=text.align_right)
+        
+        table.cell(dbg, 4, 5, "Niveau MSS 3/3", text_color=color.silver, text_size=size.small, text_halign=text.align_left)
+        table.cell(dbg, 5, 5, str.tostring(dbg_mss_33) + " (" + str.tostring(dist_33, "#.#") + "a)", text_color=color.silver, text_size=size.small, text_halign=text.align_right)
+        
+        table.cell(dbg, 4, 6, "Niveau MSS 2/2", text_color=color.gray, text_size=size.small, text_halign=text.align_left)
+        table.cell(dbg, 5, 6, str.tostring(dbg_mss_22) + " (" + str.tostring(dist_22, "#.#") + "a)", text_color=color.gray, text_size=size.small, text_halign=text.align_right)
+        
+        table.cell(dbg, 4, 7, "Plus bas atteint", text_color=color.white, text_size=size.small, text_halign=text.align_left)
+        table.cell(dbg, 5, 7, str.tostring(dbg_max_reach), text_color=color.white, text_size=size.small, text_halign=text.align_right)
+    
+    table.cell(dbg, 4, 8, "Franchissement Clôture ?", text_color=color.white, text_size=size.small, text_halign=text.align_left)
+    table.cell(dbg, 5, 8, dbg_crossed_55_close ? "OUI" : "NON", text_color=dbg_crossed_55_close ? color.lime : color.gray, text_size=size.small, text_halign=text.align_right)
+    
+    table.cell(dbg, 4, 9, "Échec par manque de Disp ?", text_color=color.white, text_size=size.small, text_halign=text.align_left)
+    table.cell(dbg, 5, 9, dbg_crossed_55_nodisp ? "OUI" : "NON", text_color=dbg_crossed_55_nodisp ? color.red : color.gray, text_size=size.small, text_halign=text.align_right)
+    
+    table.cell(dbg, 4, 10, "Raison de sortie/mort", text_color=color.orange, text_size=size.small, text_halign=text.align_left)
+    table.cell(dbg, 5, 10, dbg_death_reason, text_color=color.orange, text_size=size.small, text_halign=text.align_right)
+
+
+if h1_bull_consumed and not na(h1_bull_box)
+    box.set_extend(h1_bull_box, extend.none)
+    box.set_right(h1_bull_box, bar_index)
+    h1_bull_box := na
+
+if h1_bear_consumed and not na(h1_bear_box)
+    box.set_extend(h1_bear_box, extend.none)
+    box.set_right(h1_bear_box, bar_index)
+    h1_bear_box := na

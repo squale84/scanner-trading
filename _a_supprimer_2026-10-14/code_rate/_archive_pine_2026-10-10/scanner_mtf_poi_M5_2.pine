@@ -1,0 +1,809 @@
+//@version=5
+// ============================================================================
+// MTF-POI V1.0-M5.2 — PHASE 3 : couche H1 (figée) + couche M5 + ordres (stratégie)
+// ----------------------------------------------------------------------------
+// Séquence : POI H1 armé et conforme au biais -> sweep M5 dans le POI -> MSS M5
+// dans le sens du biais -> displacement qui laisse une FVG M5 (obligatoire) ->
+// ordres limites : OB / FVG 50 % / comparaison des deux.
+// Stop : au-delà de l'extrême du sweep M5 (+ marge). Cible : R fixe (V1.0-M5).
+// Cibles de liquidité (style scanner) : PAS ENCORE implémentées (phase suivante).
+// Réglages H1 figés provisoirement : pivot 5, displacement 1,5 x ATR, hauteur max 1,0 x ATR.
+// Causalité : valeurs HTF lues avec request.security(..., lookahead_on) sur [1] ;
+// ordres décidés à la clôture d'une bougie M5 (calc_on_every_tick = false).
+// À utiliser sur XAUUSD en M5. NON COMPILÉ dans TradingView à la livraison.
+// ============================================================================
+SCRIPT_VERSION = "MTF-POI V1.0-M5.2"
+
+strategy("MTF-POI V1.0-M5.2 — H1 + M5 + ordres", shorttitle="MTF-POI V1.0-M5.2", overlay=true,
+     initial_capital=222,
+     default_qty_type=strategy.fixed,
+     default_qty_value=1,
+     pyramiding=2,
+     margin_long=1, margin_short=1,
+     calc_on_every_tick=false,
+     max_boxes_count=200, max_lines_count=500, max_labels_count=300, max_bars_back=500)
+
+// ==========================================
+// 1. RÉGLAGES
+// ==========================================
+grp_bias = "Biais de tendance (filtre sur les POI)"
+bias_mode    = input.string("HH/HL (pivots)", title="Mode du biais", options=["Aucun", "HH/HL (pivots)", "Dernier MSS"], group=grp_bias)
+bias_tf      = input.string("H4", title="UT du biais", options=["H1", "H4", "D"], group=grp_bias)
+bias_piv_len = input.int(3, title="Pivots du biais (gauche = droite)", minval=2, maxval=5, group=grp_bias)
+
+grp_h1 = "Couche H1 (création du POI)"
+h1_piv_len       = input.int(5, title="Pivots H1 (gauche = droite)", minval=2, maxval=5, group=grp_h1)
+h1_use_sweep     = input.bool(false, title="Exiger une prise de liquidité H1 avant le MSS", group=grp_h1)
+h1_sweep_win     = input.int(10, title="Fenêtre balayage H1 -> MSS (bougies H1)", minval=1, maxval=30, group=grp_h1)
+h1_disp_ratio    = input.float(0.55, title="Displacement H1 : corps / range minimum", minval=0.3, maxval=0.9, step=0.05, group=grp_h1)
+h1_disp_atr      = input.float(1.5, title="Displacement H1 : corps minimum (x ATR H1, 0 = off)", minval=0.0, maxval=3.0, step=0.1, group=grp_h1)
+h1_fvg_atr       = input.float(0.15, title="Taille minimale d'une FVG H1 (x ATR H1)", minval=0.0, maxval=1.0, step=0.05, group=grp_h1)
+h1_fvg_wait      = input.int(2, title="Attente de la FVG après le MSS (bougies H1)", minval=0, maxval=6, group=grp_h1)
+poi_mode         = input.string("OB + FVG", title="POI H1", options=["OB", "FVG", "OB + FVG"], group=grp_h1)
+ob_shape         = input.string("Bougie entière", title="Forme de l'OB H1", options=["Bougie entière", "Corps seulement"], group=grp_h1)
+h1_poi_max_atr   = input.float(1.0, title="Hauteur max d'une zone POI (x ATR H1, 0 = off)", minval=0.0, maxval=10.0, step=0.5, group=grp_h1)
+h1_discount_only = input.bool(false, title="POI en discount (achat) / premium (vente) seulement", group=grp_h1)
+poi_expiry       = input.int(48, title="Expiration du POI (bougies H1)", minval=6, maxval=200, group=grp_h1)
+
+grp_m5 = "Couche M5 (confirmation dans le POI)"
+m5_piv_len     = input.int(3, title="Pivots M5 (liquidité balayée)", minval=2, maxval=5, group=grp_m5)
+m5_sweep_close = input.bool(false, title="Sweep : exiger une clôture de retour au-dessus/en dessous du niveau", group=grp_m5)
+m5_struct_lb   = input.int(12, title="Niveau du MSS M5 : plus haut/bas des N bougies avant le sweep", minval=3, maxval=40, group=grp_m5)
+m5_mss_win     = input.int(8, title="Fenêtre sweep -> MSS M5 (bougies M5)", minval=1, maxval=30, group=grp_m5)
+m5_disp_ratio  = input.float(0.65, title="Displacement M5 : corps / range minimum", minval=0.3, maxval=0.95, step=0.05, group=grp_m5)
+m5_disp_atr    = input.float(1.2, title="Displacement M5 : corps minimum (x ATR M5, 0 = off)", minval=0.0, maxval=4.0, step=0.1, group=grp_m5)
+m5_fvg_atr     = input.float(0.1, title="Taille minimale de la FVG M5 (x ATR M5)", minval=0.0, maxval=1.0, step=0.05, group=grp_m5)
+m5_fvg_wait    = input.int(1, title="Délai max MSS -> FVG M5 (bougies M5)", minval=0, maxval=2, group=grp_m5)
+m5_ob_lb       = input.int(10, title="Recherche de l'OB M5 : bougies en arrière", minval=2, maxval=15, group=grp_m5)
+m5_ob_shape    = input.string("Bougie entière", title="Forme de l'OB M5", options=["Bougie entière", "Corps seulement"], group=grp_m5)
+m5_ob_sweep    = input.bool(true, title="L'OB M5 doit lui-même avoir balayé la liquidité", group=grp_m5)
+
+grp_en = "Entrée, stop, cible"
+m5_entry_mode   = input.string("Comparaison", title="Mode d'entrée", options=["OB", "FVG 50 %", "Comparaison"], group=grp_en)
+m5_ob_entry     = input.string("Proximal", title="Prix d'entrée sur l'OB", options=["Proximal", "50 %"], group=grp_en)
+m5_pd_filter    = input.bool(true, title="FVG 50 % : exiger discount (achat) / premium (vente)", group=grp_en)
+m5_sl_margin    = input.float(0.5, title="Marge du stop au-delà du sweep ($)", minval=0.0, maxval=10.0, step=0.1, group=grp_en)
+m5_tp_r         = input.float(2.0, title="Cible : multiple de R (1 = 1:1, 2 = 1:2, 3 = 1:3)", minval=0.5, maxval=10.0, step=0.5, group=grp_en)
+m5_order_expiry = input.int(30, title="Expiration des ordres (bougies M5)", minval=3, maxval=200, group=grp_en)
+
+grp_sz = "Taille de position (XTB, hypothèses à vérifier)"
+risk_max_eur = input.float(20.0, title="Perte maximale par trade (EUR)", minval=1.0, maxval=200.0, step=1.0, group=grp_sz)
+lot_mode     = input.string("Lot fixe", title="Mode de lot", options=["Lot fixe", "Selon perte max"], group=grp_sz)
+lot_fixed    = input.float(0.01, title="Lot fixe", minval=0.01, maxval=1.0, step=0.01, group=grp_sz)
+lot_max      = input.float(0.10, title="Lot maximal (mode selon perte max)", minval=0.01, maxval=5.0, step=0.01, group=grp_sz)
+oz_per_lot   = input.float(100.0, title="HYPOTHESE : onces par lot", minval=1.0, maxval=1000.0, group=grp_sz)
+eur_per_usd  = input.float(0.9, title="HYPOTHESE : EUR pour 1 USD", minval=0.5, maxval=1.5, step=0.01, group=grp_sz)
+m5_spread    = input.float(0.0, title="Spread simulé ($ par once, à relever dans xStation)", minval=0.0, maxval=5.0, step=0.05, group=grp_sz)
+
+grp_ui = "Affichage"
+show_boxes  = input.bool(true, title="Afficher les zones POI", group=grp_ui)
+show_arrows = input.bool(true, title="Flèche à chaque MSS H1", group=grp_ui)
+show_bias   = input.bool(true, title="Colorer le fond selon le biais", group=grp_ui)
+show_table  = input.bool(true, title="Afficher le tableau de diagnostic H1", group=grp_ui)
+show_m5     = input.bool(true, title="Marqueurs sweep / MSS M5", group=grp_ui)
+show_setup  = input.bool(true, title="Tracer OB M5 (bleu), FVG M5 (violet), entrée / stop / cible", group=grp_ui)
+show_table2 = input.bool(true, title="Afficher le tableau M5 + performance", group=grp_ui)
+
+// ==========================================
+// 2. BIAIS DE TENDANCE (UT séparée)
+// ==========================================
+f_bias() =>
+    bph = ta.pivothigh(high, bias_piv_len, bias_piv_len)
+    bpl = ta.pivotlow(low, bias_piv_len, bias_piv_len)
+    var float lph = na
+    var float pph = na
+    var float lpl = na
+    var float ppl = na
+    if not na(bph)
+        pph := lph
+        lph := bph
+    if not na(bpl)
+        ppl := lpl
+        lpl := bpl
+    hh_hl = not na(pph) and not na(ppl) and lph > pph and lpl > ppl
+    ll_lh = not na(pph) and not na(ppl) and lph < pph and lpl < ppl
+    b_struct = hh_hl ? 1 : ll_lh ? -1 : 0
+    var int brk = 0
+    if not na(lph) and close > lph
+        brk := 1
+    else if not na(lpl) and close < lpl
+        brk := -1
+    res = bias_mode == "Aucun" ? 0 : bias_mode == "HH/HL (pivots)" ? b_struct : brk
+    res[1]
+
+bias_tf_str = bias_tf == "H1" ? "60" : bias_tf == "H4" ? "240" : "D"
+htf_bias = request.security(syminfo.tickerid, bias_tf_str, f_bias(), lookahead = barmerge.lookahead_on)
+
+// ==========================================
+// 3. MOTEUR H1 (exécuté sur les bougies H1)
+// ==========================================
+f_h1() =>
+    h1_atr_v = ta.atr(14)
+    ph = ta.pivothigh(high, h1_piv_len, h1_piv_len)
+    pl = ta.pivotlow(low, h1_piv_len, h1_piv_len)
+
+    var float last_ph = na
+    var float last_pl = na
+    if not na(ph)
+        last_ph := ph
+    if not na(pl)
+        last_pl := pl
+
+    // --- displacement ---
+    rng = high - low
+    body = math.abs(close - open)
+    disp_ok = rng > 0 and (body / rng) >= h1_disp_ratio and (h1_disp_atr == 0 or body >= h1_disp_atr * h1_atr_v)
+
+    // --- prises de liquidité H1 (balayage d'un swing puis réintégration) ---
+    var int since_sw_l = 999
+    var int since_sw_h = 999
+    sw_l = not na(last_pl) and low < last_pl and close > last_pl
+    sw_h = not na(last_ph) and high > last_ph and close < last_ph
+    since_sw_l := sw_l ? 0 : math.min(since_sw_l + 1, 999)
+    since_sw_h := sw_h ? 0 : math.min(since_sw_h + 1, 999)
+
+    // --- MSS H1 : première clôture au-delà du dernier swing, avec displacement ---
+    mss_up = not na(last_ph) and close > last_ph and close[1] <= last_ph and close > open and disp_ok and (not h1_use_sweep or since_sw_l <= h1_sweep_win)
+    mss_dn = not na(last_pl) and close < last_pl and close[1] >= last_pl and close < open and disp_ok and (not h1_use_sweep or since_sw_h <= h1_sweep_win)
+    evt_up_v = mss_up ? 1 : 0
+    evt_dn_v = mss_dn ? 1 : 0
+
+    // --- compteurs de diagnostic ---
+    var int c_b_mss = 0
+    var int c_b_poi = 0
+    var int c_b_rej = 0
+    var int c_b_rep = 0
+    var int c_b_exp = 0
+    var int c_b_inv = 0
+    var int c_s_mss = 0
+    var int c_s_poi = 0
+    var int c_s_rej = 0
+    var int c_s_rep = 0
+    var int c_s_exp = 0
+    var int c_s_inv = 0
+
+    // ================= ACHAT =================
+    var bool  b_cand = false
+    var int   b_cand_bar = na
+    var float b_c_ob_top = na
+    var float b_c_ob_bot = na
+    var float b_c_fvg_top = na
+    var float b_c_fvg_bot = na
+    var float b_leg_low = na
+    var float b_leg_high = na
+    var bool  b_armed = false
+    var int   b_armed_bar = na
+    var float b_a_ob_top = na
+    var float b_a_ob_bot = na
+    var float b_a_fvg_top = na
+    var float b_a_fvg_bot = na
+
+    if mss_up
+        c_b_mss += 1
+        b_cand := true
+        b_cand_bar := bar_index
+        b_leg_low := last_pl
+        b_leg_high := high
+        b_c_ob_top := na
+        b_c_ob_bot := na
+        b_c_fvg_top := na
+        b_c_fvg_bot := na
+        ob_found = false
+        for i = 1 to 10
+            if not ob_found and close[i] < open[i]
+                ob_found := true
+                b_c_ob_top := ob_shape == "Corps seulement" ? open[i] : high[i]
+                b_c_ob_bot := ob_shape == "Corps seulement" ? close[i] : low[i]
+
+    if b_cand
+        b_leg_high := math.max(b_leg_high, high)
+        if poi_mode != "OB" and na(b_c_fvg_top)
+            gap_b = low - high[2]
+            if gap_b > 0 and gap_b >= h1_fvg_atr * h1_atr_v
+                b_c_fvg_top := low
+                b_c_fvg_bot := high[2]
+        wait_done_b = poi_mode == "OB" or not na(b_c_fvg_top) or (bar_index - b_cand_bar >= h1_fvg_wait)
+        if wait_done_b
+            eq_b = (b_leg_low + b_leg_high) / 2
+            cap_b = h1_poi_max_atr * h1_atr_v
+            ob_ok_b = poi_mode != "FVG" and not na(b_c_ob_top)
+            fvg_ok_b = poi_mode != "OB" and not na(b_c_fvg_top)
+            if h1_poi_max_atr > 0
+                ob_ok_b := ob_ok_b and ((b_c_ob_top - b_c_ob_bot) <= cap_b)
+                fvg_ok_b := fvg_ok_b and ((b_c_fvg_top - b_c_fvg_bot) <= cap_b)
+            if h1_discount_only
+                ob_ok_b := ob_ok_b and ((b_c_ob_top + b_c_ob_bot) / 2 <= eq_b)
+                fvg_ok_b := fvg_ok_b and ((b_c_fvg_top + b_c_fvg_bot) / 2 <= eq_b)
+            if ob_ok_b or fvg_ok_b
+                if b_armed
+                    c_b_rep += 1
+                b_armed := true
+                b_armed_bar := bar_index
+                b_a_ob_top := ob_ok_b ? b_c_ob_top : na
+                b_a_ob_bot := ob_ok_b ? b_c_ob_bot : na
+                b_a_fvg_top := fvg_ok_b ? b_c_fvg_top : na
+                b_a_fvg_bot := fvg_ok_b ? b_c_fvg_bot : na
+                c_b_poi += 1
+            else
+                c_b_rej += 1
+            b_cand := false
+
+    if b_armed and bar_index > b_armed_bar
+        lo_b = na(b_a_ob_bot) ? b_a_fvg_bot : (na(b_a_fvg_bot) ? b_a_ob_bot : math.min(b_a_ob_bot, b_a_fvg_bot))
+        if bar_index - b_armed_bar > poi_expiry
+            b_armed := false
+            c_b_exp += 1
+        else if close < lo_b
+            b_armed := false
+            c_b_inv += 1
+
+    b_ob_t = b_armed ? b_a_ob_top : na
+    b_ob_b = b_armed ? b_a_ob_bot : na
+    b_fvg_t = b_armed ? b_a_fvg_top : na
+    b_fvg_b = b_armed ? b_a_fvg_bot : na
+
+    // ================= VENTE =================
+    var bool  s_cand = false
+    var int   s_cand_bar = na
+    var float s_c_ob_top = na
+    var float s_c_ob_bot = na
+    var float s_c_fvg_top = na
+    var float s_c_fvg_bot = na
+    var float s_leg_low = na
+    var float s_leg_high = na
+    var bool  s_armed = false
+    var int   s_armed_bar = na
+    var float s_a_ob_top = na
+    var float s_a_ob_bot = na
+    var float s_a_fvg_top = na
+    var float s_a_fvg_bot = na
+
+    if mss_dn
+        c_s_mss += 1
+        s_cand := true
+        s_cand_bar := bar_index
+        s_leg_high := last_ph
+        s_leg_low := low
+        s_c_ob_top := na
+        s_c_ob_bot := na
+        s_c_fvg_top := na
+        s_c_fvg_bot := na
+        ob_found_s = false
+        for i = 1 to 10
+            if not ob_found_s and close[i] > open[i]
+                ob_found_s := true
+                s_c_ob_top := ob_shape == "Corps seulement" ? close[i] : high[i]
+                s_c_ob_bot := ob_shape == "Corps seulement" ? open[i] : low[i]
+
+    if s_cand
+        s_leg_low := math.min(s_leg_low, low)
+        if poi_mode != "OB" and na(s_c_fvg_top)
+            gap_s = low[2] - high
+            if gap_s > 0 and gap_s >= h1_fvg_atr * h1_atr_v
+                s_c_fvg_top := low[2]
+                s_c_fvg_bot := high
+        wait_done_s = poi_mode == "OB" or not na(s_c_fvg_top) or (bar_index - s_cand_bar >= h1_fvg_wait)
+        if wait_done_s
+            eq_s = (s_leg_low + s_leg_high) / 2
+            cap_s = h1_poi_max_atr * h1_atr_v
+            ob_ok_s = poi_mode != "FVG" and not na(s_c_ob_top)
+            fvg_ok_s = poi_mode != "OB" and not na(s_c_fvg_top)
+            if h1_poi_max_atr > 0
+                ob_ok_s := ob_ok_s and ((s_c_ob_top - s_c_ob_bot) <= cap_s)
+                fvg_ok_s := fvg_ok_s and ((s_c_fvg_top - s_c_fvg_bot) <= cap_s)
+            if h1_discount_only
+                ob_ok_s := ob_ok_s and ((s_c_ob_top + s_c_ob_bot) / 2 >= eq_s)
+                fvg_ok_s := fvg_ok_s and ((s_c_fvg_top + s_c_fvg_bot) / 2 >= eq_s)
+            if ob_ok_s or fvg_ok_s
+                if s_armed
+                    c_s_rep += 1
+                s_armed := true
+                s_armed_bar := bar_index
+                s_a_ob_top := ob_ok_s ? s_c_ob_top : na
+                s_a_ob_bot := ob_ok_s ? s_c_ob_bot : na
+                s_a_fvg_top := fvg_ok_s ? s_c_fvg_top : na
+                s_a_fvg_bot := fvg_ok_s ? s_c_fvg_bot : na
+                c_s_poi += 1
+            else
+                c_s_rej += 1
+            s_cand := false
+
+    if s_armed and bar_index > s_armed_bar
+        hi_s = na(s_a_ob_top) ? s_a_fvg_top : (na(s_a_fvg_top) ? s_a_ob_top : math.max(s_a_ob_top, s_a_fvg_top))
+        if bar_index - s_armed_bar > poi_expiry
+            s_armed := false
+            c_s_exp += 1
+        else if close > hi_s
+            s_armed := false
+            c_s_inv += 1
+
+    s_ob_t = s_armed ? s_a_ob_top : na
+    s_ob_b = s_armed ? s_a_ob_bot : na
+    s_fvg_t = s_armed ? s_a_fvg_top : na
+    s_fvg_b = s_armed ? s_a_fvg_bot : na
+
+    // Tout est décalé d'UNE bougie H1 : on ne lit que la dernière bougie H1 clôturée.
+    [b_ob_t[1], b_ob_b[1], b_fvg_t[1], b_fvg_b[1], s_ob_t[1], s_ob_b[1], s_fvg_t[1], s_fvg_b[1], c_b_mss[1], c_b_poi[1], c_b_rej[1], c_b_rep[1], c_b_exp[1], c_b_inv[1], c_s_mss[1], c_s_poi[1], c_s_rej[1], c_s_rep[1], c_s_exp[1], c_s_inv[1], evt_up_v[1], evt_dn_v[1]]
+
+[h1_b_ob_t, h1_b_ob_b, h1_b_fvg_t, h1_b_fvg_b, h1_s_ob_t, h1_s_ob_b, h1_s_fvg_t, h1_s_fvg_b, h1_c_b_mss, h1_c_b_poi, h1_c_b_rej, h1_c_b_rep, h1_c_b_exp, h1_c_b_inv, h1_c_s_mss, h1_c_s_poi, h1_c_s_rej, h1_c_s_rep, h1_c_s_exp, h1_c_s_inv, h1_evt_up, h1_evt_dn] = request.security(syminfo.tickerid, "60", f_h1(), lookahead = barmerge.lookahead_on)
+
+// ==========================================
+// 4. FILTRE DE BIAIS ET AFFICHAGE
+// ==========================================
+// Un POI d'achat n'est retenu que si le biais est haussier ; un POI de vente que si le biais est baissier.
+buy_ok  = bias_mode == "Aucun" or htf_bias == 1
+sell_ok = bias_mode == "Aucun" or htf_bias == -1
+
+g_b_ob_t  = buy_ok ? h1_b_ob_t : na
+g_b_ob_b  = buy_ok ? h1_b_ob_b : na
+g_b_fvg_t = buy_ok ? h1_b_fvg_t : na
+g_b_fvg_b = buy_ok ? h1_b_fvg_b : na
+g_s_ob_t  = sell_ok ? h1_s_ob_t : na
+g_s_ob_b  = sell_ok ? h1_s_ob_b : na
+g_s_fvg_t = sell_ok ? h1_s_fvg_t : na
+g_s_fvg_b = sell_ok ? h1_s_fvg_b : na
+
+col_b_ob  = color.new(#00E676, 0)
+col_b_fvg = color.new(#00B8D4, 0)
+col_s_ob  = color.new(#FF1744, 0)
+col_s_fvg = color.new(#FF9100, 0)
+
+// Met à jour la boîte d'une zone : nouvelle zone -> nouvelle boîte ; zone disparue -> boîte figée.
+f_zone(b, t, bt, c) =>
+    res = b
+    is_on = not na(t)
+    was_on = not na(t[1])
+    changed = is_on and was_on and (t != t[1] or bt != bt[1])
+    if (not is_on and was_on) or changed
+        if not na(res)
+            box.set_extend(res, extend.none)
+            box.set_right(res, bar_index)
+            res := na
+    if is_on and (not was_on or changed)
+        res := box.new(bar_index, t, bar_index + 1, bt, border_color=c, bgcolor=color.new(c, 85), extend=extend.right)
+    res
+
+var box bx_b_ob = na
+var box bx_b_fvg = na
+var box bx_s_ob = na
+var box bx_s_fvg = na
+
+if show_boxes
+    bx_b_ob := f_zone(bx_b_ob, g_b_ob_t, g_b_ob_b, col_b_ob)
+    bx_b_fvg := f_zone(bx_b_fvg, g_b_fvg_t, g_b_fvg_b, col_b_fvg)
+    bx_s_ob := f_zone(bx_s_ob, g_s_ob_t, g_s_ob_b, col_s_ob)
+    bx_s_fvg := f_zone(bx_s_fvg, g_s_fvg_t, g_s_fvg_b, col_s_fvg)
+
+bgcolor(show_bias and htf_bias == 1 ? color.new(color.green, 94) : show_bias and htf_bias == -1 ? color.new(color.red, 94) : na, title="Biais")
+
+// Flèche sur la première bougie M5 qui suit la clôture d'une bougie H1 portant un MSS H1.
+new_h1 = ta.change(time("60")) != 0
+plotshape(show_arrows and new_h1 and h1_evt_up == 1, title="MSS H1 haussier", style=shape.triangleup, location=location.belowbar, color=color.new(color.lime, 0), size=size.small, text="MSS H1")
+plotshape(show_arrows and new_h1 and h1_evt_dn == 1, title="MSS H1 baissier", style=shape.triangledown, location=location.abovebar, color=color.new(color.red, 0), size=size.small, text="MSS H1")
+
+// ==========================================
+// 5. COUCHE M5 : SWEEP -> MSS -> FVG -> ORDRES
+// ==========================================
+atr5 = ta.atr(14)
+p5l = ta.pivotlow(low, m5_piv_len, m5_piv_len)
+p5h = ta.pivothigh(high, m5_piv_len, m5_piv_len)
+hh_prev = ta.highest(high, m5_struct_lb)[1]
+ll_prev = ta.lowest(low, m5_struct_lb)[1]
+var float lpl5 = na
+var float lph5 = na
+if not na(p5l)
+    lpl5 := p5l
+if not na(p5h)
+    lph5 := p5h
+
+// Lot retenu pour une distance de stop (en $) ; 0 = setup refusé (perte > perte max ou lot < 0,01).
+f_lot(dist) =>
+    float lot = 0.0
+    if dist > 0
+        loss_per_lot = dist * oz_per_lot * eur_per_usd
+        cand = lot_mode == "Lot fixe" ? lot_fixed : math.min(lot_max, math.floor(risk_max_eur / loss_per_lot / 0.01 + 0.000000001) * 0.01)
+        if cand >= 0.0099999 and cand * loss_per_lot <= risk_max_eur + 0.000000001
+            lot := math.round(cand * 100) / 100
+    lot
+
+// Trace entrée / stop / cible d'un ordre.
+f_draw(px, sl_, tp_, tag, lot_) =>
+    if show_setup
+        line.new(bar_index, px, bar_index + m5_order_expiry, px, color=color.new(color.blue, 0))
+        line.new(bar_index, sl_, bar_index + m5_order_expiry, sl_, color=color.new(color.red, 0), style=line.style_dashed)
+        line.new(bar_index, tp_, bar_index + m5_order_expiry, tp_, color=color.new(color.green, 0), style=line.style_dashed)
+        label.new(bar_index + m5_order_expiry, px, tag + " " + str.tostring(lot_, "0.00") + " lot", style=label.style_label_left, textcolor=color.white, color=color.new(color.blue, 30), size=size.tiny)
+    0
+
+// Zones POI retenues (après filtre de biais) : enveloppe OB + FVG.
+b_poi_on = not na(g_b_ob_t) or not na(g_b_fvg_t)
+b_poi_hi = math.max(nz(g_b_ob_t, -1.0e10), nz(g_b_fvg_t, -1.0e10))
+b_poi_lo = math.min(nz(g_b_ob_b, 1.0e10), nz(g_b_fvg_b, 1.0e10))
+s_poi_on = not na(g_s_ob_t) or not na(g_s_fvg_t)
+s_poi_hi = math.max(nz(g_s_ob_t, -1.0e10), nz(g_s_fvg_t, -1.0e10))
+s_poi_lo = math.min(nz(g_s_ob_b, 1.0e10), nz(g_s_fvg_b, 1.0e10))
+
+// Compteurs
+var int c5_b_sweep = 0
+var int c5_b_nomss = 0
+var int c5_b_brk = 0
+var int c5_b_win = 0
+var int c5_b_nofvg = 0
+var int c5_b_noob = 0
+var int c5_b_pd = 0
+var int c5_b_passed = 0
+var int c5_b_risk = 0
+var int c5_b_setup = 0
+var int c5_b_nofill = 0
+var int c5_s_sweep = 0
+var int c5_s_nomss = 0
+var int c5_s_brk = 0
+var int c5_s_win = 0
+var int c5_s_nofvg = 0
+var int c5_s_noob = 0
+var int c5_s_pd = 0
+var int c5_s_passed = 0
+var int c5_s_risk = 0
+var int c5_s_setup = 0
+var int c5_s_nofill = 0
+
+// État du setup en cours (un seul à la fois, achat ou vente)
+var bool  pend = false
+var int   setup_bar = na
+var int   setup_dir = 0
+var float setup_sl = na
+var int   setup_trades0 = 0
+var int   setup_legs = 0
+
+// Cycle de vie : expiration, stop touché avant remplissage, ou tous les ordres traités.
+if pend
+    ended_exp = bar_index - setup_bar > m5_order_expiry
+    ended_sl = setup_dir == 1 ? low <= setup_sl : high >= setup_sl
+    n_filled = strategy.closedtrades + strategy.opentrades - setup_trades0
+    all_done = n_filled >= setup_legs and strategy.opentrades == 0
+    if ended_exp or ended_sl or all_done
+        strategy.cancel("OB_L")
+        strategy.cancel("FVG50_L")
+        strategy.cancel("OB_S")
+        strategy.cancel("FVG50_S")
+        pend := false
+        if n_filled == 0
+            if setup_dir == 1
+                c5_b_nofill += 1
+            else
+                c5_s_nofill += 1
+
+// ---------- ACHAT M5 ----------
+var int   b_st = 0
+var int   b_sw_bar = na
+var float b_sw_ext = na
+var float b_sw_lvl = na
+var float b_mss_lvl = na
+var float b_edge_s = na
+var int   b_mss_bar = na
+var float b_leg_ext = na
+bool ev_b_sweep = false
+bool ev_b_mss = false
+if pend or strategy.opentrades > 0
+    b_st := 0
+else if b_st == 0
+    if b_poi_on and not na(lpl5) and low < lpl5 and low <= b_poi_hi and high >= b_poi_lo and (not m5_sweep_close or close > lpl5)
+        b_st := 1
+        b_sw_bar := bar_index
+        b_sw_ext := low
+        b_sw_lvl := lpl5
+        b_mss_lvl := hh_prev
+        b_edge_s := b_poi_lo
+        c5_b_sweep += 1
+        ev_b_sweep := true
+else if b_st == 1
+    b_sw_ext := math.min(b_sw_ext, low)
+    if close < b_edge_s
+        b_st := 0
+        c5_b_nomss += 1
+        c5_b_brk += 1
+    else if bar_index - b_sw_bar > m5_mss_win
+        b_st := 0
+        c5_b_nomss += 1
+        c5_b_win += 1
+    else if close > b_mss_lvl and close > open
+        b_st := 2
+        b_mss_bar := bar_index
+        b_leg_ext := high
+        ev_b_mss := true
+else if b_st == 2
+    b_leg_ext := math.max(b_leg_ext, high)
+    gap_b = low - high[2]
+    fvg_ok_b = gap_b > 0 and gap_b >= m5_fvg_atr * atr5 and close[1] > open[1] and (high[1] - low[1]) > 0 and math.abs(close[1] - open[1]) / (high[1] - low[1]) >= m5_disp_ratio and math.abs(close[1] - open[1]) >= m5_disp_atr * atr5 and (bar_index - 1) >= b_sw_bar
+    if fvg_ok_b
+        float ob_t_b = na
+        float ob_b_b = na
+        float ob_ext_b = na
+        int ob_i_b = 0
+        bool ob_found_b = false
+        for i = 2 to 15
+            if i <= m5_ob_lb and not ob_found_b and (bar_index - i) >= b_sw_bar - 1 and close[i] < open[i] and (not m5_ob_sweep or low[i] < b_sw_lvl)
+                ob_found_b := true
+                ob_t_b := m5_ob_shape == "Corps seulement" ? open[i] : high[i]
+                ob_b_b := m5_ob_shape == "Corps seulement" ? close[i] : low[i]
+                ob_ext_b := low[i]
+                ob_i_b := i
+        if not ob_found_b
+            c5_b_noob += 1
+        else
+            float fvg50_b = (low + high[2]) / 2
+            float eq_b = (b_sw_ext + b_leg_ext) / 2
+            float sl_b = math.min(b_sw_ext, ob_ext_b) - m5_sl_margin
+            float ob_px_b = m5_ob_entry == "Proximal" ? ob_t_b : (ob_t_b + ob_b_b) / 2
+            bool use_ob_b = m5_entry_mode != "FVG 50 %"
+            bool use_fvg_b = m5_entry_mode != "OB"
+            if use_fvg_b and m5_pd_filter and not (fvg50_b <= eq_b)
+                use_fvg_b := false
+                c5_b_pd += 1
+            if use_ob_b and not (ob_px_b < close)
+                use_ob_b := false
+                c5_b_passed += 1
+            if use_fvg_b and not (fvg50_b < close)
+                use_fvg_b := false
+                c5_b_passed += 1
+            float lot_ob_b = use_ob_b ? f_lot(ob_px_b - sl_b) : 0.0
+            float lot_fvg_b = use_fvg_b ? f_lot(fvg50_b - sl_b) : 0.0
+            if use_ob_b and lot_ob_b == 0
+                use_ob_b := false
+                c5_b_risk += 1
+            if use_fvg_b and lot_fvg_b == 0
+                use_fvg_b := false
+                c5_b_risk += 1
+            if use_ob_b or use_fvg_b
+                c5_b_setup += 1
+                pend := true
+                setup_bar := bar_index
+                setup_dir := 1
+                setup_sl := sl_b
+                setup_trades0 := strategy.closedtrades + strategy.opentrades
+                setup_legs := (use_ob_b ? 1 : 0) + (use_fvg_b ? 1 : 0)
+                if show_setup
+                    box.new(bar_index - ob_i_b, ob_t_b, bar_index + m5_order_expiry, ob_b_b, border_color=color.new(color.blue, 0), bgcolor=color.new(color.blue, 88))
+                    box.new(bar_index - 2, low, bar_index + m5_order_expiry, high[2], border_color=color.new(color.purple, 0), bgcolor=color.new(color.purple, 88))
+                if use_ob_b
+                    float tp_ob_b = ob_px_b + m5_tp_r * (ob_px_b - sl_b)
+                    strategy.entry("OB_L", strategy.long, qty=lot_ob_b * oz_per_lot, limit=ob_px_b, comment="OB")
+                    strategy.exit("XOB_L", from_entry="OB_L", stop=sl_b, limit=tp_ob_b)
+                    f_draw(ob_px_b, sl_b, tp_ob_b, "OB", lot_ob_b)
+                if use_fvg_b
+                    float tp_fvg_b = fvg50_b + m5_tp_r * (fvg50_b - sl_b)
+                    strategy.entry("FVG50_L", strategy.long, qty=lot_fvg_b * oz_per_lot, limit=fvg50_b, comment="FVG50")
+                    strategy.exit("XFVG50_L", from_entry="FVG50_L", stop=sl_b, limit=tp_fvg_b)
+                    f_draw(fvg50_b, sl_b, tp_fvg_b, "FVG50", lot_fvg_b)
+        b_st := 0
+    else if bar_index - b_mss_bar >= m5_fvg_wait
+        b_st := 0
+        c5_b_nofvg += 1
+
+// ---------- VENTE M5 ----------
+var int   s_st = 0
+var int   s_sw_bar = na
+var float s_sw_ext = na
+var float s_sw_lvl = na
+var float s_mss_lvl = na
+var float s_edge_s = na
+var int   s_mss_bar = na
+var float s_leg_ext = na
+bool ev_s_sweep = false
+bool ev_s_mss = false
+if pend or strategy.opentrades > 0
+    s_st := 0
+else if s_st == 0
+    if s_poi_on and not na(lph5) and high > lph5 and low <= s_poi_hi and high >= s_poi_lo and (not m5_sweep_close or close < lph5)
+        s_st := 1
+        s_sw_bar := bar_index
+        s_sw_ext := high
+        s_sw_lvl := lph5
+        s_mss_lvl := ll_prev
+        s_edge_s := s_poi_hi
+        c5_s_sweep += 1
+        ev_s_sweep := true
+else if s_st == 1
+    s_sw_ext := math.max(s_sw_ext, high)
+    if close > s_edge_s
+        s_st := 0
+        c5_s_nomss += 1
+        c5_s_brk += 1
+    else if bar_index - s_sw_bar > m5_mss_win
+        s_st := 0
+        c5_s_nomss += 1
+        c5_s_win += 1
+    else if close < s_mss_lvl and close < open
+        s_st := 2
+        s_mss_bar := bar_index
+        s_leg_ext := low
+        ev_s_mss := true
+else if s_st == 2
+    s_leg_ext := math.min(s_leg_ext, low)
+    gap_s = low[2] - high
+    fvg_ok_s = gap_s > 0 and gap_s >= m5_fvg_atr * atr5 and close[1] < open[1] and (high[1] - low[1]) > 0 and math.abs(close[1] - open[1]) / (high[1] - low[1]) >= m5_disp_ratio and math.abs(close[1] - open[1]) >= m5_disp_atr * atr5 and (bar_index - 1) >= s_sw_bar
+    if fvg_ok_s
+        float ob_t_s = na
+        float ob_b_s = na
+        float ob_ext_s = na
+        int ob_i_s = 0
+        bool ob_found_s = false
+        for i = 2 to 15
+            if i <= m5_ob_lb and not ob_found_s and (bar_index - i) >= s_sw_bar - 1 and close[i] > open[i] and (not m5_ob_sweep or high[i] > s_sw_lvl)
+                ob_found_s := true
+                ob_t_s := m5_ob_shape == "Corps seulement" ? close[i] : high[i]
+                ob_b_s := m5_ob_shape == "Corps seulement" ? open[i] : low[i]
+                ob_ext_s := high[i]
+                ob_i_s := i
+        if not ob_found_s
+            c5_s_noob += 1
+        else
+            float fvg50_s = (low[2] + high) / 2
+            float eq_s = (s_sw_ext + s_leg_ext) / 2
+            float sl_s = math.max(s_sw_ext, ob_ext_s) + m5_sl_margin
+            float ob_px_s = m5_ob_entry == "Proximal" ? ob_b_s : (ob_t_s + ob_b_s) / 2
+            bool use_ob_s = m5_entry_mode != "FVG 50 %"
+            bool use_fvg_s = m5_entry_mode != "OB"
+            if use_fvg_s and m5_pd_filter and not (fvg50_s >= eq_s)
+                use_fvg_s := false
+                c5_s_pd += 1
+            if use_ob_s and not (ob_px_s > close)
+                use_ob_s := false
+                c5_s_passed += 1
+            if use_fvg_s and not (fvg50_s > close)
+                use_fvg_s := false
+                c5_s_passed += 1
+            float lot_ob_s = use_ob_s ? f_lot(sl_s - ob_px_s) : 0.0
+            float lot_fvg_s = use_fvg_s ? f_lot(sl_s - fvg50_s) : 0.0
+            if use_ob_s and lot_ob_s == 0
+                use_ob_s := false
+                c5_s_risk += 1
+            if use_fvg_s and lot_fvg_s == 0
+                use_fvg_s := false
+                c5_s_risk += 1
+            if use_ob_s or use_fvg_s
+                c5_s_setup += 1
+                pend := true
+                setup_bar := bar_index
+                setup_dir := -1
+                setup_sl := sl_s
+                setup_trades0 := strategy.closedtrades + strategy.opentrades
+                setup_legs := (use_ob_s ? 1 : 0) + (use_fvg_s ? 1 : 0)
+                if show_setup
+                    box.new(bar_index - ob_i_s, ob_t_s, bar_index + m5_order_expiry, ob_b_s, border_color=color.new(color.blue, 0), bgcolor=color.new(color.blue, 88))
+                    box.new(bar_index - 2, low[2], bar_index + m5_order_expiry, high, border_color=color.new(color.purple, 0), bgcolor=color.new(color.purple, 88))
+                if use_ob_s
+                    float tp_ob_s = ob_px_s - m5_tp_r * (sl_s - ob_px_s)
+                    strategy.entry("OB_S", strategy.short, qty=lot_ob_s * oz_per_lot, limit=ob_px_s, comment="OB")
+                    strategy.exit("XOB_S", from_entry="OB_S", stop=sl_s, limit=tp_ob_s)
+                    f_draw(ob_px_s, sl_s, tp_ob_s, "OB", lot_ob_s)
+                if use_fvg_s
+                    float tp_fvg_s = fvg50_s - m5_tp_r * (sl_s - fvg50_s)
+                    strategy.entry("FVG50_S", strategy.short, qty=lot_fvg_s * oz_per_lot, limit=fvg50_s, comment="FVG50")
+                    strategy.exit("XFVG50_S", from_entry="FVG50_S", stop=sl_s, limit=tp_fvg_s)
+                    f_draw(fvg50_s, sl_s, tp_fvg_s, "FVG50", lot_fvg_s)
+        s_st := 0
+    else if bar_index - s_mss_bar >= m5_fvg_wait
+        s_st := 0
+        c5_s_nofvg += 1
+
+plotshape(show_m5 and ev_b_sweep, title="Sweep M5 (achat)", style=shape.diamond, location=location.belowbar, color=color.new(color.orange, 0), size=size.tiny, text="SW")
+plotshape(show_m5 and ev_s_sweep, title="Sweep M5 (vente)", style=shape.diamond, location=location.abovebar, color=color.new(color.orange, 0), size=size.tiny, text="SW")
+plotshape(show_m5 and ev_b_mss, title="MSS M5 (achat)", style=shape.circle, location=location.belowbar, color=color.new(color.aqua, 0), size=size.tiny, text="MSS5")
+plotshape(show_m5 and ev_s_mss, title="MSS M5 (vente)", style=shape.circle, location=location.abovebar, color=color.new(color.aqua, 0), size=size.tiny, text="MSS5")
+
+// ==========================================
+// 6. TABLEAU DE DIAGNOSTIC H1
+// ==========================================
+var table dbg = table.new(position.top_right, 3, 10, border_color=color.gray, border_width=1, bgcolor=color.new(color.black, 15))
+f_cell(col, row, txt, tcol) =>
+    table.cell(dbg, col, row, txt, text_color=tcol, text_size=size.small, text_halign=text.align_left)
+
+if barstate.islast and show_table
+    bias_txt = htf_bias == 1 ? "HAUSSIER" : htf_bias == -1 ? "BAISSIER" : "NEUTRE"
+    f_cell(0, 0, SCRIPT_VERSION, color.yellow)
+    f_cell(1, 0, "ACHAT", color.lime)
+    f_cell(2, 0, "VENTE", color.red)
+    f_cell(0, 1, "Biais " + bias_tf + " (" + bias_mode + ")", color.white)
+    f_cell(1, 1, bias_txt, color.white)
+    f_cell(2, 1, "TF graphique : " + timeframe.period, color.white)
+    f_cell(0, 2, "MSS H1 valides", color.white)
+    f_cell(1, 2, str.tostring(nz(h1_c_b_mss)), color.white)
+    f_cell(2, 2, str.tostring(nz(h1_c_s_mss)), color.white)
+    f_cell(0, 3, "POI armés", color.white)
+    f_cell(1, 3, str.tostring(nz(h1_c_b_poi)), color.white)
+    f_cell(2, 3, str.tostring(nz(h1_c_s_poi)), color.white)
+    f_cell(0, 4, "Rejetés (taille / pas de zone / filtre)", color.white)
+    f_cell(1, 4, str.tostring(nz(h1_c_b_rej)), color.white)
+    f_cell(2, 4, str.tostring(nz(h1_c_s_rej)), color.white)
+    f_cell(0, 5, "Remplacés par un nouveau POI", color.white)
+    f_cell(1, 5, str.tostring(nz(h1_c_b_rep)), color.white)
+    f_cell(2, 5, str.tostring(nz(h1_c_s_rep)), color.white)
+    f_cell(0, 6, "Expirés", color.white)
+    f_cell(1, 6, str.tostring(nz(h1_c_b_exp)), color.white)
+    f_cell(2, 6, str.tostring(nz(h1_c_s_exp)), color.white)
+    f_cell(0, 7, "Invalidés (clôture au-delà)", color.white)
+    f_cell(1, 7, str.tostring(nz(h1_c_b_inv)), color.white)
+    f_cell(2, 7, str.tostring(nz(h1_c_s_inv)), color.white)
+    f_cell(0, 8, "POI actif (après filtre biais)", color.white)
+    f_cell(1, 8, (not na(g_b_ob_t) or not na(g_b_fvg_t)) ? "OUI" : "non", color.white)
+    f_cell(2, 8, (not na(g_s_ob_t) or not na(g_s_fvg_t)) ? "OUI" : "non", color.white)
+    f_cell(0, 9, "POI actif (avant filtre biais)", color.white)
+    f_cell(1, 9, (not na(h1_b_ob_t) or not na(h1_b_fvg_t)) ? "OUI" : "non", color.white)
+    f_cell(2, 9, (not na(h1_s_ob_t) or not na(h1_s_fvg_t)) ? "OUI" : "non", color.white)
+
+// ==========================================
+// 7. TABLEAU M5 + PERFORMANCE
+// ==========================================
+var table dbg2 = table.new(position.bottom_right, 3, 20, border_color=color.gray, border_width=1, bgcolor=color.new(color.black, 15))
+f_cell2(col, row, txt, tcol) =>
+    table.cell(dbg2, col, row, txt, text_color=tcol, text_size=size.small, text_halign=text.align_left)
+
+if barstate.islast and show_table2
+    closed_n = strategy.closedtrades
+    wins_n = strategy.wintrades
+    spread_cost = 0.0
+    if closed_n > 0
+        for k = 0 to closed_n - 1
+            spread_cost += math.abs(strategy.closedtrades.size(k)) * m5_spread
+    net_usd = strategy.netprofit
+    f_cell2(0, 0, "M5 + ordres", color.yellow)
+    f_cell2(1, 0, "ACHAT", color.lime)
+    f_cell2(2, 0, "VENTE", color.red)
+    f_cell2(0, 1, "Sweeps M5 dans le POI", color.white)
+    f_cell2(1, 1, str.tostring(c5_b_sweep), color.white)
+    f_cell2(2, 1, str.tostring(c5_s_sweep), color.white)
+    f_cell2(0, 2, "Rejet : pas de MSS M5 (total)", color.white)
+    f_cell2(1, 2, str.tostring(c5_b_nomss), color.white)
+    f_cell2(2, 2, str.tostring(c5_s_nomss), color.white)
+    f_cell2(0, 3, "   dont POI cassé avant le MSS", color.white)
+    f_cell2(1, 3, str.tostring(c5_b_brk), color.white)
+    f_cell2(2, 3, str.tostring(c5_s_brk), color.white)
+    f_cell2(0, 4, "   dont fenêtre MSS dépassée", color.white)
+    f_cell2(1, 4, str.tostring(c5_b_win), color.white)
+    f_cell2(2, 4, str.tostring(c5_s_win), color.white)
+    f_cell2(0, 5, "Rejet : pas de FVG M5", color.white)
+    f_cell2(1, 5, str.tostring(c5_b_nofvg), color.white)
+    f_cell2(2, 5, str.tostring(c5_s_nofvg), color.white)
+    f_cell2(0, 6, "Rejet : pas d'OB valide", color.white)
+    f_cell2(1, 6, str.tostring(c5_b_noob), color.white)
+    f_cell2(2, 6, str.tostring(c5_s_noob), color.white)
+    f_cell2(0, 7, "Ordre FVG50 écarté (discount/premium)", color.white)
+    f_cell2(1, 7, str.tostring(c5_b_pd), color.white)
+    f_cell2(2, 7, str.tostring(c5_s_pd), color.white)
+    f_cell2(0, 8, "Ordre écarté : entrée déjà dépassée", color.white)
+    f_cell2(1, 8, str.tostring(c5_b_passed), color.white)
+    f_cell2(2, 8, str.tostring(c5_s_passed), color.white)
+    f_cell2(0, 9, "Ordre écarté : risque > max / lot < 0,01", color.white)
+    f_cell2(1, 9, str.tostring(c5_b_risk), color.white)
+    f_cell2(2, 9, str.tostring(c5_s_risk), color.white)
+    f_cell2(0, 10, "Setups posés", color.white)
+    f_cell2(1, 10, str.tostring(c5_b_setup), color.white)
+    f_cell2(2, 10, str.tostring(c5_s_setup), color.white)
+    f_cell2(0, 11, "Setups finis sans aucune entrée", color.white)
+    f_cell2(1, 11, str.tostring(c5_b_nofill), color.white)
+    f_cell2(2, 11, str.tostring(c5_s_nofill), color.white)
+    f_cell2(0, 12, "--- Strategy Tester (TradingView) ---", color.yellow)
+    f_cell2(1, 12, "", color.white)
+    f_cell2(2, 12, "", color.white)
+    f_cell2(0, 13, "Trades clôturés / gagnants", color.white)
+    f_cell2(1, 13, str.tostring(closed_n), color.white)
+    f_cell2(2, 13, str.tostring(wins_n), color.white)
+    f_cell2(0, 14, "Win rate (%)", color.white)
+    f_cell2(1, 14, closed_n > 0 ? str.tostring(wins_n / closed_n * 100, "0.0") : "-", color.white)
+    f_cell2(2, 14, "", color.white)
+    f_cell2(0, 15, "Profit factor", color.white)
+    f_cell2(1, 15, strategy.grossloss > 0 ? str.tostring(strategy.grossprofit / strategy.grossloss, "0.00") : "-", color.white)
+    f_cell2(2, 15, "", color.white)
+    f_cell2(0, 16, "Résultat net ($ / EUR hyp.)", color.white)
+    f_cell2(1, 16, str.tostring(net_usd, "0.00"), color.white)
+    f_cell2(2, 16, str.tostring(net_usd * eur_per_usd, "0.00"), color.white)
+    f_cell2(0, 17, "Net après spread simulé ($ / EUR)", color.white)
+    f_cell2(1, 17, str.tostring(net_usd - spread_cost, "0.00"), color.white)
+    f_cell2(2, 17, str.tostring((net_usd - spread_cost) * eur_per_usd, "0.00"), color.white)
+    f_cell2(0, 18, "Drawdown max ($ / EUR)", color.white)
+    f_cell2(1, 18, str.tostring(strategy.max_drawdown, "0.00"), color.white)
+    f_cell2(2, 18, str.tostring(strategy.max_drawdown * eur_per_usd, "0.00"), color.white)
+    f_cell2(0, 19, timeframe.period == "5" ? "UT du graphique : M5 (OK)" : "ATTENTION : UT du graphique = " + timeframe.period + " (M5 requis)", timeframe.period == "5" ? color.white : color.orange)
+    f_cell2(1, 19, "", color.white)
+    f_cell2(2, 19, "", color.white)

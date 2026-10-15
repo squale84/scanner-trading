@@ -1,0 +1,319 @@
+//@version=5
+// ============================================================================
+// MTF-POI V1.0-H1 — PHASE 2 : validation visuelle de la COUCHE H1 (aucun ordre)
+// ----------------------------------------------------------------------------
+// Fichier neuf (cahier des charges v1.1). Il ne passe AUCUN ordre : il sert à
+// vérifier à l'oeil que les POI H1 correspondent à ta lecture du marché.
+//   1. Biais H1 : structure HH+HL (haussier) / LH+LL (baissier) sur pivots H1. Pas de moyenne mobile.
+//   2. MSS H1 : clôture au-delà du dernier swing, avec displacement, dans le sens du biais.
+//      (option) précédé d'une prise de liquidité H1.
+//   3. POI H1 = OB H1 (dernière bougie opposée avant l'impulsion) et/ou FVG H1 laissée par l'impulsion.
+//   4. Le POI reste "armé" jusqu'à expiration ou invalidation (clôture au-delà de la zone).
+// Causalité : les valeurs H1 sont lues avec request.security(..., lookahead_on) sur la valeur [1]
+// (dernière bougie H1 CLÔTURÉE). Aucune information du futur.
+// À utiliser sur XAUUSD en M5 (le graphique de référence).
+// ============================================================================
+SCRIPT_VERSION = "MTF-POI V1.0-H1"
+
+strategy("MTF-POI V1.0-H1 — couche H1 (sans ordres)", shorttitle="MTF-POI V1.0-H1", overlay=true,
+     initial_capital=10000,
+     default_qty_type=strategy.fixed,
+     default_qty_value=1,
+     max_boxes_count=200, max_lines_count=100, max_labels_count=100, max_bars_back=500)
+
+// ==========================================
+// 1. RÉGLAGES
+// ==========================================
+grp_h1 = "Couche H1 (création du POI)"
+h1_piv_len       = input.int(3, title="Pivots H1 (gauche = droite)", minval=2, maxval=5, group=grp_h1)
+h1_need_bias     = input.bool(true, title="Exiger le biais HH/HL dans le sens du MSS", group=grp_h1)
+h1_use_sweep     = input.bool(false, title="Exiger une prise de liquidité H1 avant le MSS", group=grp_h1)
+h1_sweep_win     = input.int(10, title="Fenêtre balayage H1 -> MSS (bougies H1)", minval=1, maxval=30, group=grp_h1)
+h1_disp_ratio    = input.float(0.55, title="Displacement H1 : corps / range minimum", minval=0.3, maxval=0.9, step=0.05, group=grp_h1)
+h1_disp_atr      = input.float(1.0, title="Displacement H1 : corps minimum (x ATR H1, 0 = off)", minval=0.0, maxval=3.0, step=0.1, group=grp_h1)
+h1_fvg_atr       = input.float(0.15, title="Taille minimale d'une FVG H1 (x ATR H1)", minval=0.0, maxval=1.0, step=0.05, group=grp_h1)
+h1_fvg_wait      = input.int(2, title="Attente de la FVG après le MSS (bougies H1)", minval=0, maxval=6, group=grp_h1)
+poi_mode         = input.string("OB + FVG", title="POI H1", options=["OB", "FVG", "OB + FVG"], group=grp_h1)
+h1_discount_only = input.bool(false, title="POI en discount (achat) / premium (vente) seulement", group=grp_h1)
+poi_expiry       = input.int(48, title="Expiration du POI (bougies H1)", minval=6, maxval=200, group=grp_h1)
+
+grp_ui = "Affichage"
+show_boxes = input.bool(true, title="Afficher les zones POI", group=grp_ui)
+show_bias  = input.bool(true, title="Colorer le fond selon le biais H1", group=grp_ui)
+show_table = input.bool(true, title="Afficher le tableau de diagnostic", group=grp_ui)
+
+// ==========================================
+// 2. MOTEUR H1 (exécuté sur les bougies H1)
+// ==========================================
+f_h1() =>
+    h1_atr_v = ta.atr(14)
+    ph = ta.pivothigh(high, h1_piv_len, h1_piv_len)
+    pl = ta.pivotlow(low, h1_piv_len, h1_piv_len)
+
+    // --- structure : derniers pivots H1 confirmés ---
+    var float last_ph = na
+    var float prev_ph = na
+    var float last_pl = na
+    var float prev_pl = na
+    if not na(ph)
+        prev_ph := last_ph
+        last_ph := ph
+    if not na(pl)
+        prev_pl := last_pl
+        last_pl := pl
+
+    bias_bull = not na(prev_ph) and not na(prev_pl) and last_ph > prev_ph and last_pl > prev_pl
+    bias_bear = not na(prev_ph) and not na(prev_pl) and last_ph < prev_ph and last_pl < prev_pl
+    bias_v = bias_bull ? 1 : bias_bear ? -1 : 0
+
+    // --- displacement ---
+    rng = high - low
+    body = math.abs(close - open)
+    disp_ok = rng > 0 and (body / rng) >= h1_disp_ratio and (h1_disp_atr == 0 or body >= h1_disp_atr * h1_atr_v)
+
+    // --- prises de liquidité H1 (balayage d'un swing puis réintégration) ---
+    var int since_sw_l = 999
+    var int since_sw_h = 999
+    sw_l = not na(last_pl) and low < last_pl and close > last_pl
+    sw_h = not na(last_ph) and high > last_ph and close < last_ph
+    since_sw_l := sw_l ? 0 : math.min(since_sw_l + 1, 999)
+    since_sw_h := sw_h ? 0 : math.min(since_sw_h + 1, 999)
+
+    // --- MSS H1 : première clôture au-delà du dernier swing, avec displacement ---
+    mss_up = not na(last_ph) and close > last_ph and close[1] <= last_ph and close > open and disp_ok and (not h1_need_bias or bias_bull) and (not h1_use_sweep or since_sw_l <= h1_sweep_win)
+    mss_dn = not na(last_pl) and close < last_pl and close[1] >= last_pl and close < open and disp_ok and (not h1_need_bias or bias_bear) and (not h1_use_sweep or since_sw_h <= h1_sweep_win)
+
+    // --- compteurs de diagnostic ---
+    var int c_b_mss = 0
+    var int c_b_poi = 0
+    var int c_b_rej = 0
+    var int c_b_exp = 0
+    var int c_b_inv = 0
+    var int c_s_mss = 0
+    var int c_s_poi = 0
+    var int c_s_rej = 0
+    var int c_s_exp = 0
+    var int c_s_inv = 0
+
+    // ================= ACHAT =================
+    var bool  b_cand = false
+    var int   b_cand_bar = na
+    var float b_c_ob_top = na
+    var float b_c_ob_bot = na
+    var float b_c_fvg_top = na
+    var float b_c_fvg_bot = na
+    var float b_leg_low = na
+    var float b_leg_high = na
+    var bool  b_armed = false
+    var int   b_armed_bar = na
+    var float b_a_ob_top = na
+    var float b_a_ob_bot = na
+    var float b_a_fvg_top = na
+    var float b_a_fvg_bot = na
+
+    if mss_up
+        c_b_mss += 1
+        b_cand := true
+        b_cand_bar := bar_index
+        b_leg_low := last_pl
+        b_leg_high := high
+        b_c_ob_top := na
+        b_c_ob_bot := na
+        b_c_fvg_top := na
+        b_c_fvg_bot := na
+        ob_found = false
+        for i = 1 to 10
+            if not ob_found and close[i] < open[i]
+                ob_found := true
+                b_c_ob_top := high[i]
+                b_c_ob_bot := low[i]
+
+    if b_cand
+        b_leg_high := math.max(b_leg_high, high)
+        if poi_mode != "OB" and na(b_c_fvg_top)
+            gap_b = low - high[2]
+            if gap_b > 0 and gap_b >= h1_fvg_atr * h1_atr_v
+                b_c_fvg_top := low
+                b_c_fvg_bot := high[2]
+        wait_done_b = poi_mode == "OB" or not na(b_c_fvg_top) or (bar_index - b_cand_bar >= h1_fvg_wait)
+        if wait_done_b
+            eq_b = (b_leg_low + b_leg_high) / 2
+            ob_ok_b = poi_mode != "FVG" and not na(b_c_ob_top)
+            fvg_ok_b = poi_mode != "OB" and not na(b_c_fvg_top)
+            if h1_discount_only
+                ob_ok_b := ob_ok_b and ((b_c_ob_top + b_c_ob_bot) / 2 <= eq_b)
+                fvg_ok_b := fvg_ok_b and ((b_c_fvg_top + b_c_fvg_bot) / 2 <= eq_b)
+            if ob_ok_b or fvg_ok_b
+                b_armed := true
+                b_armed_bar := bar_index
+                b_a_ob_top := ob_ok_b ? b_c_ob_top : na
+                b_a_ob_bot := ob_ok_b ? b_c_ob_bot : na
+                b_a_fvg_top := fvg_ok_b ? b_c_fvg_top : na
+                b_a_fvg_bot := fvg_ok_b ? b_c_fvg_bot : na
+                c_b_poi += 1
+            else
+                c_b_rej += 1
+            b_cand := false
+
+    if b_armed and bar_index > b_armed_bar
+        lo_b = na(b_a_ob_bot) ? b_a_fvg_bot : (na(b_a_fvg_bot) ? b_a_ob_bot : math.min(b_a_ob_bot, b_a_fvg_bot))
+        if bar_index - b_armed_bar > poi_expiry
+            b_armed := false
+            c_b_exp += 1
+        else if close < lo_b
+            b_armed := false
+            c_b_inv += 1
+
+    b_ob_t = b_armed ? b_a_ob_top : na
+    b_ob_b = b_armed ? b_a_ob_bot : na
+    b_fvg_t = b_armed ? b_a_fvg_top : na
+    b_fvg_b = b_armed ? b_a_fvg_bot : na
+
+    // ================= VENTE =================
+    var bool  s_cand = false
+    var int   s_cand_bar = na
+    var float s_c_ob_top = na
+    var float s_c_ob_bot = na
+    var float s_c_fvg_top = na
+    var float s_c_fvg_bot = na
+    var float s_leg_low = na
+    var float s_leg_high = na
+    var bool  s_armed = false
+    var int   s_armed_bar = na
+    var float s_a_ob_top = na
+    var float s_a_ob_bot = na
+    var float s_a_fvg_top = na
+    var float s_a_fvg_bot = na
+
+    if mss_dn
+        c_s_mss += 1
+        s_cand := true
+        s_cand_bar := bar_index
+        s_leg_high := last_ph
+        s_leg_low := low
+        s_c_ob_top := na
+        s_c_ob_bot := na
+        s_c_fvg_top := na
+        s_c_fvg_bot := na
+        ob_found_s = false
+        for i = 1 to 10
+            if not ob_found_s and close[i] > open[i]
+                ob_found_s := true
+                s_c_ob_top := high[i]
+                s_c_ob_bot := low[i]
+
+    if s_cand
+        s_leg_low := math.min(s_leg_low, low)
+        if poi_mode != "OB" and na(s_c_fvg_top)
+            gap_s = low[2] - high
+            if gap_s > 0 and gap_s >= h1_fvg_atr * h1_atr_v
+                s_c_fvg_top := low[2]
+                s_c_fvg_bot := high
+        wait_done_s = poi_mode == "OB" or not na(s_c_fvg_top) or (bar_index - s_cand_bar >= h1_fvg_wait)
+        if wait_done_s
+            eq_s = (s_leg_low + s_leg_high) / 2
+            ob_ok_s = poi_mode != "FVG" and not na(s_c_ob_top)
+            fvg_ok_s = poi_mode != "OB" and not na(s_c_fvg_top)
+            if h1_discount_only
+                ob_ok_s := ob_ok_s and ((s_c_ob_top + s_c_ob_bot) / 2 >= eq_s)
+                fvg_ok_s := fvg_ok_s and ((s_c_fvg_top + s_c_fvg_bot) / 2 >= eq_s)
+            if ob_ok_s or fvg_ok_s
+                s_armed := true
+                s_armed_bar := bar_index
+                s_a_ob_top := ob_ok_s ? s_c_ob_top : na
+                s_a_ob_bot := ob_ok_s ? s_c_ob_bot : na
+                s_a_fvg_top := fvg_ok_s ? s_c_fvg_top : na
+                s_a_fvg_bot := fvg_ok_s ? s_c_fvg_bot : na
+                c_s_poi += 1
+            else
+                c_s_rej += 1
+            s_cand := false
+
+    if s_armed and bar_index > s_armed_bar
+        hi_s = na(s_a_ob_top) ? s_a_fvg_top : (na(s_a_fvg_top) ? s_a_ob_top : math.max(s_a_ob_top, s_a_fvg_top))
+        if bar_index - s_armed_bar > poi_expiry
+            s_armed := false
+            c_s_exp += 1
+        else if close > hi_s
+            s_armed := false
+            c_s_inv += 1
+
+    s_ob_t = s_armed ? s_a_ob_top : na
+    s_ob_b = s_armed ? s_a_ob_bot : na
+    s_fvg_t = s_armed ? s_a_fvg_top : na
+    s_fvg_b = s_armed ? s_a_fvg_bot : na
+
+    // Tout est décalé d'UNE bougie H1 : on ne lit que la dernière bougie H1 clôturée.
+    [b_ob_t[1], b_ob_b[1], b_fvg_t[1], b_fvg_b[1], s_ob_t[1], s_ob_b[1], s_fvg_t[1], s_fvg_b[1], bias_v[1], c_b_mss[1], c_b_poi[1], c_b_rej[1], c_b_exp[1], c_b_inv[1], c_s_mss[1], c_s_poi[1], c_s_rej[1], c_s_exp[1], c_s_inv[1]]
+
+[h1_b_ob_t, h1_b_ob_b, h1_b_fvg_t, h1_b_fvg_b, h1_s_ob_t, h1_s_ob_b, h1_s_fvg_t, h1_s_fvg_b, h1_bias, h1_c_b_mss, h1_c_b_poi, h1_c_b_rej, h1_c_b_exp, h1_c_b_inv, h1_c_s_mss, h1_c_s_poi, h1_c_s_rej, h1_c_s_exp, h1_c_s_inv] = request.security(syminfo.tickerid, "60", f_h1(), lookahead = barmerge.lookahead_on)
+
+// ==========================================
+// 3. AFFICHAGE
+// ==========================================
+col_b_ob  = color.new(#00E676, 0)
+col_b_fvg = color.new(#00B8D4, 0)
+col_s_ob  = color.new(#FF1744, 0)
+col_s_fvg = color.new(#FF9100, 0)
+
+// Met à jour la boîte d'une zone : nouvelle zone -> nouvelle boîte ; zone disparue -> boîte figée.
+f_zone(b, t, bt, c) =>
+    res = b
+    is_on = not na(t)
+    was_on = not na(t[1])
+    changed = is_on and was_on and (t != t[1] or bt != bt[1])
+    if (not is_on and was_on) or changed
+        if not na(res)
+            box.set_extend(res, extend.none)
+            box.set_right(res, bar_index)
+            res := na
+    if is_on and (not was_on or changed)
+        res := box.new(bar_index, t, bar_index + 1, bt, border_color=c, bgcolor=color.new(c, 85), extend=extend.right)
+    res
+
+var box bx_b_ob = na
+var box bx_b_fvg = na
+var box bx_s_ob = na
+var box bx_s_fvg = na
+
+if show_boxes
+    bx_b_ob := f_zone(bx_b_ob, h1_b_ob_t, h1_b_ob_b, col_b_ob)
+    bx_b_fvg := f_zone(bx_b_fvg, h1_b_fvg_t, h1_b_fvg_b, col_b_fvg)
+    bx_s_ob := f_zone(bx_s_ob, h1_s_ob_t, h1_s_ob_b, col_s_ob)
+    bx_s_fvg := f_zone(bx_s_fvg, h1_s_fvg_t, h1_s_fvg_b, col_s_fvg)
+
+bgcolor(show_bias and h1_bias == 1 ? color.new(color.green, 94) : show_bias and h1_bias == -1 ? color.new(color.red, 94) : na, title="Biais H1")
+
+// ==========================================
+// 4. TABLEAU DE DIAGNOSTIC
+// ==========================================
+var table dbg = table.new(position.top_right, 3, 9, border_color=color.gray, border_width=1, bgcolor=color.new(color.black, 15))
+f_cell(col, row, txt, tcol) =>
+    table.cell(dbg, col, row, txt, text_color=tcol, text_size=size.small, text_halign=text.align_left)
+
+if barstate.islast and show_table
+    bias_txt = h1_bias == 1 ? "HAUSSIER (HH+HL)" : h1_bias == -1 ? "BAISSIER (LH+LL)" : "NEUTRE"
+    f_cell(0, 0, SCRIPT_VERSION, color.yellow)
+    f_cell(1, 0, "ACHAT", color.lime)
+    f_cell(2, 0, "VENTE", color.red)
+    f_cell(0, 1, "Biais H1", color.white)
+    f_cell(1, 1, bias_txt, color.white)
+    f_cell(2, 1, "TF graphique : " + timeframe.period, color.white)
+    f_cell(0, 2, "MSS H1 valides", color.white)
+    f_cell(1, 2, str.tostring(nz(h1_c_b_mss)), color.white)
+    f_cell(2, 2, str.tostring(nz(h1_c_s_mss)), color.white)
+    f_cell(0, 3, "POI armés", color.white)
+    f_cell(1, 3, str.tostring(nz(h1_c_b_poi)), color.white)
+    f_cell(2, 3, str.tostring(nz(h1_c_s_poi)), color.white)
+    f_cell(0, 4, "Rejetés (pas de zone / filtre)", color.white)
+    f_cell(1, 4, str.tostring(nz(h1_c_b_rej)), color.white)
+    f_cell(2, 4, str.tostring(nz(h1_c_s_rej)), color.white)
+    f_cell(0, 5, "Expirés", color.white)
+    f_cell(1, 5, str.tostring(nz(h1_c_b_exp)), color.white)
+    f_cell(2, 5, str.tostring(nz(h1_c_s_exp)), color.white)
+    f_cell(0, 6, "Invalidés (clôture au-delà)", color.white)
+    f_cell(1, 6, str.tostring(nz(h1_c_b_inv)), color.white)
+    f_cell(2, 6, str.tostring(nz(h1_c_s_inv)), color.white)
+    f_cell(0, 7, "POI actif", color.white)
+    f_cell(1, 7, (not na(h1_b_ob_t) or not na(h1_b_fvg_t)) ? "OUI" : "non", color.white)
+    f_cell(2, 7, (not na(h1_s_ob_t) or not na(h1_s_fvg_t)) ? "OUI" : "non", color.white)

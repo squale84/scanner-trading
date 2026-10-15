@@ -1,0 +1,8 @@
+{
+  "ouvert_le": "2026-10-15 00:17",
+  "candidate": "5 RSI(2) long seul, RSI<5, SMA200, sortie SMA5",
+  "fenetre": [
+    "2023-10-01",
+    "2026-10-13"
+  ]
+}
