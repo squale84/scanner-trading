@@ -12,6 +12,8 @@ import sys
 import asyncio
 import time
 import httpx
+import math
+import random
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 from typing import List, Optional, Dict, Any
@@ -661,46 +663,67 @@ def _generate_synthetic_candles(
         else:
             xp = sl
 
-    b_r = best_r if best_r is not None else (2.0 if xp == tp else 0.5)
-    favorable_peak = (ep + b_r * risk) if is_buy else (ep - b_r * risk)
+    b_r = best_r if (best_r is not None and best_r > 0) else (1.5 if xp == tp else 0.4)
+    peak_price = (ep + b_r * risk) if is_buy else (ep - b_r * risk)
+
+    # Seed basé sur le timestamp de l'entrée pour un rendu stable et reproductible
+    seed_val = int(entry_dt.timestamp())
+    rng = random.Random(seed_val)
+
+    step = timedelta(minutes=5)
+    cur_dt = start_dt
+    cur_price = ep - (risk * rng.uniform(0.1, 0.4) if is_buy else -risk * rng.uniform(0.1, 0.4))
+    candle_idx = 0
 
     candles = []
-    cur_dt = start_dt
-    cur_price = ep - (risk * 0.4 if is_buy else -risk * 0.4)
-    step_minutes = 5
-    total_duration = max(timedelta(minutes=step_minutes), exit_dt - entry_dt)
+    trade_duration_sec = max(300.0, (exit_dt - entry_dt).total_seconds())
 
     while cur_dt <= end_dt:
         ts_sec = int(cur_dt.timestamp())
         open_p = cur_price
 
+        # Trajectoire par phase ICT
         if cur_dt < entry_dt:
-            pre_f = max(0.0, min(1.0, (cur_dt - start_dt).total_seconds() / max(1.0, (entry_dt - start_dt).total_seconds())))
-            if 0.75 <= pre_f <= 0.90:
-                target_p = sl + (risk * 0.05 if is_buy else -risk * 0.05)
+            # Consolidation pré-entrée avec balayage (sweep) avant l'entrée
+            time_left_candles = (entry_dt - cur_dt).total_seconds() / 300.0
+            if time_left_candles <= 3:
+                target = (sl - risk * 0.1) if is_buy else (sl + risk * 0.1)
             else:
-                target_p = ep + (risk * 0.3 * (1.0 - pre_f) * (-1 if is_buy else 1))
+                target = ep + risk * 0.25 * math.sin(candle_idx * 0.4)
+            drift_weight = 0.35
         elif cur_dt <= exit_dt:
-            trade_f = max(0.0, min(1.0, (cur_dt - entry_dt).total_seconds() / total_duration.total_seconds()))
-            if trade_f < 0.6:
-                sub_f = trade_f / 0.6
-                target_p = ep + (favorable_peak - ep) * sub_f
+            # Phase active du trade
+            trade_progress = max(0.0, min(1.0, (cur_dt - entry_dt).total_seconds() / trade_duration_sec))
+            if trade_progress <= 0.6:
+                sub = trade_progress / 0.6
+                target = ep + (peak_price - ep) * sub
             else:
-                sub_f = (trade_f - 0.6) / 0.4
-                target_p = favorable_peak + (xp - favorable_peak) * sub_f
+                sub = (trade_progress - 0.6) / 0.4
+                target = peak_price + (xp - peak_price) * sub
+            drift_weight = 0.55
         else:
-            target_p = xp
+            # Post-sortie : dérive fluide de marché
+            target = xp + risk * 0.2 * math.sin(candle_idx * 0.3)
+            drift_weight = 0.30
 
-        seed = int(ts_sec) % 10000
-        noise = ((seed % 100) / 100.0 - 0.5) * (risk * 0.15)
-        close_p = target_p + noise
+        step_vol = risk * rng.uniform(0.08, 0.25)
+        counter_bias = -1.0 if rng.random() < 0.28 else 1.0
+        delta = (target - open_p) * drift_weight * counter_bias + rng.gauss(0, step_vol * 0.5)
+        close_p = open_p + delta
 
-        wick_up = abs(((seed * 7) % 50) / 100.0) * (risk * 0.12)
-        wick_dn = abs(((seed * 13) % 50) / 100.0) * (risk * 0.12)
+        body = abs(close_p - open_p)
+        upper_wick = body * rng.uniform(0.2, 0.8) + step_vol * rng.uniform(0.1, 0.4)
+        lower_wick = body * rng.uniform(0.2, 0.8) + step_vol * rng.uniform(0.1, 0.4)
 
-        high_p = max(open_p, close_p) + wick_up
-        low_p = min(open_p, close_p) - wick_dn
-        vol = 200 + (seed % 800)
+        high_p = max(open_p, close_p) + upper_wick
+        low_p = min(open_p, close_p) - lower_wick
+
+        if cur_dt == exit_dt:
+            close_p = xp
+            high_p = max(high_p, xp)
+            low_p = min(low_p, xp)
+
+        vol = int(rng.uniform(150, 1200))
 
         candles.append({
             "time": ts_sec,
@@ -712,7 +735,8 @@ def _generate_synthetic_candles(
         })
 
         cur_price = close_p
-        cur_dt += timedelta(minutes=step_minutes)
+        cur_dt += step
+        candle_idx += 1
 
     return candles
 

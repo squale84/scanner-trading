@@ -1355,7 +1355,7 @@
                         <button class="btn-nav" style="padding: 4px 10px; font-size: 11px;" onclick="reloadReplayCandles()">🔄 Recharger</button>
                     </div>
                 </div>
-                <!-- BANDEAU REPÈRES DU TRADE -->
+                <!-- BANDEAU REPÈRES DU TRADE TRADINGVIEW -->
                 <div id="rm-levels-strip" style="display:flex; align-items:center; gap:14px; padding: 7px 16px; background: rgba(13, 17, 23, 0.95); border-bottom: 1px solid var(--border-color); font-family: var(--font-mono); font-size: 11.5px; flex-wrap: wrap;">
                     <div style="display:flex; align-items:center; gap:6px;">
                         <span style="color:var(--text-faint); font-size:10px; text-transform:uppercase;">Entrée :</span>
@@ -1369,6 +1369,14 @@
                         <span style="color:var(--text-faint); font-size:10px; text-transform:uppercase;">Take Profit :</span>
                         <span id="rm-strip-tp" style="color:var(--accent-green); font-weight:700;">--</span>
                     </div>
+                    <div id="rm-strip-targets-box" style="display:none; align-items:center; gap:6px;">
+                        <span style="color:var(--text-faint); font-size:10px; text-transform:uppercase;">Cibles :</span>
+                        <span id="rm-strip-targets" style="color:var(--accent-gold); font-weight:700;">--</span>
+                    </div>
+                    <div style="display:flex; align-items:center; gap:6px;">
+                        <span style="color:var(--text-faint); font-size:10px; text-transform:uppercase;">Ratio R:R :</span>
+                        <span id="rm-strip-rr" style="color:#a78bfa; font-weight:700;">--</span>
+                    </div>
                     <div style="display:flex; align-items:center; gap:6px;">
                         <span style="color:var(--text-faint); font-size:10px; text-transform:uppercase;">Sortie :</span>
                         <span id="rm-strip-exit" style="color:#fff; font-weight:700;">--</span>
@@ -1377,6 +1385,10 @@
                         <span style="color:var(--text-faint); font-size:10px; text-transform:uppercase;">MFE Max :</span>
                         <span id="rm-strip-bestr" style="color:var(--accent-gold); font-weight:700;">--</span>
                     </div>
+                </div>
+                <div id="replay-chart-loading" style="display:none; position:absolute; inset:80px 0 0 0; background:rgba(7,9,14,0.85); z-index:20; flex-direction:column; align-items:center; justify-content:center; gap:12px; font-size:12px; color:var(--text-muted);">
+                    <div style="width:26px; height:26px; border:2px solid var(--border-color); border-top-color:var(--accent-blue); border-radius:50%; animation:spin 0.8s linear infinite;"></div>
+                    <span id="replay-chart-loading-text">Chargement des chandeliers M5 & position...</span>
                 </div>
                 <div id="replay-chart-container"></div>
             </div>
@@ -3500,7 +3512,9 @@
 
         document.getElementById('replay-modal-overlay').classList.add('open');
 
-        renderReplayTradingView(sym, {
+        const targets = Array.isArray(x.targets) && x.targets.length ? x.targets : (Array.isArray(e.targets) && e.targets.length ? e.targets : []);
+
+        fetchAndRenderReplayCandles(sym, {
             entryPrice: ep,
             slPrice: sl,
             tpPrice: tp,
@@ -3513,7 +3527,10 @@
             sweepLvl: sweepLvl,
             sweepType: sweepType,
             entryTime: e.time,
-            exitTime: x.time
+            exitTime: x.time,
+            targets: targets,
+            entryTimeSec: e.time ? Math.floor(new Date(e.time + (e.time.endsWith('Z') ? '' : 'Z')).getTime() / 1000) : null,
+            exitTimeSec: x.time ? Math.floor(new Date(x.time + (x.time.endsWith('Z') ? '' : 'Z')).getTime() / 1000) : null
         });
     }
 
@@ -3706,56 +3723,22 @@
         }
     }
 
-    function renderReplayTradingView(sym, tradeData) {
+    async function fetchAndRenderReplayCandles(sym, tradeData) {
         currentReplayTrade = { sym, tradeData };
-        const tvSymbol = TV_SYMBOLS[sym] || sym;
-        const container = document.getElementById('replay-chart-container');
-        if (!container) return;
-        container.innerHTML = '<div class="tradingview-widget-container__widget" style="width:100%; height:100%;"></div>';
-
-        const script = document.createElement('script');
-        script.type = 'text/javascript';
-        script.src = 'https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js';
-        script.async = true;
-        script.innerHTML = JSON.stringify({
-            autosize: true,
-            symbol: tvSymbol,
-            interval: "5",
-            timezone: "Etc/UTC",
-            theme: "dark",
-            style: "1",
-            locale: "fr",
-            backgroundColor: "#07090e",
-            gridColor: "rgba(30, 41, 59, 0.45)",
-            hide_top_toolbar: false,
-            hide_legend: false,
-            allow_symbol_change: false,
-            save_image: false,
-            calendar: false,
-            hide_volume: false,
-            hide_side_toolbar: false,
-            support_host: "https://www.tradingview.com"
-        });
-        container.appendChild(script);
-
+        const loading = document.getElementById('replay-chart-loading');
+        const loadingText = document.getElementById('replay-chart-loading-text');
         const sourceEl = document.getElementById('rm-chart-source');
-        if (sourceEl) {
-            sourceEl.textContent = '🟢 TRADINGVIEW OFFICIEL M5';
-            sourceEl.style.color = 'var(--accent-green)';
-            sourceEl.style.borderColor = 'rgba(0,224,138,0.3)';
-        }
+        if (loading) loading.style.display = 'flex';
+        if (loadingText) loadingText.textContent = 'Chargement des chandeliers M5 & position TradingView...';
 
-        const tvLink = document.getElementById('rm-tv-direct-link');
-        if (tvLink) {
-            tvLink.href = RADAR_TV_LAYOUT + '?symbol=' + encodeURIComponent(RADAR_TV_SYMBOLS[sym] || tvSymbol);
-        }
-
+        // Mise à jour immédiate du bandeau de niveaux
         const epEl = document.getElementById('rm-strip-entry');
         if (epEl) epEl.textContent = formatDisplay(tradeData.entryPrice);
         const slEl = document.getElementById('rm-strip-sl');
         if (slEl) slEl.textContent = formatDisplay(tradeData.slPrice);
         const tpEl = document.getElementById('rm-strip-tp');
         if (tpEl) tpEl.textContent = formatDisplay(tradeData.tpPrice);
+
         const xpEl = document.getElementById('rm-strip-exit');
         if (xpEl) {
             const xpVal = tradeData.exitPrice ? formatDisplay(tradeData.exitPrice) : (tradeData.exitStatus || '--');
@@ -3764,12 +3747,81 @@
         }
         const bestrEl = document.getElementById('rm-strip-bestr');
         if (bestrEl) bestrEl.textContent = tradeData.bestR > 0 ? `+${tradeData.bestR.toFixed(2)}R` : '--';
+
+        // Calcul Ratio R/R théorique
+        const rrEl = document.getElementById('rm-strip-rr');
+        if (rrEl) {
+            if (tradeData.entryPrice && tradeData.slPrice && tradeData.entryPrice !== tradeData.slPrice && tradeData.tpPrice) {
+                const risk = Math.abs(tradeData.entryPrice - tradeData.slPrice);
+                const rew = Math.abs(tradeData.tpPrice - tradeData.entryPrice);
+                rrEl.textContent = risk > 0 ? `1:${(rew / risk).toFixed(2)}` : '--';
+            } else {
+                rrEl.textContent = '--';
+            }
+        }
+
+        // Cibles / Targets
+        const tgBox = document.getElementById('rm-strip-targets-box');
+        const tgEl = document.getElementById('rm-strip-targets');
+        if (Array.isArray(tradeData.targets) && tradeData.targets.length > 0) {
+            if (tgBox) tgBox.style.display = 'flex';
+            if (tgEl) tgEl.textContent = tradeData.targets.map((t, idx) => `T${idx + 1}: ${formatDisplay(parseNum(t))}`).join(' · ');
+        } else if (tgBox) {
+            tgBox.style.display = 'none';
+        }
+
+        // Lien direct externe TradingView (au cas où l'utilisateur souhaite ouvrir en plein écran externe)
+        const tvSymbol = TV_SYMBOLS[sym] || sym;
+        const tvLink = document.getElementById('rm-tv-direct-link');
+        if (tvLink) {
+            tvLink.href = RADAR_TV_LAYOUT + '?symbol=' + encodeURIComponent(RADAR_TV_SYMBOLS[sym] || tvSymbol);
+        }
+
+        try {
+            const ep = tradeData.entryPrice || '';
+            const sl = tradeData.slPrice || '';
+            const tp = tradeData.tpPrice || '';
+            const xp = tradeData.exitPrice || '';
+            const bestR = tradeData.bestR || '';
+            const dir = tradeData.direction || '';
+            const eTs = tradeData.entryTime || '';
+            const xTs = tradeData.exitTime || '';
+
+            const url = `/api/candles?symbol=${encodeURIComponent(sym)}&entry_ts=${encodeURIComponent(eTs)}&exit_ts=${encodeURIComponent(xTs)}&entry_price=${ep}&sl_price=${sl}&tp_price=${tp}&exit_price=${xp}&best_r=${bestR}&direction=${dir}`;
+            const resp = await fetch(url);
+            const data = await resp.json();
+
+            if (data.status === 'success' && data.candles && data.candles.length > 0) {
+                if (loading) loading.style.display = 'none';
+                if (sourceEl) {
+                    if (data.source === 'yfinance') {
+                        sourceEl.textContent = '🟢 BOUGIES RÉELLES M5';
+                        sourceEl.style.color = 'var(--accent-green)';
+                        sourceEl.style.borderColor = 'rgba(0,224,138,0.3)';
+                    } else {
+                        sourceEl.textContent = '🔵 MODÉLISATION CANDLESTICKS ICT M5';
+                        sourceEl.style.color = '#60a5fa';
+                        sourceEl.style.borderColor = 'rgba(96,165,250,0.3)';
+                    }
+                }
+                renderReplayChart(data.candles, tradeData);
+            } else {
+                if (loadingText) loadingText.textContent = 'Chandelier introuvable pour ce trade.';
+            }
+        } catch (e) {
+            console.error('Erreur chargement bougies replay:', e);
+            if (loadingText) loadingText.textContent = 'Erreur réseau lors de la récupération des bougies.';
+        }
     }
 
     function reloadReplayCandles() {
         if (currentReplayTrade) {
-            renderReplayTradingView(currentReplayTrade.sym, currentReplayTrade.tradeData);
+            fetchAndRenderReplayCandles(currentReplayTrade.sym, currentReplayTrade.tradeData);
         }
+    }
+
+    function renderReplayTradingView(sym, tradeData) {
+        fetchAndRenderReplayCandles(sym, tradeData);
     }
 
     function renderReplayChart(candles, tradeData) {
@@ -3778,6 +3830,15 @@
         container.innerHTML = '';
 
         if (typeof LightweightCharts !== 'undefined') {
+            if (replayChartInstance) {
+                try { replayChartInstance.remove(); } catch (e) {}
+                replayChartInstance = null;
+            }
+            if (replayResizeObserver) {
+                replayResizeObserver.disconnect();
+                replayResizeObserver = null;
+            }
+
             const chart = LightweightCharts.createChart(container, {
                 width: container.clientWidth || 800,
                 height: container.clientHeight || 500,
@@ -3796,6 +3857,10 @@
                 },
                 rightPriceScale: {
                     borderColor: '#1e293b',
+                    scaleMargins: {
+                        top: 0.08,
+                        bottom: 0.16,
+                    },
                 },
                 timeScale: {
                     borderColor: '#1e293b',
@@ -3814,45 +3879,101 @@
 
             candleSeries.setData(candles);
 
-            // Niveaux de prix : Entry, SL, TP, Sweep
-            if (tradeData.entryPrice) {
+            // Série Volume histogramme sous les chandeliers
+            try {
+                const volumeSeries = chart.addHistogramSeries({
+                    priceFormat: { type: 'volume' },
+                    priceScaleId: '',
+                    scaleMargins: {
+                        top: 0.82,
+                        bottom: 0,
+                    },
+                });
+                volumeSeries.setData(candles.map(c => ({
+                    time: c.time,
+                    value: c.volume || 100,
+                    color: c.close >= c.open ? 'rgba(8, 153, 129, 0.22)' : 'rgba(242, 54, 69, 0.22)'
+                })));
+            } catch (err) {}
+
+            // Niveaux de prix style Outil Position Long/Short TradingView
+            const ep = tradeData.entryPrice;
+            const sl = tradeData.slPrice;
+            const tp = tradeData.tpPrice;
+            const isBuy = tradeData.direction === 'BUY';
+            const risk = (ep && sl) ? Math.abs(ep - sl) : null;
+
+            if (ep) {
                 candleSeries.createPriceLine({
-                    price: tradeData.entryPrice,
+                    price: ep,
                     color: '#38bdf8',
                     lineWidth: 2,
                     lineStyle: LightweightCharts.LineStyle.Solid,
                     axisLabelVisible: true,
-                    title: 'ENTRÉE ' + (tradeData.direction || ''),
+                    title: 'ENTRÉE ' + (tradeData.direction || '') + ' ' + formatDisplay(ep),
                 });
             }
-            if (tradeData.slPrice) {
+            if (sl) {
                 candleSeries.createPriceLine({
-                    price: tradeData.slPrice,
+                    price: sl,
                     color: '#f23645',
                     lineWidth: 2,
                     lineStyle: LightweightCharts.LineStyle.Dashed,
                     axisLabelVisible: true,
-                    title: 'STOP LOSS',
+                    title: 'STOP LOSS ' + formatDisplay(sl) + ' (-1.00R)',
                 });
             }
-            if (tradeData.tpPrice) {
+            if (tp) {
+                const tpR = (risk && risk > 0) ? (Math.abs(tp - ep) / risk).toFixed(2) : '2.00';
                 candleSeries.createPriceLine({
-                    price: tradeData.tpPrice,
+                    price: tp,
                     color: '#089981',
                     lineWidth: 2,
                     lineStyle: LightweightCharts.LineStyle.Dashed,
                     axisLabelVisible: true,
-                    title: 'TAKE PROFIT',
+                    title: 'TAKE PROFIT ' + formatDisplay(tp) + ' (+' + tpR + 'R)',
                 });
             }
+
+            // Targets additionnelles / Cibles
+            if (Array.isArray(tradeData.targets) && tradeData.targets.length > 0) {
+                tradeData.targets.forEach((t, i) => {
+                    const tPrice = parseNum(t);
+                    if (tPrice && tPrice !== tp) {
+                        const tR = (risk && risk > 0) ? (Math.abs(tPrice - ep) / risk).toFixed(2) : (i + 1).toFixed(1);
+                        candleSeries.createPriceLine({
+                            price: tPrice,
+                            color: '#eab308',
+                            lineWidth: 1.5,
+                            lineStyle: LightweightCharts.LineStyle.Dotted,
+                            axisLabelVisible: true,
+                            title: 'CIBLE T' + (i + 1) + ' ' + formatDisplay(tPrice) + ' (+' + tR + 'R)',
+                        });
+                    }
+                });
+            } else if (risk && risk > 0 && tp) {
+                // Si pas de liste de cibles partielles, afficher le palier T1 à 1R (Break-Even)
+                const t1Price = isBuy ? (ep + risk) : (ep - risk);
+                if (Math.abs(t1Price - tp) > risk * 0.25) {
+                    candleSeries.createPriceLine({
+                        price: t1Price,
+                        color: '#eab308',
+                        lineWidth: 1.5,
+                        lineStyle: LightweightCharts.LineStyle.Dotted,
+                        axisLabelVisible: true,
+                        title: 'PALIER T1 ' + formatDisplay(t1Price) + ' (+1.00R / BE)',
+                    });
+                }
+            }
+
             if (tradeData.sweepLvl) {
                 candleSeries.createPriceLine({
                     price: tradeData.sweepLvl,
-                    color: '#ffd700',
+                    color: '#fbbf24',
                     lineWidth: 1,
                     lineStyle: LightweightCharts.LineStyle.Dotted,
                     axisLabelVisible: true,
-                    title: 'LIQ ' + (tradeData.sweepType || 'SWEEP'),
+                    title: 'LIQUIDITÉ ' + (tradeData.sweepType || 'SWEEP') + ' ' + formatDisplay(tradeData.sweepLvl),
                 });
             }
 
