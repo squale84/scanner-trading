@@ -2225,8 +2225,6 @@
 
         updateIctMacros();
     }
-    setInterval(updateClockAndSessions, 1000);
-    updateClockAndSessions();
 
     /* ===================== MACROS ICT & SYNTHÈSE VOCALE ===================== */
     const ICT_MACROS = [
@@ -4575,6 +4573,8 @@
     setInterval(loadAutotuneData, 60 * 1000); // Actualisation des règles Auto-Tuner toutes les minutes
     setInterval(checkUpcomingEvents, 60 * 1000);
     setInterval(renderOpenPositions, 60 * 1000); // rafraîchit l'alerte « aucune mise à jour depuis X min »
+    setInterval(updateClockAndSessions, 1000);
+    updateClockAndSessions();
     // C5 : la connexion en direct s'ouvre d'abord ; son ouverture lance le chargement de l'historique.
     connectWebSocket();
     // Secours : si la connexion en direct ne s'ouvre pas, l'historique est quand même chargé.
