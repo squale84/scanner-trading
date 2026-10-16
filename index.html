@@ -923,6 +923,8 @@
         display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-shrink: 0;
     }
     #replay-chart-container { flex: 1; min-height: 0; width: 100%; height: 100%; position: relative; }
+    #replay-chart-container .tradingview-widget-container,
+    #replay-chart-container iframe { width: 100%; height: 100%; border: none; }
     .replay-coach-pane {
         width: 390px; flex-shrink: 0; border-left: 1px solid var(--border-color);
         background: var(--bg-card); display: flex; flex-direction: column;
@@ -1341,22 +1343,42 @@
             </div>
         </div>
         <div class="replay-layout">
-            <!-- ZONE GAUCHE : REPLAY GRAPHIQUE M5 -->
+            <!-- ZONE GAUCHE : GRAPHIQUE TRADINGVIEW M5 & REPÈRES -->
             <div class="replay-chart-pane">
                 <div class="replay-chart-toolbar">
                     <div style="display:flex; align-items:center; gap:10px;">
                         <span style="font-size: 11px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px;">CHANDELIERS M5 • CONTEXTE ICT</span>
-                        <span id="rm-chart-source" class="tag-chip" style="font-size: 10px;">Chargement...</span>
+                        <span id="rm-chart-source" class="tag-chip" style="font-size: 10px; color: var(--accent-green); border-color: rgba(0,224,138,0.3);">🟢 TRADINGVIEW OFFICIEL M5</span>
                     </div>
                     <div style="display:flex; align-items:center; gap:8px;">
-                        <button class="btn-nav" style="padding: 4px 10px; font-size: 11px;" onclick="reloadReplayCandles()">⟳ Recentrer</button>
+                        <a id="rm-tv-direct-link" href="#" target="_blank" class="btn-nav" style="padding: 4px 10px; font-size: 11px; text-decoration: none; color: #fff; background: rgba(47, 107, 255, 0.2); border: 1px solid rgba(47, 107, 255, 0.4);" title="Ouvrir sur TradingView">📈 Ouvrir sur TradingView ↗</a>
+                        <button class="btn-nav" style="padding: 4px 10px; font-size: 11px;" onclick="reloadReplayCandles()">🔄 Recharger</button>
                     </div>
                 </div>
-                <div id="replay-chart-container">
-                    <div id="replay-chart-loading" style="display:flex; align-items:center; justify-content:center; height:100%; color:var(--text-muted); font-size:13px; font-family:var(--font-mono);">
-                        Chargement des bougies M5...
+                <!-- BANDEAU REPÈRES DU TRADE -->
+                <div id="rm-levels-strip" style="display:flex; align-items:center; gap:14px; padding: 7px 16px; background: rgba(13, 17, 23, 0.95); border-bottom: 1px solid var(--border-color); font-family: var(--font-mono); font-size: 11.5px; flex-wrap: wrap;">
+                    <div style="display:flex; align-items:center; gap:6px;">
+                        <span style="color:var(--text-faint); font-size:10px; text-transform:uppercase;">Entrée :</span>
+                        <span id="rm-strip-entry" style="color:var(--accent-blue); font-weight:700;">--</span>
+                    </div>
+                    <div style="display:flex; align-items:center; gap:6px;">
+                        <span style="color:var(--text-faint); font-size:10px; text-transform:uppercase;">Stop Loss :</span>
+                        <span id="rm-strip-sl" style="color:var(--accent-red); font-weight:700;">--</span>
+                    </div>
+                    <div style="display:flex; align-items:center; gap:6px;">
+                        <span style="color:var(--text-faint); font-size:10px; text-transform:uppercase;">Take Profit :</span>
+                        <span id="rm-strip-tp" style="color:var(--accent-green); font-weight:700;">--</span>
+                    </div>
+                    <div style="display:flex; align-items:center; gap:6px;">
+                        <span style="color:var(--text-faint); font-size:10px; text-transform:uppercase;">Sortie :</span>
+                        <span id="rm-strip-exit" style="color:#fff; font-weight:700;">--</span>
+                    </div>
+                    <div style="display:flex; align-items:center; gap:6px; margin-left:auto;">
+                        <span style="color:var(--text-faint); font-size:10px; text-transform:uppercase;">MFE Max :</span>
+                        <span id="rm-strip-bestr" style="color:var(--accent-gold); font-weight:700;">--</span>
                     </div>
                 </div>
+                <div id="replay-chart-container"></div>
             </div>
 
             <!-- ZONE DROITE : PANNEAU COACH & AUDIT ICT -->
@@ -3478,7 +3500,7 @@
 
         document.getElementById('replay-modal-overlay').classList.add('open');
 
-        fetchAndRenderReplayCandles(sym, {
+        renderReplayTradingView(sym, {
             entryPrice: ep,
             slPrice: sl,
             tpPrice: tp,
@@ -3491,14 +3513,14 @@
             sweepLvl: sweepLvl,
             sweepType: sweepType,
             entryTime: e.time,
-            exitTime: x.time,
-            entryTimeSec: e.time ? Math.floor(new Date(e.time + (e.time.endsWith('Z') ? '' : 'Z')).getTime() / 1000) : null,
-            exitTimeSec: x.time ? Math.floor(new Date(x.time + (x.time.endsWith('Z') ? '' : 'Z')).getTime() / 1000) : null
+            exitTime: x.time
         });
     }
 
     function closeReplayModal() {
         document.getElementById('replay-modal-overlay').classList.remove('open');
+        const container = document.getElementById('replay-chart-container');
+        if (container) container.innerHTML = '';
         if (replayResizeObserver) {
             replayResizeObserver.disconnect();
             replayResizeObserver = null;
@@ -3684,51 +3706,69 @@
         }
     }
 
-    async function fetchAndRenderReplayCandles(sym, tradeData) {
-        const loading = document.getElementById('replay-chart-loading');
+    function renderReplayTradingView(sym, tradeData) {
+        currentReplayTrade = { sym, tradeData };
+        const tvSymbol = TV_SYMBOLS[sym] || sym;
+        const container = document.getElementById('replay-chart-container');
+        if (!container) return;
+        container.innerHTML = '<div class="tradingview-widget-container__widget" style="width:100%; height:100%;"></div>';
+
+        const script = document.createElement('script');
+        script.type = 'text/javascript';
+        script.src = 'https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js';
+        script.async = true;
+        script.innerHTML = JSON.stringify({
+            autosize: true,
+            symbol: tvSymbol,
+            interval: "5",
+            timezone: "Etc/UTC",
+            theme: "dark",
+            style: "1",
+            locale: "fr",
+            backgroundColor: "#07090e",
+            gridColor: "rgba(30, 41, 59, 0.45)",
+            hide_top_toolbar: false,
+            hide_legend: false,
+            allow_symbol_change: false,
+            save_image: false,
+            calendar: false,
+            hide_volume: false,
+            hide_side_toolbar: false,
+            support_host: "https://www.tradingview.com"
+        });
+        container.appendChild(script);
+
         const sourceEl = document.getElementById('rm-chart-source');
-        if (loading) loading.style.display = 'flex';
-
-        try {
-            const ep = tradeData.entryPrice || '';
-            const sl = tradeData.slPrice || '';
-            const tp = tradeData.tpPrice || '';
-            const xp = tradeData.exitPrice || '';
-            const bestR = tradeData.bestR || '';
-            const dir = tradeData.direction || '';
-            const eTs = tradeData.entryTime || '';
-            const xTs = tradeData.exitTime || '';
-
-            const url = `/api/candles?symbol=${encodeURIComponent(sym)}&entry_ts=${encodeURIComponent(eTs)}&exit_ts=${encodeURIComponent(xTs)}&entry_price=${ep}&sl_price=${sl}&tp_price=${tp}&exit_price=${xp}&best_r=${bestR}&direction=${dir}`;
-            const resp = await fetch(url);
-            const data = await resp.json();
-
-            if (data.status === 'success' && data.candles && data.candles.length > 0) {
-                if (loading) loading.style.display = 'none';
-                if (sourceEl) {
-                    if (data.source === 'yfinance') {
-                        sourceEl.textContent = '🟢 BOUGIES RÉELLES M5';
-                        sourceEl.style.color = 'var(--accent-green)';
-                        sourceEl.style.borderColor = 'rgba(0,224,138,0.3)';
-                    } else {
-                        sourceEl.textContent = '🔵 RECONSTITUTION SYNTHÉTIQUE';
-                        sourceEl.style.color = '#60a5fa';
-                        sourceEl.style.borderColor = 'rgba(96,165,250,0.3)';
-                    }
-                }
-                renderReplayChart(data.candles, tradeData);
-            } else {
-                if (loading) loading.textContent = 'Impossible de charger les bougies pour ce trade.';
-            }
-        } catch (e) {
-            console.error('Erreur chargement bougies replay:', e);
-            if (loading) loading.textContent = 'Erreur réseau lors de la récupération des bougies.';
+        if (sourceEl) {
+            sourceEl.textContent = '🟢 TRADINGVIEW OFFICIEL M5';
+            sourceEl.style.color = 'var(--accent-green)';
+            sourceEl.style.borderColor = 'rgba(0,224,138,0.3)';
         }
+
+        const tvLink = document.getElementById('rm-tv-direct-link');
+        if (tvLink) {
+            tvLink.href = RADAR_TV_LAYOUT + '?symbol=' + encodeURIComponent(RADAR_TV_SYMBOLS[sym] || tvSymbol);
+        }
+
+        const epEl = document.getElementById('rm-strip-entry');
+        if (epEl) epEl.textContent = formatDisplay(tradeData.entryPrice);
+        const slEl = document.getElementById('rm-strip-sl');
+        if (slEl) slEl.textContent = formatDisplay(tradeData.slPrice);
+        const tpEl = document.getElementById('rm-strip-tp');
+        if (tpEl) tpEl.textContent = formatDisplay(tradeData.tpPrice);
+        const xpEl = document.getElementById('rm-strip-exit');
+        if (xpEl) {
+            const xpVal = tradeData.exitPrice ? formatDisplay(tradeData.exitPrice) : (tradeData.exitStatus || '--');
+            const rTxt = tradeData.rMultiple !== null && tradeData.rMultiple !== undefined ? ` (${tradeData.rMultiple >= 0 ? '+' : ''}${tradeData.rMultiple.toFixed(2)}R)` : '';
+            xpEl.textContent = `${xpVal}${rTxt}`;
+        }
+        const bestrEl = document.getElementById('rm-strip-bestr');
+        if (bestrEl) bestrEl.textContent = tradeData.bestR > 0 ? `+${tradeData.bestR.toFixed(2)}R` : '--';
     }
 
     function reloadReplayCandles() {
         if (currentReplayTrade) {
-            openReplayModal(currentReplayTrade);
+            renderReplayTradingView(currentReplayTrade.sym, currentReplayTrade.tradeData);
         }
     }
 
