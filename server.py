@@ -14,6 +14,8 @@ import time
 import httpx
 import math
 import random
+import re
+from collections import deque
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 from typing import List, Optional, Dict, Any
@@ -182,6 +184,11 @@ def _session_label_now():
         return "🇺🇸 NY AM"
     return "⏱ Hors killzone"
 
+def _tf_propre(v):
+    """Unité de temps du graphique d'où part l'alerte (R6.3 : « M5 », « M15 », « H1 »…) ; None si absente ou douteuse (anciennes alertes)."""
+    t = str(v).strip().upper() if v is not None else ""
+    return t if re.fullmatch(r"[A-Z]{1,2}[0-9]{1,3}", t) else None
+
 def _parse_num(v):
     try:
         return float(v)
@@ -279,6 +286,7 @@ def _new_position(symbol, status, data, now, recovered=False):
         "sweep_lvl": data.get("sweep_lvl"),
         "sweep_type": data.get("sweep_type", "--"),
         "htf_aligned": data.get("htf_aligned"),
+        "tf": _tf_propre(data.get("tf")),
         "auto_filtered": data.get("auto_filtered", False),
         "auto_reason": data.get("auto_reason"),
         "targets": _clean_targets(data),
@@ -375,6 +383,7 @@ def _record_journal_event(symbol, status, direction, data):
                     "sweep_lvl": candidate_entry.get("sweep_lvl", data.get("sweep_lvl")),
                     "sweep_type": candidate_entry.get("sweep_type", data.get("sweep_type", "--")),
                     "htf_aligned": candidate_entry.get("htf_aligned", data.get("htf_aligned")),
+                    "tf": _tf_propre(candidate_entry.get("tf", data.get("tf"))),
                     "auto_filtered": candidate_entry.get("auto_filtered", data.get("auto_filtered", False)),
                     "auto_reason": candidate_entry.get("auto_reason", data.get("auto_reason")),
                     "targets": candidate_entry.get("targets") or [],
@@ -406,6 +415,7 @@ def _record_journal_event(symbol, status, direction, data):
                         "sweep_lvl": data.get("sweep_lvl"),
                         "sweep_type": data.get("sweep_type", "--"),
                         "htf_aligned": data.get("htf_aligned"),
+                        "tf": _tf_propre(data.get("tf")),
                         "auto_filtered": data.get("auto_filtered", False),
                         "auto_reason": data.get("auto_reason"),
                         "targets": _clean_targets(data),
@@ -447,6 +457,7 @@ def _record_journal_event(symbol, status, direction, data):
             "sweep_lvl": data.get("sweep_lvl"),
             "sweep_type": data.get("sweep_type", "--"),
             "htf_aligned": data.get("htf_aligned"),
+            "tf": _tf_propre(data.get("tf")),
             "auto_filtered": data.get("auto_filtered", False),
             "auto_reason": data.get("auto_reason"),
             "targets": open_positions[symbol]["targets"],
@@ -481,6 +492,7 @@ def _exit_row(symbol, status, pos, data, now):
         "sweep_lvl": (pos.get("sweep_lvl") if pos else None) or data.get("sweep_lvl"),
         "sweep_type": (pos.get("sweep_type") if pos else None) or data.get("sweep_type", "--"),
         "htf_aligned": (pos.get("htf_aligned") if pos and pos.get("htf_aligned") is not None else None) if pos else data.get("htf_aligned"),
+        "tf": _tf_propre((pos.get("tf") if pos else None) or data.get("tf")),
         "auto_filtered": (pos.get("auto_filtered") if pos else None) or data.get("auto_filtered", False),
         "auto_reason": (pos.get("auto_reason") if pos else None) or data.get("auto_reason"),
         "targets": pos.get("targets") if pos else [],
@@ -847,6 +859,47 @@ async def get_positions():
     _sync_storage()
     return JSONResponse(content=open_positions, headers={"X-Positions-Version": str(positions_version)})
 
+# R6.3 — événements de marché (status "EVENT") : niveau de liquidité pris, FVG de retournement. Ils ne sont PAS des
+# trades : jamais inscrits au journal, ni aux positions, ni aux cartes. Gardés en mémoire (petit tampon récent) et
+# diffusés au front ; Jarvis les lit sur /api/events. Le webhook n'étant pas authentifié, seuls les événements connus
+# sont acceptés, avec leur libellé fixé ICI (jamais le texte reçu) et des nombres finis.
+EVENEMENTS_MARCHE = {
+    "ASIA_HIGH_SWEPT": "Haut Asie", "ASIA_HIGH_BROKEN": "Haut Asie", "ASIA_LOW_SWEPT": "Bas Asie", "ASIA_LOW_BROKEN": "Bas Asie",
+    "LONDON_HIGH_SWEPT": "Haut Londres", "LONDON_HIGH_BROKEN": "Haut Londres", "LONDON_LOW_SWEPT": "Bas Londres", "LONDON_LOW_BROKEN": "Bas Londres",
+    "PDH_SWEPT": "PDH", "PDH_BROKEN": "PDH", "PDL_SWEPT": "PDL", "PDL_BROKEN": "PDL",
+    "FVG_BEAR_REVERSAL": "FVG baissière de retournement", "FVG_BULL_REVERSAL": "FVG haussière de retournement",
+}
+market_events = deque(maxlen=200)
+market_events_version = 0
+
+def _finite(v):
+    n = _parse_num(v)
+    return n if n is not None and math.isfinite(n) else None
+
+def _clean_market_event(symbol, data):
+    """Événement nettoyé (dict) ou None s'il est inconnu / illisible."""
+    ev = str(data.get("event", ""))
+    if ev not in EVENEMENTS_MARCHE or not re.fullmatch(r"[A-Z0-9._:-]{1,20}", symbol or ""):
+        return None
+    bar_time = data.get("bar_time")
+    bar_time = bar_time if isinstance(bar_time, int) and not isinstance(bar_time, bool) and bar_time > 0 else None
+    out = {
+        "type": "event", "symbol": symbol, "event": ev, "label": EVENEMENTS_MARCHE[ev],
+        "kind": "FVG" if ev.startswith("FVG_") else ev.rsplit("_", 1)[1],
+        "level": _finite(data.get("level")), "fvg_top": _finite(data.get("fvg_top")), "fvg_bot": _finite(data.get("fvg_bot")),
+        "current_price": _finite(data.get("current_price")), "bar_time": bar_time, "tf": _tf_propre(data.get("tf")),
+        "time": datetime.utcnow().isoformat(),
+    }
+    if ev.startswith("FVG_") and (out["fvg_top"] is None or out["fvg_bot"] is None):
+        return None
+    if not ev.startswith("FVG_") and out["level"] is None:
+        return None
+    return out
+
+@app.get("/api/events")
+async def get_market_events():
+    return JSONResponse(content=list(market_events), headers={"X-Events-Version": str(market_events_version)})
+
 class ConnectionManager:
     def __init__(self):
         self.active_connections: List[WebSocket] = []
@@ -1181,6 +1234,20 @@ async def receive_webhook(request: Request):
     symbol = data.get("symbol", "UNKNOWN").upper()
     status = data.get("status", "INFO")
     direction = data.get("direction", "NONE")
+
+    if status == "EVENT":
+        global market_events_version
+        event = _clean_market_event(symbol, data)
+        if event is None:
+            return JSONResponse(status_code=400, content={"error": "événement de marché invalide"})
+        doublon = any(e["symbol"] == event["symbol"] and e["event"] == event["event"] and event["bar_time"] is not None
+                      and e["bar_time"] == event["bar_time"] for e in market_events)
+        if not doublon:
+            market_events.append(event)
+            market_events_version += 1
+            print(f"📡 [{symbol}] Événement de marché : {event['label']} ({event['kind']})")
+            await manager.broadcast(json.dumps(event))
+        return {"status": "ok", "event": event["event"], "duplicate": doublon}
 
     # Moteur d'Auto-Correction si nouveau trade d'entrée
     if direction in ("BUY", "SELL"):

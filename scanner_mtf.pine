@@ -2,14 +2,15 @@
 // VERSION DU SCRIPT — à comparer avec ce que Claude annonce à chaque envoi de fichier.
 // Visible en permanence dans le titre sur le graphique (légende en haut à gauche), sans avoir
 // besoin d'ouvrir l'éditeur. Change ce numéro à CHAQUE modification envoyée par Claude.
-SCRIPT_VERSION = "R6.2"
+SCRIPT_VERSION = "R6.3"
 
-// VIS1 : version de l'AFFICHAGE seulement (zones OB / FVG). Le moteur reste R6.2 : SCRIPT_VERSION est la seule
-// chaîne envoyée dans les payloads et elle ne change pas.
+// VIS1 : version de l'AFFICHAGE seulement (zones OB / FVG). R6.3 : le moteur de trade reste celui de R6.2 ; changements =
+// (1) correction du JSON des alertes de sortie et de mise à jour (un guillemet en trop après htf_aligned les rendait invalides),
+// (2) nouvelles alertes d'événements de marché (status EVENT : haut/bas Asie, Londres, PDH/PDL pris, FVG de retournement).
 DISPLAY_VERSION = "VIS1"
 
 // Version EN TÊTE du nom : la liste « Mes scripts » de TradingView coupe les noms trop longs.
-indicator("Radar ICT R6.2 · VIS1 — Terminal Pro MTF H1-M5", shorttitle="Radar ICT R6.2 · VIS1", overlay=true, max_boxes_count=200, max_lines_count=200, max_labels_count=200, max_bars_back=1000)
+indicator("Radar ICT R6.3 · VIS1 — Terminal Pro MTF H1-M5", shorttitle="Radar ICT R6.3 · VIS1", overlay=true, max_boxes_count=200, max_lines_count=200, max_labels_count=200, max_bars_back=1000)
 
 // ==========================================
 // 1. CONFIGURATION GÉNÉRALE & PARAMÈTRES
@@ -17,6 +18,8 @@ indicator("Radar ICT R6.2 · VIS1 — Terminal Pro MTF H1-M5", shorttitle="Radar
 grp_radar     = "Configuration Terminal Radar"
 asset_name_in = input.string("", title="Symbole Terminal (vide = auto)", group=grp_radar)
 asset_name    = asset_name_in != "" ? asset_name_in : (syminfo.ticker == "XAUUSD" ? "GOLD" : syminfo.ticker)
+// Unité de temps du graphique où tourne le Radar (R6.3) : envoyée dans chaque alerte (« M5 », « M15 », « H1 »…)
+tf_txt = timeframe.isminutes ? (timeframe.multiplier % 60 == 0 ? "H" + str.tostring(int(timeframe.multiplier / 60)) : "M" + str.tostring(timeframe.multiplier)) : (timeframe.isdaily ? "D1" : (timeframe.isweekly ? "W1" : timeframe.period))
 rr_ratio      = input.float(2.0, title="Ratio Risque / Récompense (TP)", minval=1.0, step=0.5, group=grp_radar)
 is_crypto_247 = input.bool(true, title="Mode Métaux / Continu (Ignore Killzones)", group=grp_radar)
 min_grade_in  = input.string("A", title="Grade Minimum pour Alerte", options=["B", "A", "A+"], group=grp_radar)
@@ -1283,7 +1286,7 @@ if raw_buy
                 sl_zone_box := box.new(bar_index, pos_entry, bar_index + 30, pos_sl, border_color=na, bgcolor=color.new(color_lux_bear, 88))
             f_draw_targets(t_px, t_ty, t_r)
 
-            payload_entry = '{"symbol":"' + asset_name + '","status":"' + setup_name + '","direction":"BUY","quality":"' + grade_txt + '","grade":"' + stars_txt + '","entry_price":"' + str.tostring(pos_entry, format.mintick) + '","sl_price":"' + str.tostring(pos_sl, format.mintick) + '","tp_price":"' + str.tostring(pos_tp, format.mintick) + '","current_price":"' + str.tostring(close, format.mintick) + '","rr":"' + pos_rr_txt + '","version":"' + SCRIPT_VERSION + '","trade_id":"' + pos_trade_id + '","pd_zone":"' + pos_pd_zone + '","pd_pct":' + str.tostring(pos_pd_pct, "#.#") + ',"sweep_lvl":"' + str.tostring(pos_sweep_lvl, format.mintick) + '","sweep_type":"' + pos_sweep_type + '","htf_aligned":' + (pos_htf_aligned ? "true" : "false") + ',"targets":' + f_targets_json(t_px, t_ty, t_r) + '}'
+            payload_entry = '{"symbol":"' + asset_name + '","status":"' + setup_name + '","direction":"BUY","quality":"' + grade_txt + '","grade":"' + stars_txt + '","entry_price":"' + str.tostring(pos_entry, format.mintick) + '","sl_price":"' + str.tostring(pos_sl, format.mintick) + '","tp_price":"' + str.tostring(pos_tp, format.mintick) + '","current_price":"' + str.tostring(close, format.mintick) + '","rr":"' + pos_rr_txt + '","version":"' + SCRIPT_VERSION + '","tf":"' + tf_txt + '","trade_id":"' + pos_trade_id + '","pd_zone":"' + pos_pd_zone + '","pd_pct":' + str.tostring(pos_pd_pct, "#.#") + ',"sweep_lvl":"' + str.tostring(pos_sweep_lvl, format.mintick) + '","sweep_type":"' + pos_sweep_type + '","htf_aligned":' + (pos_htf_aligned ? "true" : "false") + ',"targets":' + f_targets_json(t_px, t_ty, t_r) + '}'
             alert(payload_entry, alert.freq_once_per_bar_close)
 
 if raw_sell
@@ -1338,7 +1341,7 @@ if raw_sell
                 sl_zone_box := box.new(bar_index, pos_sl, bar_index + 30, pos_entry, border_color=na, bgcolor=color.new(color_lux_bear, 88))
             f_draw_targets(t_px, t_ty, t_r)
 
-            payload_entry = '{"symbol":"' + asset_name + '","status":"' + setup_name + '","direction":"SELL","quality":"' + grade_txt + '","grade":"' + stars_txt + '","entry_price":"' + str.tostring(pos_entry, format.mintick) + '","sl_price":"' + str.tostring(pos_sl, format.mintick) + '","tp_price":"' + str.tostring(pos_tp, format.mintick) + '","current_price":"' + str.tostring(close, format.mintick) + '","rr":"' + pos_rr_txt + '","version":"' + SCRIPT_VERSION + '","trade_id":"' + pos_trade_id + '","pd_zone":"' + pos_pd_zone + '","pd_pct":' + str.tostring(pos_pd_pct, "#.#") + ',"sweep_lvl":"' + str.tostring(pos_sweep_lvl, format.mintick) + '","sweep_type":"' + pos_sweep_type + '","htf_aligned":' + (pos_htf_aligned ? "true" : "false") + ',"targets":' + f_targets_json(t_px, t_ty, t_r) + '}'
+            payload_entry = '{"symbol":"' + asset_name + '","status":"' + setup_name + '","direction":"SELL","quality":"' + grade_txt + '","grade":"' + stars_txt + '","entry_price":"' + str.tostring(pos_entry, format.mintick) + '","sl_price":"' + str.tostring(pos_sl, format.mintick) + '","tp_price":"' + str.tostring(pos_tp, format.mintick) + '","current_price":"' + str.tostring(close, format.mintick) + '","rr":"' + pos_rr_txt + '","version":"' + SCRIPT_VERSION + '","tf":"' + tf_txt + '","trade_id":"' + pos_trade_id + '","pd_zone":"' + pos_pd_zone + '","pd_pct":' + str.tostring(pos_pd_pct, "#.#") + ',"sweep_lvl":"' + str.tostring(pos_sweep_lvl, format.mintick) + '","sweep_type":"' + pos_sweep_type + '","htf_aligned":' + (pos_htf_aligned ? "true" : "false") + ',"targets":' + f_targets_json(t_px, t_ty, t_r) + '}'
             alert(payload_entry, alert.freq_once_per_bar_close)
 
 // ==========================================
@@ -1356,7 +1359,7 @@ if in_pos
 
     if hit_sl or hit_tp or pos_expired
         exit_status = hit_sl ? "SL_HIT" : (hit_tp ? "TP_HIT" : "EXPIRED")
-        payload_exit = '{"symbol":"' + asset_name + '","status":"' + exit_status + '","direction":"' + pos_dir + '","quality":"' + pos_quality + '","grade":"' + pos_grade + '","entry_price":"' + str.tostring(pos_entry, format.mintick) + '","sl_price":"' + str.tostring(pos_sl, format.mintick) + '","tp_price":"' + str.tostring(pos_tp, format.mintick) + '","current_price":"' + str.tostring(close, format.mintick) + '","rr":"' + pos_rr_txt + '","version":"' + SCRIPT_VERSION + '","trade_id":"' + pos_trade_id + '","pd_zone":"' + pos_pd_zone + '","pd_pct":' + str.tostring(pos_pd_pct, "#.#") + ',"sweep_lvl":"' + str.tostring(pos_sweep_lvl, format.mintick) + '","sweep_type":"' + pos_sweep_type + '","htf_aligned":' + (pos_htf_aligned ? "true" : "false") + '"}'
+        payload_exit = '{"symbol":"' + asset_name + '","status":"' + exit_status + '","direction":"' + pos_dir + '","quality":"' + pos_quality + '","grade":"' + pos_grade + '","entry_price":"' + str.tostring(pos_entry, format.mintick) + '","sl_price":"' + str.tostring(pos_sl, format.mintick) + '","tp_price":"' + str.tostring(pos_tp, format.mintick) + '","current_price":"' + str.tostring(close, format.mintick) + '","rr":"' + pos_rr_txt + '","version":"' + SCRIPT_VERSION + '","tf":"' + tf_txt + '","trade_id":"' + pos_trade_id + '","pd_zone":"' + pos_pd_zone + '","pd_pct":' + str.tostring(pos_pd_pct, "#.#") + ',"sweep_lvl":"' + str.tostring(pos_sweep_lvl, format.mintick) + '","sweep_type":"' + pos_sweep_type + '","htf_aligned":' + (pos_htf_aligned ? "true" : "false") + '}'
         alert(payload_exit, alert.freq_once_per_bar_close)
         in_pos          := false
         pos_dir         := "NONE"
@@ -1378,8 +1381,107 @@ if in_pos
             label.set_x(lb, bar_index)
     else if bar_index > last_sig_bar
         // Mise à jour de progression à chaque clôture de bougie M5 pendant position active
-        payload_update = '{"symbol":"' + asset_name + '","status":"PRICE_UPDATE","direction":"' + pos_dir + '","quality":"' + pos_quality + '","grade":"' + pos_grade + '","entry_price":"' + str.tostring(pos_entry, format.mintick) + '","sl_price":"' + str.tostring(pos_sl, format.mintick) + '","tp_price":"' + str.tostring(pos_tp, format.mintick) + '","current_price":"' + str.tostring(close, format.mintick) + '","rr":"' + pos_rr_txt + '","version":"' + SCRIPT_VERSION + '","trade_id":"' + pos_trade_id + '","pd_zone":"' + pos_pd_zone + '","pd_pct":' + str.tostring(pos_pd_pct, "#.#") + ',"sweep_lvl":"' + str.tostring(pos_sweep_lvl, format.mintick) + '","sweep_type":"' + pos_sweep_type + '","htf_aligned":' + (pos_htf_aligned ? "true" : "false") + '"}'
+        payload_update = '{"symbol":"' + asset_name + '","status":"PRICE_UPDATE","direction":"' + pos_dir + '","quality":"' + pos_quality + '","grade":"' + pos_grade + '","entry_price":"' + str.tostring(pos_entry, format.mintick) + '","sl_price":"' + str.tostring(pos_sl, format.mintick) + '","tp_price":"' + str.tostring(pos_tp, format.mintick) + '","current_price":"' + str.tostring(close, format.mintick) + '","rr":"' + pos_rr_txt + '","version":"' + SCRIPT_VERSION + '","tf":"' + tf_txt + '","trade_id":"' + pos_trade_id + '","pd_zone":"' + pos_pd_zone + '","pd_pct":' + str.tostring(pos_pd_pct, "#.#") + ',"sweep_lvl":"' + str.tostring(pos_sweep_lvl, format.mintick) + '","sweep_type":"' + pos_sweep_type + '","htf_aligned":' + (pos_htf_aligned ? "true" : "false") + '}'
         alert(payload_update, alert.freq_once_per_bar_close)
+
+// ==========================================
+// 5 bis. ALERTES D'ÉVÉNEMENTS DE MARCHÉ (R6.3) — indépendantes des trades
+// ==========================================
+// Prévient quand un niveau de liquidité est pris (haut / bas Asie, haut / bas Londres, PDH / PDL) et quand une FVG
+// de retournement se crée juste après un balayage. Aucun lien avec la position ouverte : status = "EVENT", direction
+// "NONE" ; le serveur ne les inscrit PAS au journal (ni entrée, ni sortie, ni mise à jour). Une seule alerte par
+// niveau et par session (le drapeau est remis à zéro quand la session recommence ou que PDH/PDL change).
+//   - BALAYAGE (SWEPT)   : la mèche dépasse le niveau mais la bougie M5 clôture de l'autre côté (prise de liquidité).
+//   - CASSURE  (BROKEN)  : la bougie M5 clôture au-delà du niveau.
+//   - FVG de retournement : FVG M5 opposée créée dans la fenêtre « sweep -> displacement » après un balayage.
+f_ev_json(string ev, string lbl, float lvl, string kind) =>
+    '{"symbol":"' + asset_name + '","status":"EVENT","direction":"NONE","event":"' + ev + '","label":"' + lbl + '","kind":"' + kind + '","level":"' + str.tostring(lvl, format.mintick) + '","current_price":"' + str.tostring(close, format.mintick) + '","bar_time":' + str.tostring(time) + ',"tf":"' + tf_txt + '","version":"' + SCRIPT_VERSION + '"}'
+
+f_ev_fvg_json(string ev, string lbl, float top, float bot) =>
+    '{"symbol":"' + asset_name + '","status":"EVENT","direction":"NONE","event":"' + ev + '","label":"' + lbl + '","kind":"FVG","fvg_top":"' + str.tostring(top, format.mintick) + '","fvg_bot":"' + str.tostring(bot, format.mintick) + '","current_price":"' + str.tostring(close, format.mintick) + '","bar_time":' + str.tostring(time) + ',"tf":"' + tf_txt + '","version":"' + SCRIPT_VERSION + '"}'
+
+var bool ev_asia_hi_done = false
+var bool ev_asia_lo_done = false
+var bool ev_lon_hi_done  = false
+var bool ev_lon_lo_done  = false
+var bool ev_pdh_done     = false
+var bool ev_pdl_done     = false
+var int  ev_sweep_dir    = 0      // 1 = un HAUT vient d'être balayé (retournement baissier attendu), -1 = un BAS (haussier)
+var int  ev_sweep_bar    = na
+
+// Remises à zéro : nouvelle session, nouveau PDH / PDL
+if in_asia_sess and not in_asia_sess[1]
+    ev_asia_hi_done := false
+    ev_asia_lo_done := false
+if in_london and not in_london[1]
+    ev_lon_hi_done := false
+    ev_lon_lo_done := false
+if pdh != pdh[1]
+    ev_pdh_done := false
+if pdl != pdl[1]
+    ev_pdl_done := false
+
+// Niveau « haut » pris : mèche au-dessus ; « bas » pris : mèche en dessous. Un niveau de session n'est surveillé
+// qu'une fois la session terminée (avant, il est encore en train de se former).
+ev_hi_asia = not in_asia_sess and not na(asia_run_hi) and not ev_asia_hi_done and high > asia_run_hi
+ev_lo_asia = not in_asia_sess and not na(asia_run_lo) and not ev_asia_lo_done and low < asia_run_lo
+ev_hi_lon  = not in_london and not na(lon_run_hi) and not ev_lon_hi_done and high > lon_run_hi
+ev_lo_lon  = not in_london and not na(lon_run_lo) and not ev_lon_lo_done and low < lon_run_lo
+ev_hi_pd   = not na(pdh) and not ev_pdh_done and high > pdh
+ev_lo_pd   = not na(pdl) and not ev_pdl_done and low < pdl
+
+if ev_hi_asia
+    ev_asia_hi_done := true
+    ev_k = close > asia_run_hi ? "BROKEN" : "SWEPT"
+    alert(f_ev_json("ASIA_HIGH_" + ev_k, "Haut Asie", asia_run_hi, ev_k), alert.freq_once_per_bar_close)
+    if ev_k == "SWEPT"
+        ev_sweep_dir := 1
+        ev_sweep_bar := bar_index
+if ev_lo_asia
+    ev_asia_lo_done := true
+    ev_k = close < asia_run_lo ? "BROKEN" : "SWEPT"
+    alert(f_ev_json("ASIA_LOW_" + ev_k, "Bas Asie", asia_run_lo, ev_k), alert.freq_once_per_bar_close)
+    if ev_k == "SWEPT"
+        ev_sweep_dir := -1
+        ev_sweep_bar := bar_index
+if ev_hi_lon
+    ev_lon_hi_done := true
+    ev_k = close > lon_run_hi ? "BROKEN" : "SWEPT"
+    alert(f_ev_json("LONDON_HIGH_" + ev_k, "Haut Londres", lon_run_hi, ev_k), alert.freq_once_per_bar_close)
+    if ev_k == "SWEPT"
+        ev_sweep_dir := 1
+        ev_sweep_bar := bar_index
+if ev_lo_lon
+    ev_lon_lo_done := true
+    ev_k = close < lon_run_lo ? "BROKEN" : "SWEPT"
+    alert(f_ev_json("LONDON_LOW_" + ev_k, "Bas Londres", lon_run_lo, ev_k), alert.freq_once_per_bar_close)
+    if ev_k == "SWEPT"
+        ev_sweep_dir := -1
+        ev_sweep_bar := bar_index
+if ev_hi_pd
+    ev_pdh_done := true
+    ev_k = close > pdh ? "BROKEN" : "SWEPT"
+    alert(f_ev_json("PDH_" + ev_k, "PDH", pdh, ev_k), alert.freq_once_per_bar_close)
+    if ev_k == "SWEPT"
+        ev_sweep_dir := 1
+        ev_sweep_bar := bar_index
+if ev_lo_pd
+    ev_pdl_done := true
+    ev_k = close < pdl ? "BROKEN" : "SWEPT"
+    alert(f_ev_json("PDL_" + ev_k, "PDL", pdl, ev_k), alert.freq_once_per_bar_close)
+    if ev_k == "SWEPT"
+        ev_sweep_dir := -1
+        ev_sweep_bar := bar_index
+
+// FVG de retournement : opposée au balayage, dans la fenêtre sweep -> displacement, une seule fois par balayage
+if ev_sweep_dir != 0 and not na(ev_sweep_bar) and (bar_index - ev_sweep_bar) > sweep_to_mss_window_in
+    ev_sweep_dir := 0
+if ev_sweep_dir == 1 and fvg_bear_m5
+    alert(f_ev_fvg_json("FVG_BEAR_REVERSAL", "FVG baissière de retournement", low[2], high), alert.freq_once_per_bar_close)
+    ev_sweep_dir := 0
+if ev_sweep_dir == -1 and fvg_bull_m5
+    alert(f_ev_fvg_json("FVG_BULL_REVERSAL", "FVG haussière de retournement", low, high[2]), alert.freq_once_per_bar_close)
+    ev_sweep_dir := 0
 
 // ==========================================
 // 6. TABLEAU DE BORD (overlay, style LuxAlgo)
