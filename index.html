@@ -936,6 +936,17 @@
     .autotune-card.penalized {
         border-color: rgba(255, 69, 105, 0.35); background: rgba(255, 69, 105, 0.04);
     }
+    /* Auto-Tuner regroupé par actif : un en-tête par actif (totaux), les configurations se déplient dessous */
+    .autotune-group { border: 1px solid var(--border-color); border-radius: 10px; background: var(--bg-card); }
+    .autotune-group.has-penalized { border-color: rgba(255, 69, 105, 0.35); }
+    .autotune-group > summary {
+        list-style: none; cursor: pointer; display: flex; justify-content: space-between; align-items: center;
+        gap: 12px; flex-wrap: wrap; padding: 10px 14px; user-select: none;
+    }
+    .autotune-group > summary::-webkit-details-marker { display: none; }
+    .autotune-group > summary::before { content: "▸"; color: var(--text-muted); margin-right: 8px; transition: transform 0.15s; display: inline-block; }
+    .autotune-group[open] > summary::before { transform: rotate(90deg); }
+    .autotune-group-body { display: flex; flex-direction: column; gap: 6px; padding: 0 10px 10px; }
 
     /* --- MODALE REPLAY & AUDIT ICT --- */
     #replay-modal-overlay .modal-panel {
@@ -3478,6 +3489,7 @@
     /* ===================== MODULE AUTO-TUNER ===================== */
     let autotuneData = null;
     let autotunePanelOpen = true;
+    const autotuneOpenGroups = new Set();   // actifs dépliés dans l'Auto-Tuner (survit au rafraîchissement automatique)
 
     function toggleAutotunePanel() {
         autotunePanelOpen = !autotunePanelOpen;
@@ -3516,33 +3528,76 @@
             return;
         }
 
-        let html = '';
+        // Regroupement par actif : totaux sur l'en-tête, détail (setup / session / zone) à l'intérieur.
+        const escAt = v => String(v == null ? '' : v).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+        const num = v => (typeof v === 'number' && isFinite(v)) ? v : 0;
+        const groups = {};
         autotuneData.rules.forEach(r => {
-            const isPenalized = r.penalized;
-            const statusBadge = isPenalized 
-                ? `<span class="tag-chip tag-autofiltered">🛡️ AUTO-FILTRÉ</span>` 
-                : `<span class="tag-chip" style="color: var(--accent-green); border-color: rgba(0,224,138,0.3); background: rgba(0,224,138,0.08);">✅ ACTIF</span>`;
-            const rColor = r.r_sum > 0 ? 'var(--accent-green)' : (r.r_sum < 0 ? 'var(--accent-red)' : 'var(--text-muted)');
-            const wrColor = r.win_rate >= 50 ? 'var(--accent-green)' : (r.win_rate >= 35 ? 'var(--accent-gold)' : 'var(--accent-red)');
+            const g = groups[r.symbol] || (groups[r.symbol] = { symbol: r.symbol, rules: [], trades: 0, wins: 0, rSum: 0, penalized: 0 });
+            g.rules.push(r);
+            g.trades += num(r.trades_count);
+            g.wins += num(r.wins);
+            g.rSum += num(r.r_sum);
+            if (r.penalized) g.penalized++;
+        });
+        const ordered = Object.values(groups).sort((a, b) => (b.penalized > 0) - (a.penalized > 0) || b.trades - a.trades);
 
+        let html = '';
+        ordered.forEach(g => {
+            const wr = g.trades ? Math.round((g.wins / g.trades) * 1000) / 10 : 0;
+            const rSum = Math.round(g.rSum * 100) / 100;
+            const rColor = rSum > 0 ? 'var(--accent-green)' : (rSum < 0 ? 'var(--accent-red)' : 'var(--text-muted)');
+            const wrColor = wr >= 50 ? 'var(--accent-green)' : (wr >= 35 ? 'var(--accent-gold)' : 'var(--accent-red)');
+            const isOpen = g.penalized > 0 || autotuneOpenGroups.has(g.symbol);
+            const penalizedChip = g.penalized > 0 ? `<span class="tag-chip tag-autofiltered">🛡️ ${g.penalized} filtrée(s)</span>` : '';
+            let inner = '';
+            g.rules.forEach(r => {
+                const isPenalized = r.penalized;
+                const statusBadge = isPenalized
+                    ? `<span class="tag-chip tag-autofiltered">🛡️ AUTO-FILTRÉ</span>`
+                    : `<span class="tag-chip" style="color: var(--accent-green); border-color: rgba(0,224,138,0.3); background: rgba(0,224,138,0.08);">✅ ACTIF</span>`;
+                const rrColor = r.r_sum > 0 ? 'var(--accent-green)' : (r.r_sum < 0 ? 'var(--accent-red)' : 'var(--text-muted)');
+                const rwrColor = r.win_rate >= 50 ? 'var(--accent-green)' : (r.win_rate >= 35 ? 'var(--accent-gold)' : 'var(--accent-red)');
+                inner += `
+                <div class="autotune-card ${isPenalized ? 'penalized' : ''}">
+                    <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+                        <span class="tag-chip" style="font-weight:600;">${escAt(r.pattern)}</span>
+                        <span class="tag-chip">${escAt(r.session)}</span>
+                        <span class="tag-chip" style="font-family:var(--font-mono);">${escAt(r.pd_zone)}</span>
+                        ${statusBadge}
+                    </div>
+                    <div style="display:flex; align-items:center; gap:14px; font-family:var(--font-mono); font-size:12px;">
+                        <span>${escAt(r.trades_count)} trades</span>
+                        <span>WR: <strong style="color:${rwrColor};">${escAt(r.win_rate)}%</strong></span>
+                        <span>R: <strong style="color:${rrColor};">${r.r_sum >= 0 ? '+' : ''}${escAt(r.r_sum)}R</strong></span>
+                    </div>
+                </div>`;
+            });
             html += `
-            <div class="autotune-card ${isPenalized ? 'penalized' : ''}">
-                <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
-                    <span style="font-weight:700; color:#fff; font-size:13px;">${r.symbol}</span>
-                    <span class="tag-chip" style="font-weight:600;">${r.pattern}</span>
-                    <span class="tag-chip">${r.session}</span>
-                    <span class="tag-chip" style="font-family:var(--font-mono);">${r.pd_zone}</span>
-                    ${statusBadge}
-                </div>
-                <div style="display:flex; align-items:center; gap:14px; font-family:var(--font-mono); font-size:12px;">
-                    <span>${r.trades_count} trades</span>
-                    <span>WR: <strong style="color:${wrColor};">${r.win_rate}%</strong></span>
-                    <span>R: <strong style="color:${rColor};">${r.r_sum >= 0 ? '+' : ''}${r.r_sum}R</strong></span>
-                </div>
-            </div>`;
+            <details class="autotune-group ${g.penalized > 0 ? 'has-penalized' : ''}" data-symbol="${escAt(g.symbol)}" ${isOpen ? 'open' : ''}>
+                <summary>
+                    <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+                        <span style="font-weight:700; color:#fff; font-size:13px;">${escAt(g.symbol)}</span>
+                        <span class="tag-chip">${g.rules.length} configuration(s)</span>
+                        ${penalizedChip}
+                    </div>
+                    <div style="display:flex; align-items:center; gap:14px; font-family:var(--font-mono); font-size:12px;">
+                        <span>${g.trades} trades</span>
+                        <span>WR: <strong style="color:${wrColor};">${wr}%</strong></span>
+                        <span>R: <strong style="color:${rColor};">${rSum >= 0 ? '+' : ''}${rSum}R</strong></span>
+                    </div>
+                </summary>
+                <div class="autotune-group-body">${inner}</div>
+            </details>`;
         });
 
         container.innerHTML = html;
+        // La liste est reconstruite chaque minute : on retient les actifs que tu as dépliés ou repliés.
+        container.querySelectorAll('details.autotune-group').forEach(d => {
+            d.addEventListener('toggle', () => {
+                if (d.open) autotuneOpenGroups.add(d.dataset.symbol); else autotuneOpenGroups.delete(d.dataset.symbol);
+            });
+        });
     }
 
     /* ===================== MODULE REPLAY & AUDIT ICT ===================== */
