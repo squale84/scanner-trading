@@ -142,6 +142,30 @@
     .view-tab:hover { color: var(--text-main); }
     .view-tab.active { color: var(--accent-blue); border-bottom-color: var(--accent-blue); }
 
+    /* Sous-navigation du Journal : une section à la fois, plus de défilement interminable */
+    .journal-subnav {
+        position: sticky; top: 0; z-index: 20;
+        display: flex; gap: 8px; flex-wrap: wrap;
+        padding: 10px 0; margin-bottom: 4px;
+        background-color: rgba(10, 13, 19, 0.94);
+        border-bottom: 1px solid var(--border-color);
+    }
+    .journal-subtab {
+        display: inline-flex; align-items: center; gap: 7px;
+        background: var(--bg-inset); border: 1px solid var(--border-color); color: var(--text-muted);
+        font-family: var(--font-ui); font-size: 12px; font-weight: 700;
+        padding: 7px 14px; border-radius: 8px; cursor: pointer; transition: all 0.15s;
+    }
+    .journal-subtab:hover { color: var(--text-main); border-color: #37455a; }
+    .journal-subtab.active { color: #fff; border-color: var(--accent-blue); background: var(--accent-blue-soft); }
+    .journal-subtab .jt-count {
+        font-family: var(--font-mono); font-size: 10.5px; font-weight: 600;
+        padding: 1px 7px; border-radius: 10px; background: rgba(255,255,255,0.07); color: var(--text-muted);
+    }
+    .journal-subtab.active .jt-count { color: #fff; background: rgba(255,255,255,0.14); }
+    .journal-pane { display: none; }
+    .journal-pane.active { display: block; }
+
     .impact-badge {
         display: inline-block; padding: 3px 9px; border-radius: 6px;
         font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px;
@@ -1113,6 +1137,13 @@
 
     </div><!-- /view-scanner -->
     <div id="view-journal" style="display:none;">
+    <nav class="journal-subnav" aria-label="Sections du journal">
+        <button class="journal-subtab active" id="jtab-overview" onclick="switchJournalTab('overview')">🎯 Vue d'ensemble <span class="jt-count" id="jt-count-overview"></span></button>
+        <button class="journal-subtab" id="jtab-period" onclick="switchJournalTab('period')">📅 Bilan par période</button>
+        <button class="journal-subtab" id="jtab-autotune" onclick="switchJournalTab('autotune')">🧠 Auto-Tuner <span class="jt-count" id="jt-count-autotune"></span></button>
+        <button class="journal-subtab" id="jtab-log" onclick="switchJournalTab('log')">📔 Journal des signaux <span class="jt-count" id="jt-count-log"></span></button>
+    </nav>
+    <div class="journal-pane active" id="jpane-overview">
     <!-- SECTION 2.4 : POSITIONS EN COURS -->
     <div class="section-container" style="margin-top: 8px;">
         <div class="section-header">
@@ -1187,6 +1218,9 @@
         </div>
     </div>
 
+    </div><!-- /jpane-overview -->
+
+    <div class="journal-pane" id="jpane-period">
     <!-- SECTION 2.7 : BILAN PAR PÉRIODE -->
     <div class="log-section" style="margin-top: 8px;">
         <div class="log-header">
@@ -1211,6 +1245,9 @@
         <div class="pos-note" style="padding: 0 18px 12px;">Mois = janvier à décembre, toutes années confondues (saisonnalité). Montants calculés au risque par trade actuellement réglé (champ « Risque max / trade »), identique pour tous les trades. Seuls les trades clôturés avec un résultat en R sont comptés — sur peu de trades, un mois « gagnant » peut être du hasard.</div>
     </div>
 
+    </div><!-- /jpane-period -->
+
+    <div class="journal-pane" id="jpane-autotune">
     <!-- SECTION 2.8 : AUTO-TUNER ICT -->
     <div class="log-section" id="autotune-section" style="margin-top: 8px;">
         <div class="log-header" style="cursor: pointer; user-select: none;" onclick="toggleAutotunePanel()">
@@ -1230,6 +1267,9 @@
         </div>
     </div>
 
+    </div><!-- /jpane-autotune -->
+
+    <div class="journal-pane" id="jpane-log">
     <!-- SECTION 3 : LOG -->
     <div class="log-section">
         <div class="log-header">
@@ -1261,6 +1301,7 @@
             </div>
         </div>
     </div>
+    </div><!-- /jpane-log -->
     </div><!-- /view-journal -->
 
     <div id="view-calendar" style="display:none;">
@@ -2494,6 +2535,47 @@
         try { localStorage.setItem('ictRadarView', view); } catch (e) {}
         if (view === 'journal') { drawEquityCurve(); drawWinRateGauge(); }
         if (view === 'calendar' && calendarData.length === 0) loadCalendar();
+    }
+
+    /* ===================== SECTIONS DU JOURNAL ===================== */
+    const JOURNAL_TABS = ['overview', 'period', 'autotune', 'log'];
+
+    function switchJournalTab(tab) {
+        if (!JOURNAL_TABS.includes(tab)) tab = 'overview';
+        JOURNAL_TABS.forEach(t => {
+            const pane = document.getElementById('jpane-' + t);
+            const btn = document.getElementById('jtab-' + t);
+            if (pane) pane.classList.toggle('active', t === tab);
+            if (btn) btn.classList.toggle('active', t === tab);
+        });
+        try { localStorage.setItem('ictRadarJournalTab', tab); } catch (e) {}
+        if (tab === 'overview') { drawEquityCurve(); drawWinRateGauge(); }
+        if (tab === 'period') drawPeriodSummary();
+    }
+
+    // Compteurs des onglets : lus dans les éléments déjà alimentés par le journal, sans toucher à leur logique.
+    function refreshJournalTabCounts() {
+        const setCount = (id, txt) => { const el = document.getElementById(id); if (el) el.textContent = txt; };
+        const pos = document.querySelectorAll('#pos-list > *').length;
+        setCount('jt-count-overview', pos ? pos + ' en cours' : '');
+        const rules = (document.getElementById('autotune-badge-count') || {}).textContent || '';
+        const nRules = parseInt(rules, 10);
+        setCount('jt-count-autotune', nRules > 0 ? String(nRules) : '');
+        const closed = parseInt(((document.getElementById('log-count') || {}).textContent || '').trim(), 10);
+        setCount('jt-count-log', closed > 0 ? String(closed) : '');
+    }
+
+    function initJournalTabs() {
+        const observed = ['pos-list', 'autotune-badge-count', 'log-count'];
+        observed.forEach(id => {
+            const el = document.getElementById(id);
+            if (el) new MutationObserver(refreshJournalTabCounts).observe(el, { childList: true, characterData: true, subtree: true });
+        });
+        refreshJournalTabCounts();
+        try {
+            const saved = localStorage.getItem('ictRadarJournalTab');
+            if (saved && saved !== 'overview') switchJournalTab(saved);
+        } catch (e) {}
     }
 
     /* ===================== QR MOBILE ===================== */
@@ -4763,6 +4845,7 @@
 
     loadPortfolioVal();
     recomputePerformancePanel();
+    initJournalTabs();
     initCalendarCache();
     updateMacroAudioBtn();
     try {
