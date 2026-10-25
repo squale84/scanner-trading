@@ -1042,6 +1042,20 @@
         .modal-panel { height: 92vh; }
     }
 
+    /* ============ CARTE CLÔTURÉE REPLIÉE ============
+       Une carte clôturée (TP touché, SL touché, expirée) se replie en tuile 2 h après sa clôture (attribut data-collapsed, posé
+       par le JS : il survit aux réécritures de card.className). Elle garde son nom, le sens, le badge de résultat, la ligne de
+       résultat en R, le dernier prix et le bouton Reset ; la jauge et les niveaux sont masqués. */
+    .card[data-collapsed="1"] { order: 1; align-self: start; padding: 10px 14px; animation: none; }
+    .card[data-collapsed="1"] .card-top { margin-bottom: 4px; }
+    .card[data-collapsed="1"] .metrics { gap: 4px; margin-bottom: 6px; }
+    .card[data-collapsed="1"] .metrics .row-niveau,
+    .card[data-collapsed="1"] .tags-row,
+    .card[data-collapsed="1"] .card-gauge,
+    .card[data-collapsed="1"] [id^="simple-bar-"] { display: none; }
+    .card[data-collapsed="1"] .progress-wrapper { margin-bottom: 8px; }
+    .card[data-collapsed="1"] .btn-chart { padding: 5px 10px; font-size: 11px; }
+
     /* ============ BANDEAU DE SYNTHÈSE (scanner) ============ */
     .summary-strip {
         display: grid;
@@ -3101,7 +3115,7 @@
     function scheduleJournalRender() {
         if (journalRenderPending) return;
         journalRenderPending = true;
-        Promise.resolve().then(() => { journalRenderPending = false; renderJournalTable(); updateSummaryStrip(); });
+        Promise.resolve().then(() => { journalRenderPending = false; renderJournalTable(); updateSummaryStrip(); refreshClosedCards(); });
     }
 
     function buildJournalTrades(rows) {
@@ -3328,6 +3342,7 @@
 
         card.className = "card";
         delete card.dataset.dir;
+        delete card.dataset.collapsed;
         badge.className = "badge-status";
         badge.textContent = "STANDBY";
         if (resetBtn) resetBtn.style.display = "none";
@@ -3370,6 +3385,7 @@
             if (!lastSignalData[sym] && (dir === "BUY" || dir === "SELL")) {
                 card.className = "card " + (dir === "BUY" ? "active-buy" : "active-sell");
                 card.dataset.dir = dir;
+                delete card.dataset.collapsed;
                 const badge = document.getElementById("badge-" + sym);
                 if (badge) {
                     badge.className = "badge-status " + dir;
@@ -3453,6 +3469,7 @@
             card.className = `card ${isTP ? 'hit-tp' : (data.status === 'SL_HIT' ? 'hit-sl' : '')}`;
             badge.className = `badge-status ${data.status}`;
             syncCardDirection(sym);
+            delete card.dataset.collapsed;   // une sortie qui vient d'arriver : carte dépliée
             badge.textContent = isTP ? "TP TOUCHÉ" : (data.status === "SL_HIT" ? "SL TOUCHÉ" : "EXPIRÉ");
             if (resetBtn) resetBtn.style.display = "inline-block";
             if (price && data.current_price !== undefined) price.textContent = formatDisplay(data.current_price);
@@ -3482,6 +3499,7 @@
         const dir = isBuy ? "BUY" : "SELL";
         card.className = "card " + (dir === "BUY" ? "active-buy" : "active-sell");
         card.dataset.dir = dir;
+        delete card.dataset.collapsed;
         badge.className = "badge-status " + dir;
         badge.textContent = data.status || (dir + " ACTIF");
         if (resetBtn) resetBtn.style.display = "inline-block";
@@ -4995,6 +5013,28 @@
         updateNewsCardProtection();
     }
 
+    /* ===================== REPLI DES CARTES CLÔTURÉES ===================== */
+    const REPLI_CARTE_MIN = 120;   // une carte clôturée se replie 2 h après sa dernière sortie
+    // L'âge vient du journal (heure de la dernière sortie de l'actif) : même résultat en direct et après un rechargement.
+    // Journal pas encore chargé ou sortie introuvable : la carte reste dépliée (jamais repliée « au hasard »).
+    function refreshClosedCards() {
+        const maintenant = Date.now();
+        document.querySelectorAll('.card').forEach(card => {
+            const sym = card.id.replace('card-', '');
+            const badge = document.getElementById('badge-' + sym);
+            const cloturee = !!badge && /\b(TP_HIT|SL_HIT|EXPIRED)\b/.test(badge.className);
+            let replie = false;
+            if (cloturee) {
+                let derniere = 0;
+                journalRows.forEach(r => {
+                    if (r.symbol === sym && r.kind === 'exit' && r.time) derniere = Math.max(derniere, utcDate(r.time).getTime());
+                });
+                replie = derniere > 0 && (maintenant - derniere) >= REPLI_CARTE_MIN * 60000;
+            }
+            if (replie) card.dataset.collapsed = '1'; else delete card.dataset.collapsed;
+        });
+    }
+
     /* ===================== FOND ANIMÉ DE BOUGIES (décor, désactivable) ===================== */
     // Décor discret derrière le contenu : des bougies japonaises qui défilent lentement. Ce n'est PAS une donnée de marché :
     // une marche aléatoire purement décorative. Respecte « réduire les animations » (image fixe), se met en pause quand
@@ -5271,6 +5311,8 @@
     updateNewsCardProtection();
     initBackground();
     updateSummaryStrip();
+    refreshClosedCards();
+    setInterval(refreshClosedCards, 60 * 1000);   // repli des cartes clôturées depuis plus de 2 h
     setInterval(updateSummaryStrip, 5 * 1000); // bandeau de synthèse : compte à rebours, R du jour (calcul local, très léger)
     setInterval(updateNewsCardProtection, 30 * 1000); // Protection news vérifiée toutes les 30s
     setInterval(loadCalendar, 15 * 60 * 1000);
