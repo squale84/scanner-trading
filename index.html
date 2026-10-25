@@ -1222,7 +1222,7 @@
         <div class="right-controls">
             <div class="risk-input-group">
                 <label for="risk-val">Risque max / trade</label>
-                <input type="number" id="risk-val" class="risk-input" value="50" step="10" oninput="onRiskChange()">
+                <input type="number" id="risk-val" class="risk-input" value="50" step="10" oninput="onRiskChange()" title="Mémorisé dans ce navigateur, pour cette adresse du site (pas partagé entre appareils).">
                 <span>€</span>
             </div>
             <div class="toggle-group">
@@ -1307,7 +1307,7 @@
                 <div>
                     <div class="metric-label">Taille portefeuille</div>
                     <div style="display:flex; align-items:center; gap:4px; margin-top:3px;">
-                        <input type="number" id="portfolio-val" value="10000" step="100" min="0" oninput="onPortfolioChange()" style="width:90px; background:var(--bg-inset); border:1px solid var(--border-color); border-radius:6px; color:#fff; font-family:var(--font-mono); font-size:15px; padding:3px 6px;">
+                        <input type="number" id="portfolio-val" value="10000" step="100" min="0" oninput="onPortfolioChange()" title="Mémorisé dans ce navigateur, pour cette adresse du site (pas partagé entre appareils)." style="width:90px; background:var(--bg-inset); border:1px solid var(--border-color); border-radius:6px; color:#fff; font-family:var(--font-mono); font-size:15px; padding:3px 6px;">
                         <span style="font-size:13px;color:var(--text-muted);">€</span>
                     </div>
                 </div>
@@ -1822,11 +1822,18 @@
     let journalTrades = []; // { rMultiple } par trade clôturé, pour recalculer le PF/€ si le risque change
 
     /* ===================== PANNEAU PERFORMANCE (Gains/Pertes, Profit Factor, Portefeuille) ===================== */
-    function loadPortfolioVal() {
+    // Les valeurs saisies sont mémorisées dans CE navigateur, pour CETTE adresse de site : un autre appareil, un autre navigateur
+    // ou une autre adresse (tunnel Cloudflare qui change à chaque démarrage, Render, localhost) repart des valeurs par défaut.
+    function loadSavedNumber(cle, idChamp) {
         try {
-            const saved = localStorage.getItem('ictRadarPortfolioVal');
-            if (saved !== null) document.getElementById('portfolio-val').value = saved;
+            const saved = localStorage.getItem(cle);
+            const n = saved === null || saved.trim() === '' ? NaN : Number(saved);
+            if (isFinite(n) && n >= 0 && n <= 1e9) document.getElementById(idChamp).value = saved;   // valeur invalide : défaut conservé
         } catch (e) { /* localStorage indisponible (mode privé, etc.) — on garde la valeur par défaut */ }
+    }
+    function loadPortfolioVal() {
+        loadSavedNumber('ictRadarPortfolioVal', 'portfolio-val');
+        loadSavedNumber('ictRadarRiskVal', 'risk-val');
     }
 
     function onPortfolioChange() {
@@ -2993,6 +3000,7 @@
     }
 
     function onRiskChange() {
+        try { localStorage.setItem('ictRadarRiskVal', document.getElementById('risk-val').value); } catch (e) {}
         activePositions.forEach(sym => {
             const data = marketCache[sym];
             if (data) renderPositionSize(sym, data);
