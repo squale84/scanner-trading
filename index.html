@@ -616,17 +616,17 @@
 
     /* Sens du trade à côté du nom de l'actif, sur toute carte avec une position ouverte (CSS pur : la classe active-buy /
        active-sell est posée par le JS à chaque entrée et mise à jour, et disparaît au retour en attente). */
-    .card.active-buy .sym-name,
-    .card.active-sell .sym-name { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }   /* le libellé passe à la ligne d'un bloc, jamais coupé */
+    .card.active-buy .sym-name, .card[data-dir="BUY"] .sym-name,
+    .card.active-sell .sym-name, .card[data-dir="SELL"] .sym-name { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }   /* le libellé passe à la ligne d'un bloc, jamais coupé */
     .card .badge-wrapper { flex-shrink: 0; }
     .btn-reset { white-space: nowrap; }
-    .card.active-buy .sym-name::after,
-    .card.active-sell .sym-name::after {
+    .card.active-buy .sym-name::after, .card[data-dir="BUY"] .sym-name::after,
+    .card.active-sell .sym-name::after, .card[data-dir="SELL"] .sym-name::after {
         font-size: 10.5px; font-weight: 800; letter-spacing: 0.6px; padding: 2px 8px; white-space: nowrap;
         border-radius: 5px; border: 1px solid transparent;
     }
-    .card.active-buy .sym-name::after  { content: "▲ ACHAT"; color: var(--accent-green); background: var(--accent-green-soft); border-color: rgba(0,224,138,0.55); }
-    .card.active-sell .sym-name::after { content: "▼ VENTE"; color: var(--accent-red);   background: var(--accent-red-soft);   border-color: rgba(255,69,105,0.55); }
+    .card.active-buy .sym-name::after, .card[data-dir="BUY"] .sym-name::after  { content: "▲ ACHAT"; color: var(--accent-green); background: var(--accent-green-soft); border-color: rgba(0,224,138,0.55); }
+    .card.active-sell .sym-name::after, .card[data-dir="SELL"] .sym-name::after { content: "▼ VENTE"; color: var(--accent-red);   background: var(--accent-red-soft);   border-color: rgba(255,69,105,0.55); }
 
     .tag-chip {
         font-size: 9.5px; font-weight: 700; font-family: var(--font-mono);
@@ -1719,6 +1719,18 @@
     function dirLabel(direction) {
         const d = String(direction || '').toUpperCase();
         return d === 'BUY' ? '▲ ACHAT' : (d === 'SELL' ? '▼ VENTE' : '');
+    }
+
+    // Sens du trade porté par la carte (attribut data-dir, qui survit aux réécritures de card.className). Une carte en attente
+    // n'a pas de sens ; une carte clôturée (TP touché, SL touché, expirée) garde celui de son trade, retrouvé dans l'entrée
+    // mémorisée ou dans le journal. Sens inconnu : rien n'est affiché (jamais deviné).
+    function syncCardDirection(sym) {
+        const card = document.getElementById('card-' + sym);
+        const badge = document.getElementById('badge-' + sym);
+        if (!card || !badge) return;
+        const ref = lastSignalData[sym] || closedTrades[sym] || null;
+        const d = ref && (ref.direction === 'BUY' || ref.direction === 'SELL') ? ref.direction : '';
+        if (d && badge.className.trim() !== 'badge-status') card.dataset.dir = d; else delete card.dataset.dir;
     }
 
     // « ▲ ACHAT · M5 » : sens du trade + unité de temps du graphique d'où part l'alerte (champ « tf », absent des anciennes alertes).
@@ -3199,6 +3211,7 @@
         if (row.kind === 'exit' && row.sl_price && row.tp_price) {
             rememberClosedTrade(row.symbol, { ...row, status: row.entry_status }, row.status, row.exit_price, row.best_r);
             renderCardGauge(row.symbol);
+            syncCardDirection(row.symbol);
             if (currentModalSymbol === row.symbol) updateModalSidePanel(row.symbol);
         }
         if (row.kind === 'exit' && row.r_multiple !== null && row.r_multiple !== undefined) {
@@ -3299,6 +3312,7 @@
         const atAlert = document.getElementById("autotune-alert-" + sym);
 
         card.className = "card";
+        delete card.dataset.dir;
         badge.className = "badge-status";
         badge.textContent = "STANDBY";
         if (resetBtn) resetBtn.style.display = "none";
@@ -3340,6 +3354,7 @@
             // Si rafraîchissement en cours de position, restaurer les repères visuels sans alerte ni journal
             if (!lastSignalData[sym] && (dir === "BUY" || dir === "SELL")) {
                 card.className = "card " + (dir === "BUY" ? "active-buy" : "active-sell");
+                card.dataset.dir = dir;
                 const badge = document.getElementById("badge-" + sym);
                 if (badge) {
                     badge.className = "badge-status " + dir;
@@ -3422,6 +3437,7 @@
             const isTP = data.status === "TP_HIT";
             card.className = `card ${isTP ? 'hit-tp' : (data.status === 'SL_HIT' ? 'hit-sl' : '')}`;
             badge.className = `badge-status ${data.status}`;
+            syncCardDirection(sym);
             badge.textContent = isTP ? "TP TOUCHÉ" : (data.status === "SL_HIT" ? "SL TOUCHÉ" : "EXPIRÉ");
             if (resetBtn) resetBtn.style.display = "inline-block";
             if (price && data.current_price !== undefined) price.textContent = formatDisplay(data.current_price);
@@ -3450,6 +3466,7 @@
 
         const dir = isBuy ? "BUY" : "SELL";
         card.className = "card " + (dir === "BUY" ? "active-buy" : "active-sell");
+        card.dataset.dir = dir;
         badge.className = "badge-status " + dir;
         badge.textContent = data.status || (dir + " ACTIF");
         if (resetBtn) resetBtn.style.display = "inline-block";
