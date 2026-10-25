@@ -1077,6 +1077,11 @@
         .sum-value { font-size: 24px; }
     }
 
+    /* ============ FOND DE BOUGIES (décor) ============
+       z-index négatif : derrière tout le contenu, jamais cliquable. Les cartes sont opaques : le décor se voit surtout
+       dans les marges et à travers la barre du haut. */
+    #bg-candles { position: fixed; top: 0; left: 0; width: 100%; height: 100%; z-index: -1; pointer-events: none; }
+
     /* ============ MENTION DE COPYRIGHT ============ */
     .site-footer {
         margin: 28px auto 0;
@@ -1097,6 +1102,7 @@
 </style>
 </head>
 <body>
+<canvas id="bg-candles" aria-hidden="true"></canvas>
 
 <header class="navbar">
     <div class="brand-section">
@@ -1110,6 +1116,7 @@
         <button class="btn-nav" onclick="simulateSignal()">⚡ Signal test</button>
         <button class="btn-nav" id="audio-toggle" onclick="toggleAudio()">🔊 Audio ON</button>
         <button class="btn-nav" onclick="openQrModal()">📱 QR Mobile</button>
+        <button class="btn-nav" id="bg-toggle" onclick="toggleBackground()" title="Affiche ou masque le décor de bougies en arrière-plan (choix mémorisé dans ce navigateur).">🕯️ Fond ON</button>
         <button class="btn-nav" id="admin-lock-btn" onclick="adminLogout()" style="display:none;" title="Ferme la session administrateur sur cet appareil : le Reset redemandera le code.">🔒 Verrouiller</button>
         <div class="system-pill" title="Connexion entre cette page et le serveur. Ne garantit pas que chaque alerte TradingView fonctionne : voir « Dernière alerte » sur chaque carte du Scanner.">
             <span class="live-dot" id="ws-dot"></span>
@@ -4980,6 +4987,96 @@
         updateNewsCardProtection();
     }
 
+    /* ===================== FOND ANIMÉ DE BOUGIES (décor, désactivable) ===================== */
+    // Décor discret derrière le contenu : des bougies japonaises qui défilent lentement. Ce n'est PAS une donnée de marché :
+    // une marche aléatoire purement décorative. Respecte « réduire les animations » (image fixe), se met en pause quand
+    // l'onglet est masqué, et se coupe d'un clic (choix mémorisé dans ce navigateur).
+    const BG = { canvas: null, ctx: null, candles: [], offset: 0, raf: 0, last: 0, on: true, w: 0, h: 0, min: 0, max: 1, ready: false };
+    const BG_REDUIT = () => !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+    const bgPas = () => (BG.w < 700 ? 22 : 26);   // largeur d'une bougie + espace
+
+    function bgNewCandle(prev) {
+        const open = prev ? prev.close : 0;
+        const close = open + (Math.random() - 0.48) * 22;   // légère dérive haussière
+        return { open, close, hi: Math.max(open, close) + Math.random() * 12, lo: Math.min(open, close) - Math.random() * 12 };
+    }
+
+    function bgResize() {
+        if (!BG.canvas) return;
+        const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
+        BG.w = window.innerWidth; BG.h = window.innerHeight;
+        BG.canvas.width = Math.round(BG.w * dpr); BG.canvas.height = Math.round(BG.h * dpr);
+        BG.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        const need = Math.ceil(BG.w / bgPas()) + 3;
+        while (BG.candles.length < need) BG.candles.push(bgNewCandle(BG.candles[BG.candles.length - 1]));
+        BG.candles.length = Math.min(BG.candles.length, need + 2);
+    }
+
+    function bgDraw() {
+        const { ctx, w, h } = BG;
+        if (!ctx) return;
+        ctx.clearRect(0, 0, w, h);
+        const pas = bgPas();
+        // Échelle verticale : suit doucement les extrêmes visibles (pas de saut quand une bougie entre ou sort).
+        let mn = Infinity, mx = -Infinity;
+        BG.candles.forEach(c => { if (c.lo < mn) mn = c.lo; if (c.hi > mx) mx = c.hi; });
+        if (!BG.ready) { BG.min = mn; BG.max = mx; BG.ready = true; }
+        BG.min += (mn - BG.min) * 0.03; BG.max += (mx - BG.max) * 0.03;
+        const top = h * 0.30, band = h * 0.55;               // les bougies occupent le milieu-bas de l'écran
+        const sy = v => top + band - ((v - BG.min) / ((BG.max - BG.min) || 1)) * band;
+        ctx.lineWidth = 1;
+        ctx.strokeStyle = 'rgba(139, 150, 165, 0.05)';       // quadrillage très discret
+        for (let y = 60; y < h; y += 90) { ctx.beginPath(); ctx.moveTo(0, y + 0.5); ctx.lineTo(w, y + 0.5); ctx.stroke(); }
+        BG.candles.forEach((c, i) => {
+            const x = i * pas - BG.offset + 10;
+            const col = c.close >= c.open ? '0, 224, 138' : '255, 69, 105';
+            ctx.strokeStyle = `rgba(${col}, 0.24)`; ctx.fillStyle = `rgba(${col}, 0.15)`;
+            ctx.beginPath(); ctx.moveTo(x + 5.5, sy(c.hi)); ctx.lineTo(x + 5.5, sy(c.lo)); ctx.stroke();
+            const y1 = sy(Math.max(c.open, c.close)), hc = Math.max(2, sy(Math.min(c.open, c.close)) - y1);
+            ctx.fillRect(x, y1, 11, hc); ctx.strokeRect(x + 0.5, y1 + 0.5, 10, hc - 1);
+        });
+    }
+
+    function bgFrame(t) {
+        BG.raf = requestAnimationFrame(bgFrame);
+        if (t - BG.last < 33) return;                        // ~30 images par seconde suffisent pour un décor
+        const dt = Math.min((t - BG.last) / 1000, 0.1); BG.last = t;
+        BG.offset += 14 * dt;                                 // 14 px par seconde : très lent
+        const pas = bgPas();
+        while (BG.offset >= pas) { BG.offset -= pas; BG.candles.shift(); BG.candles.push(bgNewCandle(BG.candles[BG.candles.length - 1])); }
+        bgDraw();
+    }
+    function bgStart() {
+        if (BG.raf || !BG.on) return;
+        if (BG_REDUIT()) { bgDraw(); return; }               // « réduire les animations » : une seule image fixe
+        BG.last = performance.now();
+        BG.raf = requestAnimationFrame(bgFrame);
+    }
+    function bgStop() { if (BG.raf) cancelAnimationFrame(BG.raf); BG.raf = 0; }
+    function bgApply() {
+        if (!BG.canvas) return;
+        BG.canvas.style.display = BG.on ? '' : 'none';
+        const btn = document.getElementById('bg-toggle');
+        if (btn) btn.textContent = BG.on ? '🕯️ Fond ON' : '🕯️ Fond OFF';
+        if (BG.on) bgStart(); else bgStop();
+    }
+    function toggleBackground() {
+        BG.on = !BG.on;
+        try { localStorage.setItem('ictRadarBg', BG.on ? 'on' : 'off'); } catch (e) {}
+        bgApply();
+    }
+    function initBackground() {
+        BG.canvas = document.getElementById('bg-candles');
+        if (!BG.canvas || !BG.canvas.getContext) return;
+        BG.ctx = BG.canvas.getContext('2d');
+        try { BG.on = localStorage.getItem('ictRadarBg') !== 'off'; } catch (e) {}
+        bgResize();
+        let timer = null;
+        window.addEventListener('resize', () => { clearTimeout(timer); timer = setTimeout(() => { bgResize(); if (!BG.raf) bgDraw(); }, 150); });
+        document.addEventListener('visibilitychange', () => { if (document.hidden) bgStop(); else bgStart(); });
+        bgApply();
+    }
+
     /* ===================== BANDEAU DE SYNTHÈSE (scanner) ===================== */
     // Lecture seule : s'appuie sur des données déjà chargées (journalRows, serverPositions, calendarData), aucun appel serveur.
     // Un résultat indisponible n'est jamais estimé : il est compté à part et exclu du R du jour.
@@ -5164,6 +5261,7 @@
     loadCalendar();
     loadAutotuneData();
     updateNewsCardProtection();
+    initBackground();
     updateSummaryStrip();
     setInterval(updateSummaryStrip, 5 * 1000); // bandeau de synthèse : compte à rebours, R du jour (calcul local, très léger)
     setInterval(updateNewsCardProtection, 30 * 1000); // Protection news vérifiée toutes les 30s
