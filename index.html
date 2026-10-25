@@ -609,8 +609,24 @@
     }
 
     /* Sens du trade + unité de temps de l'alerte (R6.3) */
-    .tag-dir-buy  { color: var(--accent-green); border-color: rgba(0,224,138,0.45); background: rgba(0,224,138,0.10); }
-    .tag-dir-sell { color: var(--accent-red);   border-color: rgba(255,69,105,0.45); background: rgba(255,69,105,0.10); }
+    /* « .tag-chip » est déclarée plus bas avec la même spécificité : sans le double sélecteur, elle écrasait ces couleurs
+       (pastille grise). Le sens doit se lire d'un coup d'œil : vert = ACHAT, rouge = VENTE. */
+    .tag-chip.tag-dir-buy  { color: var(--accent-green); border-color: rgba(0,224,138,0.55); background: rgba(0,224,138,0.14); font-size: 11px; padding: 3px 9px; }
+    .tag-chip.tag-dir-sell { color: var(--accent-red);   border-color: rgba(255,69,105,0.55); background: rgba(255,69,105,0.14); font-size: 11px; padding: 3px 9px; }
+
+    /* Sens du trade à côté du nom de l'actif, sur toute carte avec une position ouverte (CSS pur : la classe active-buy /
+       active-sell est posée par le JS à chaque entrée et mise à jour, et disparaît au retour en attente). */
+    .card.active-buy .sym-name,
+    .card.active-sell .sym-name { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }   /* le libellé passe à la ligne d'un bloc, jamais coupé */
+    .card .badge-wrapper { flex-shrink: 0; }
+    .btn-reset { white-space: nowrap; }
+    .card.active-buy .sym-name::after,
+    .card.active-sell .sym-name::after {
+        font-size: 10.5px; font-weight: 800; letter-spacing: 0.6px; padding: 2px 8px; white-space: nowrap;
+        border-radius: 5px; border: 1px solid transparent;
+    }
+    .card.active-buy .sym-name::after  { content: "▲ ACHAT"; color: var(--accent-green); background: var(--accent-green-soft); border-color: rgba(0,224,138,0.55); }
+    .card.active-sell .sym-name::after { content: "▼ VENTE"; color: var(--accent-red);   background: var(--accent-red-soft);   border-color: rgba(255,69,105,0.55); }
 
     .tag-chip {
         font-size: 9.5px; font-weight: 700; font-family: var(--font-mono);
@@ -1644,6 +1660,12 @@
     // widget gratuit) -> mêmes prix que les niveaux entrée / SL / TP du Radar.
     Object.assign(TV_SYMBOLS, RADAR_TV_SYMBOLS);
 
+    // Libellé unique du sens, partout sur le site : flèche qui monte = achat, flèche qui descend = vente.
+    function dirLabel(direction) {
+        const d = String(direction || '').toUpperCase();
+        return d === 'BUY' ? '▲ ACHAT' : (d === 'SELL' ? '▼ VENTE' : '');
+    }
+
     // « ▲ ACHAT · M5 » : sens du trade + unité de temps du graphique d'où part l'alerte (champ « tf », absent des anciennes alertes).
     function directionChip(direction, tf) {
         const d = String(direction || '').toUpperCase();
@@ -2294,7 +2316,7 @@
             <div class="pos-card ${dirCls}">
                 <div class="pos-head">
                     <span class="pos-sym">${pos.symbol}</span>
-                    <span class="pos-dir ${dirCls}">${pos.direction}</span>
+                    <span class="pos-dir ${dirCls}">${dirLabel(pos.direction) || pos.direction}</span>
                     <span>${setupIctLabel(pos.status)}</span>
                     ${pos.quality && pos.quality !== '--' ? `<span class="tag-chip ${qualityClass(pos.quality)}">${pos.quality}</span>` : ''}
                     ${pos.isTest ? '<span class="tag-chip">TEST</span>' : ''}
@@ -2650,7 +2672,8 @@
         document.getElementById('qr-modal-overlay').classList.remove('open');
     }
 
-    function triggerNotification(symbol, dir, status) {
+    // `detail` (facultatif) : les données de l'alerte d'entrée, ou {entryDir, r} pour une sortie. Sans lui, annonce courte d'origine.
+    function triggerNotification(symbol, dir, status, detail) {
         if (!audioActive) return;
         try {
             const ctx = new (window.AudioContext || window.webkitAudioContext)();
@@ -2666,11 +2689,11 @@
         } catch (e) {}
 
         if ('speechSynthesis' in window) {
-            const utterance = new SpeechSynthesisUtterance(spokenMessage(symbol, dir, status));
+            const utterance = new SpeechSynthesisUtterance(spokenMessage(symbol, dir, status, detail));
             utterance.lang = 'fr-FR';
             const frVoice = window.speechSynthesis.getVoices().find(v => v.lang && v.lang.toLowerCase().startsWith('fr'));
             if (frVoice) utterance.voice = frVoice;
-            utterance.rate = 1.05;
+            utterance.rate = detail ? 1.0 : 1.05;   // annonce détaillée (prix) : un peu plus lente pour bien entendre les chiffres
             window.speechSynthesis.speak(utterance);
         }
     }
@@ -2690,7 +2713,7 @@
                 setTimeout(() => { const t = nameEl.querySelector('.new-signal-tag'); if (t) t.remove(); }, 5 * 60 * 1000);
             }
         }
-        document.title = `🔔 ${sym} ${dir === 'BUY' ? 'ACHAT' : 'VENTE'} — ${BASE_TITLE}`;
+        document.title = `🔔 ${sym} ${dirLabel(dir)} — ${BASE_TITLE}`;
         if (document.hasFocus()) setTimeout(() => { document.title = BASE_TITLE; }, 10000);
     }
 
@@ -2709,13 +2732,50 @@
         USOIL: 'Le pétrole', NATGAS: 'Le gaz naturel', EURUSD: 'Euro dollar', USDJPY: 'Dollar yen',
         BTCUSD: 'Le bitcoin', ETHUSD: "L'ether", SOLUSD: 'Solana', ADAUSDT: 'Cardano', DOGEUSDT: 'Dogecoin'
     };
-    function spokenMessage(symbol, dir, status) {
+    // Prix lu à voix haute : la virgule est dite, et les décimales d'un petit prix ou de plus de 2 chiffres sont lues chiffre
+    // par chiffre (« zéro virgule 0 7 7 7 3 »), bien plus clair qu'un grand nombre. Valeur non numérique : rien n'est dit.
+    function spokenNumber(v) {
+        const s = String(v === undefined || v === null ? '' : v).trim();
+        if (!/^\d+(\.\d+)?$/.test(s)) return '';
+        const [ent, dec] = s.split('.');
+        if (dec === undefined) return ent;
+        const chiffres = dec.split('').join(' ');
+        return ent === '0' ? 'zéro virgule ' + chiffres : ent + ' virgule ' + (dec.length > 2 ? chiffres : dec);
+    }
+    function spokenSetup(status) {
+        const s = String(status || '').toUpperCase();
+        if (s.includes('SSL SWEEP')) return 'balayage de liquidité basse';
+        if (s.includes('BSL SWEEP')) return 'balayage de liquidité haute';
+        if (s.includes('RETEST')) return 'retest';
+        if (s.includes('MTF FVG')) return 'FVG multi unités de temps';
+        if (s.includes('ICT 2022')) return 'ICT 2022';
+        return '';
+    }
+    function spokenMessage(symbol, dir, status, detail) {
         const name = SPOKEN_NAMES[symbol] || symbol;
-        if (dir === 'BUY') return `${name} : signal d'achat.`;
-        if (dir === 'SELL') return `${name} : signal de vente.`;
-        if (status === 'TP_HIT') return `${name} : objectif atteint.`;
-        if (status === 'SL_HIT') return `${name} : stop loss touché.`;
-        if (status === 'EXPIRED') return `${name} : position expirée.`;
+        const nom = name.replace(/^(Le |L')/, m => m.toLowerCase());   // « signal d'achat sur le Nasdaq »
+        const d = detail || {};
+        if (dir === 'BUY' || dir === 'SELL') {
+            const phrases = [`${dir === 'BUY' ? "Signal d'achat" : 'Signal de vente'} sur ${nom}.`];
+            const setup = spokenSetup(status);
+            if (setup) phrases.push(`Setup : ${setup}.`);
+            if (d.quality && d.quality !== '--') phrases.push(`Grade ${String(d.quality).replace('+', ' plus')}.`);
+            const entree = spokenNumber(d.entry_price), sl = spokenNumber(d.sl_price), tp = spokenNumber(d.tp_price);
+            if (entree) phrases.push(`Entrée à ${entree}.`);
+            if (sl) phrases.push(`Stop loss à ${sl}.`);
+            const t1 = Array.isArray(d.targets) && d.targets.length > 1 ? spokenNumber(d.targets[0].p) : '';
+            if (t1) phrases.push(`Premier objectif à ${t1}.`);
+            if (tp) phrases.push(`Objectif TP à ${tp}.`);
+            const rr = spokenNumber(d.rr);
+            if (rr && d.rr !== '0.0') phrases.push(`Rapport risque rendement : ${rr} pour 1.`);
+            return phrases.join(' ');
+        }
+        const position = d.entryDir === 'BUY' ? ", position à l'achat" : (d.entryDir === 'SELL' ? ', position à la vente' : '');
+        const resultat = (typeof d.r === 'number' && isFinite(d.r))
+            ? ` Résultat : ${d.r >= 0 ? 'plus' : 'moins'} ${spokenNumber(String(parseFloat(Math.abs(d.r).toFixed(2))))} R.` : '';   // 1.00 -> « 1 »
+        if (status === 'TP_HIT') return `${name}${position} : objectif atteint.${resultat}`;
+        if (status === 'SL_HIT') return `${name}${position} : stop loss touché.${resultat}`;
+        if (status === 'EXPIRED') return `${name}${position} : position expirée.${resultat}`;
         return status || name; // annonces du calendrier : le message est déjà en français
     }
     // Chrome charge la liste des voix en différé : on la demande tôt pour avoir la voix française au 1er signal.
@@ -3011,7 +3071,7 @@
             ${dateCellHtml(utcDate(e.time))}
             ${closeCell}
             <td style="font-weight: 700; color: #fff;">${e.symbol}${test}</td>
-            <td style="color: ${dirColor}; font-weight: 700;">${dir || '--'}</td>
+            <td style="color: ${dirColor}; font-weight: 700; white-space: nowrap;">${dirLabel(dir) || dir || '--'}</td>
             <td style="color: #cbd5e1;">${setupIctLabel(e.status)}</td>
             ${sessionCellHtml(e.session || (x && x.session_at_entry))}
             <td>${quality && quality !== '--' ? `<span class="tag-chip ${qualityClass(quality)}">${quality}</span>` : '--'}</td>
@@ -3144,10 +3204,12 @@
         let msg = '';
         if (kind === 'entry') {
             cls += data.direction === 'BUY' ? ' buy' : ' sell';
-            msg = `${data.status} — ${data.direction} ${data.quality && data.quality !== '--' ? '(' + data.quality + ')' : ''}`;
+            msg = `${data.status} — ${dirLabel(data.direction)} ${data.quality && data.quality !== '--' ? '(' + data.quality + ')' : ''}`;
         } else {
             cls += data.status === 'TP_HIT' ? ' tp' : ' sl';
             msg = data.status === 'TP_HIT' ? 'Take Profit atteint' : (data.status === 'SL_HIT' ? 'Stop Loss touché' : 'Position expirée');
+            const sensEntree = dirLabel((lastSignalData[sym] || {}).direction);   // sens du trade clôturé, s'il est connu
+            if (sensEntree) msg += ` · ${sensEntree}`;
         }
         toast.className = cls;
         toast.innerHTML = `
@@ -3316,7 +3378,8 @@
             updateWinRate();
 
             if (!silent) {
-                triggerNotification(sym, null, data.status);
+                const entreeRef = lastSignalData[sym] || null;
+                triggerNotification(sym, null, data.status, entreeRef ? { entryDir: entreeRef.direction, r: computeRMultiple(entreeRef, data) } : undefined);
                 pushToast(sym, data, 'exit');
             }
             if (currentModalSymbol === sym) updateModalSidePanel(sym, { flash: data.status });
@@ -3376,7 +3439,7 @@
         renderCardGauge(sym);
 
         if (!silent) {
-            triggerNotification(sym, dir, data.status);
+            triggerNotification(sym, dir, data.status, data);
             highlightNewSignal(sym, dir);
             pushToast(sym, data, 'entry');
             if (chartAutoOpen && !currentModalSymbol) {
@@ -3679,7 +3742,7 @@
         document.getElementById('rm-symbol').textContent = sym;
         const dirBadge = document.getElementById('rm-dir-badge');
         dirBadge.className = 'badge-status ' + dir;
-        dirBadge.textContent = dir;
+        dirBadge.textContent = dirLabel(dir) || dir;
 
         document.getElementById('rm-pattern-badge').textContent = setupIctLabel(pattern);
         document.getElementById('rm-session-badge').textContent = session;
