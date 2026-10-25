@@ -739,6 +739,23 @@
     }
     .btn-chart:hover { color: #fff; border-color: var(--accent-blue); background-color: var(--accent-blue-soft); }
 
+    /* ============ CARTE « EN ATTENTE » COMPACTE ============
+       Une carte est « en attente » quand son badge est STANDBY (classe exacte « badge-status ») ET que sa barre de
+       progression est masquée. CSS pur (:has) : le JS réécrit card.className en bloc, une classe ajoutée serait effacée.
+       Les cartes actives passent en premier (order), les cartes en attente se resserrent. Un navigateur sans :has()
+       ignore ces règles et garde l'affichage d'origine. Entrée / SL / TP sont masqués (vides en attente) ; « Dernier prix »
+       et « Dernière alerte » restent visibles : cette dernière sert à vérifier que chaque alerte TradingView arrive. */
+    .card:has(.badge-status[class="badge-status"], .badge-status[class="badge-status "]):has(> .progress-wrapper[style*="none"]) {
+        order: 1;
+        align-self: start;
+        padding: 10px 14px;
+    }
+    .card:has(.badge-status[class="badge-status"], .badge-status[class="badge-status "]):has(> .progress-wrapper[style*="none"]) .card-top { margin-bottom: 4px; }
+    .card:has(.badge-status[class="badge-status"], .badge-status[class="badge-status "]):has(> .progress-wrapper[style*="none"]) .metrics { gap: 4px; margin-bottom: 8px; }
+    .card:has(.badge-status[class="badge-status"], .badge-status[class="badge-status "]):has(> .progress-wrapper[style*="none"]) .data-row.row-niveau { display: none; }
+    .card:has(.badge-status[class="badge-status"], .badge-status[class="badge-status "]):has(> .progress-wrapper[style*="none"]) .tags-row:empty { display: none; }
+    .card:has(.badge-status[class="badge-status"], .badge-status[class="badge-status "]):has(> .progress-wrapper[style*="none"]) .btn-chart { padding: 5px 10px; font-size: 11px; }
+
     /* ============ LIVE LOG ============ */
     .log-section {
         margin-top: 38px;
@@ -1633,9 +1650,9 @@
             <div class="card-autotune-alert" id="autotune-alert-${sym}" style="display:none;"></div>
             <div class="tags-row" id="tags-${sym}"></div>
             <div class="metrics">
-                <div class="data-row"><span>Entrée Setup</span><span class="val-mono" id="entry-${sym}">--</span></div>
-                <div class="data-row"><span>Stop Loss (SL)</span><span class="val-mono val-sl" id="sl-${sym}">--</span></div>
-                <div class="data-row"><span>Objectif TP</span><span class="val-mono val-tp" id="tp-${sym}">--</span></div>
+                <div class="data-row row-niveau"><span>Entrée Setup</span><span class="val-mono" id="entry-${sym}">--</span></div>
+                <div class="data-row row-niveau"><span>Stop Loss (SL)</span><span class="val-mono val-sl" id="sl-${sym}">--</span></div>
+                <div class="data-row row-niveau"><span>Objectif TP</span><span class="val-mono val-tp" id="tp-${sym}">--</span></div>
                 <div class="data-row"><span>Dernier Prix</span><span class="val-mono" id="price-${sym}">--</span></div>
                 <div class="data-row" id="size-row-${sym}" style="display:none;"><span>Taille indicative</span><span class="val-mono val-size" id="size-${sym}">--</span></div>
                 <div class="data-row"><span>Dernière alerte</span><span class="val-mono" id="last-${sym}" style="font-size:11px; color: var(--text-muted);">aucune reçue</span></div>
