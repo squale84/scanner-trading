@@ -1042,6 +1042,41 @@
         .modal-panel { height: 92vh; }
     }
 
+    /* ============ BANDEAU DE SYNTHÈSE (scanner) ============ */
+    .summary-strip {
+        display: grid;
+        grid-template-columns: 1fr 1fr 1.7fr;
+        gap: 12px;
+        margin-bottom: 14px;
+    }
+    .sum-cell {
+        background: linear-gradient(180deg, var(--bg-card-hover) 0%, var(--bg-card) 100%);
+        border: 1px solid var(--border-color);
+        border-radius: var(--radius-lg);
+        padding: 14px 18px;
+        box-shadow: var(--shadow-card);
+        min-width: 0;
+    }
+    .sum-label { font-size: 9.5px; font-weight: 700; letter-spacing: 0.8px; text-transform: uppercase; color: var(--text-muted); }
+    .sum-value { font-family: var(--font-mono); font-size: 28px; font-weight: 700; line-height: 1.2; margin: 4px 0 2px; color: var(--text-main); }
+    .sum-value.pos { color: var(--accent-green); }
+    .sum-value.neg { color: var(--accent-red); }
+    .sum-sub { font-size: 11.5px; color: var(--text-muted); overflow-wrap: anywhere; }
+    .sum-news-title { color: var(--text-main); font-weight: 600; font-size: 12.5px; }
+    .sum-expose { margin-top: 2px; font-size: 10.5px; color: var(--text-faint); font-family: var(--font-mono); }
+    .sum-news .sum-value-news { font-size: 24px; color: var(--accent-blue); }
+    .sum-news.soon { border-color: rgba(255, 199, 60, 0.55); box-shadow: 0 0 16px rgba(255, 199, 60, 0.16); }
+    .sum-news.soon .sum-value-news { color: var(--accent-gold); animation: sum-pulse 1.4s ease-in-out infinite alternate; }
+    .sum-news.now { border-color: rgba(255, 69, 105, 0.6); box-shadow: 0 0 16px rgba(255, 69, 105, 0.2); }
+    .sum-news.now .sum-value-news { color: var(--accent-red); }
+    @keyframes sum-pulse { from { opacity: 1; } to { opacity: 0.55; } }
+    @media (prefers-reduced-motion: reduce) { .sum-news.soon .sum-value-news { animation: none; } }
+    @media (max-width: 760px) {
+        .summary-strip { grid-template-columns: 1fr 1fr; }
+        .sum-news { grid-column: 1 / -1; }
+        .sum-value { font-size: 24px; }
+    }
+
     /* ============ MENTION DE COPYRIGHT ============ */
     .site-footer {
         margin: 28px auto 0;
@@ -1094,6 +1129,26 @@
 
 <div class="container">
 <div id="view-scanner">
+
+    <!-- BANDEAU DE SYNTHÈSE : R du jour, signaux du jour, prochaine annonce forte (données déjà chargées dans la page) -->
+    <div class="summary-strip" id="summary-strip" aria-label="Synthèse du jour">
+        <div class="sum-cell">
+            <div class="sum-label">R du jour</div>
+            <div class="sum-value" id="sum-r">--</div>
+            <div class="sum-sub" id="sum-r-sub">Chargement…</div>
+        </div>
+        <div class="sum-cell">
+            <div class="sum-label">Signaux du jour</div>
+            <div class="sum-value" id="sum-trades">--</div>
+            <div class="sum-sub" id="sum-trades-sub">Chargement…</div>
+        </div>
+        <div class="sum-cell sum-news" id="sum-news">
+            <div class="sum-label">Prochaine annonce forte</div>
+            <div class="sum-value sum-value-news" id="sum-news-count">--</div>
+            <div class="sum-sub sum-news-title" id="sum-news-title">Calendrier en chargement…</div>
+            <div class="sum-sub sum-expose" id="sum-news-expose"></div>
+        </div>
+    </div>
 
     <!-- KPI BAR -->
     <div class="analytics-bar">
@@ -1730,6 +1785,7 @@
     let calendarData = [];
     let isCalendarCached = false;
     let calendarSourceDown = false;   // le serveur sert son cache car la source ne répond pas
+    let calendarLoadError = false;    // le dernier chargement du calendrier a échoué (le bandeau de synthèse ne dit alors pas « en chargement »)
     let calendarFetchedAt = null;     // date de la dernière récupération réussie par le serveur
     let lastAlerts = {};              // dernière alerte reçue par actif (état serveur)
     let storageStatus = null;         // état de la persistance (base de données) côté serveur
@@ -2295,6 +2351,7 @@
     }
 
     function renderOpenPositions() {
+        updateSummaryStrip();   // le compteur « en cours » du bandeau suit l'état serveur des positions
         const list = document.getElementById('pos-list');
         const empty = document.getElementById('pos-empty');
         if (!list) return;
@@ -3017,7 +3074,7 @@
     function scheduleJournalRender() {
         if (journalRenderPending) return;
         journalRenderPending = true;
-        Promise.resolve().then(() => { journalRenderPending = false; renderJournalTable(); });
+        Promise.resolve().then(() => { journalRenderPending = false; renderJournalTable(); updateSummaryStrip(); });
     }
 
     function buildJournalTrades(rows) {
@@ -4696,11 +4753,15 @@
                 localStorage.setItem('ictRadarCalendarCache', JSON.stringify(calendarData));
             } catch (e) {}
 
+            calendarLoadError = false;
             renderCalendarTable();
             checkUpcomingEvents();
             updateNewsCardProtection();
+            updateSummaryStrip();
         } catch (e) {
             console.error('Erreur calendrier:', e);
+            calendarLoadError = true;
+            updateSummaryStrip();
             if (calendarData && calendarData.length > 0) {
                 isCalendarCached = true;
                 renderCalendarTable();
@@ -4902,6 +4963,83 @@
         updateNewsCardProtection();
     }
 
+    /* ===================== BANDEAU DE SYNTHÈSE (scanner) ===================== */
+    // Lecture seule : s'appuie sur des données déjà chargées (journalRows, serverPositions, calendarData), aucun appel serveur.
+    // Un résultat indisponible n'est jamais estimé : il est compté à part et exclu du R du jour.
+    function formatCountdown(mins) {
+        if (mins < 1) return "dans moins d'1 min";
+        if (mins < 60) return `dans ${Math.floor(mins)} min`;
+        const h = Math.floor(mins / 60), m = Math.floor(mins % 60);
+        if (h < 24) return `dans ${h} h ${String(m).padStart(2, '0')}`;
+        return `dans ${Math.floor(h / 24)} j ${h % 24} h`;
+    }
+
+    function updateSummaryStrip() {
+        const rEl = document.getElementById('sum-r');
+        if (!rEl) return;
+
+        // 1. R du jour et signaux du jour : jour local du navigateur ; les lignes de test locales (« Signal test ») sont exclues.
+        const auj = new Date().toDateString();
+        const lignes = journalRows.filter(r => !r._local);
+        const duJour = r => !!r.time && utcDate(r.time).toDateString() === auj;
+        const { trades } = buildJournalTrades(lignes);   // même appariement que le tableau : une sortie sans entrée n'est pas un trade
+        const clos = trades.filter(t => t.exit && t.exit.status !== 'REPLACED' && duJour(t.exit));
+        const avecR = clos.filter(t => typeof t.exit.r_multiple === 'number' && isFinite(t.exit.r_multiple));
+        const sansR = clos.length - avecR.length;
+        const total = avecR.reduce((s, t) => s + t.exit.r_multiple, 0);
+        const gagnants = avecR.filter(t => t.exit.r_multiple > 0).length;
+        const perdants = avecR.filter(t => t.exit.r_multiple < 0).length;
+        const plur = (n, mot) => `${n} ${mot}${n > 1 ? 's' : ''}`;
+
+        if (avecR.length) {
+            rEl.textContent = `${total > 0 ? '+' : ''}${total.toFixed(2)} R`;
+            rEl.className = 'sum-value ' + (total > 0 ? 'pos' : (total < 0 ? 'neg' : ''));
+        } else {
+            rEl.textContent = '--';
+            rEl.className = 'sum-value';
+        }
+        document.getElementById('sum-r-sub').textContent = avecR.length
+            ? `${avecR.length} ${avecR.length > 1 ? 'trades clos' : 'trade clos'} · ${plur(gagnants, 'gagnant')} · ${plur(perdants, 'perdant')}` + (sansR ? ` · ${sansR} résultat indisponible` : '')
+            : (sansR ? `${sansR} sortie(s) sans résultat disponible` : "Aucun trade clos aujourd'hui");
+
+        const entrees = lignes.filter(r => r.kind === 'entry' && duJour(r)).length;
+        document.getElementById('sum-trades').textContent = String(entrees);
+        const enCours = Object.keys(serverPositions || {}).length;
+        document.getElementById('sum-trades-sub').textContent = `${clos.length} clos · ${enCours} en cours`;
+
+        // 2. Prochaine annonce à fort impact (calendrier de la semaine en cours)
+        const box = document.getElementById('sum-news');
+        const cEl = document.getElementById('sum-news-count');
+        const tEl = document.getElementById('sum-news-title');
+        const xEl = document.getElementById('sum-news-expose');
+        box.classList.remove('soon', 'now');
+        xEl.textContent = '';
+        xEl.removeAttribute('title');
+        if (!calendarData || calendarData.length === 0) {
+            cEl.textContent = '--';
+            tEl.textContent = (calendarSourceDown || calendarLoadError) ? 'Calendrier indisponible (source injoignable)' : 'Calendrier en chargement…';
+            return;
+        }
+        const ev = calendarData.find(e => e.impact === 'High' && minutesUntil(e.date) > -5);   // -5 min : encore « à l'instant »
+        if (!ev) {
+            cEl.textContent = '--';
+            tEl.textContent = 'Aucune annonce forte restante cette semaine';
+            return;
+        }
+        const mins = minutesUntil(ev.date);
+        const heure = new Intl.DateTimeFormat('fr-FR', { weekday: 'short', hour: '2-digit', minute: '2-digit' }).format(new Date(ev.date));
+        cEl.textContent = mins <= 0 ? "Publiée à l'instant" : formatCountdown(mins);
+        tEl.textContent = `${ev.country} · ${translateEventTitle(ev.title)} — ${heure}`;
+        if (mins <= 0) box.classList.add('now'); else if (mins <= 30) box.classList.add('soon');
+        const exposes = Object.keys(ASSET_CURRENCIES).filter(s => ASSET_CURRENCIES[s].includes(ev.country));
+        if (exposes.length) {
+            xEl.textContent = 'Actifs exposés : ' + exposes.slice(0, 8).join(' · ') + (exposes.length > 8 ? ` +${exposes.length - 8}` : '');
+            xEl.title = exposes.join(', ');
+        } else {
+            xEl.textContent = 'Aucun actif suivi n\'est exposé à cette devise';
+        }
+    }
+
     /* ===================== PROTECTION NEWS (CALENDRIER <-> CARTES) ===================== */
     const ASSET_CURRENCIES = {
         GOLD:     ["USD"],
@@ -5009,6 +5147,8 @@
     loadCalendar();
     loadAutotuneData();
     updateNewsCardProtection();
+    updateSummaryStrip();
+    setInterval(updateSummaryStrip, 5 * 1000); // bandeau de synthèse : compte à rebours, R du jour (calcul local, très léger)
     setInterval(updateNewsCardProtection, 30 * 1000); // Protection news vérifiée toutes les 30s
     setInterval(loadCalendar, 15 * 60 * 1000);
     setInterval(loadAutotuneData, 60 * 1000); // Actualisation des règles Auto-Tuner toutes les minutes
