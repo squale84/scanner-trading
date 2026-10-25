@@ -175,6 +175,100 @@ def test_aucun_acces_neon_ni_ecriture():
             pass
 
 
+# --- Qualité des données et motifs -----------------------------------------------------------
+
+def types_anomalies(lignes):
+    trades, ex = rj.apparier_journal(lignes)
+    return sorted(a["type"] for a in rj.anomalies(trades, ex))
+
+
+def test_anomalies_detectees():
+    lignes = [
+        # durée normale (2 h 30) : rien à signaler
+        entree("2026-10-01T10:00:00", "GOLD"), sortie("2026-10-01T12:30:00", "GOLD", "EXPIRED", 0.4),
+        # 7 h : durée anormale
+        entree("2026-10-02T07:00:00", "USOIL"), sortie("2026-10-02T14:00:00", "USOIL", "SL_HIT", -1),
+        # entrée et sortie à la même seconde
+        entree("2026-10-03T14:55:10.303000", "US100"), sortie("2026-10-03T14:55:10.537000", "US100", "TP_HIT", 2.0),
+        # identifiant réel (13 chiffres) : rien ; identifiant court : signalé
+        entree("2026-10-04T10:00:00", "EURUSD", trade_id="EURUSD-1792568100000"),
+        sortie("2026-10-04T12:00:00", "EURUSD", "EXPIRED", 0.1, trade_id="EURUSD-1792568100000"),
+        entree("2026-10-05T10:00:00", "FR40", trade_id="FR40-1729000000"),
+        sortie("2026-10-05T12:00:00", "FR40", "EXPIRED", 0.1, trade_id="FR40-1729000000"),
+        # sorties orphelines : une de test probable, une ordinaire
+        sortie("2026-10-06T10:00:00", "GER40", "TP_HIT", 2.0, trade_id="GER40-1729010000"),
+        sortie("2026-10-06T11:00:00", "NATGAS", "TP_HIT", None),
+        # entrée sans sortie depuis 5 h (signalée) et depuis 1 h (normale), par rapport à la dernière ligne
+        entree("2026-10-07T07:00:00", "SPX500"),
+        entree("2026-10-07T11:00:00", "BTCUSD"),
+        sortie("2026-10-07T12:00:00", "ETHUSD", "TP_HIT", None),
+    ]
+    attendu = sorted(["durée anormale", "entrée et sortie simultanées", "identifiant de test probable",
+                      "ligne de test probable", "sortie orpheline", "sortie orpheline", "entrée sans sortie"])
+    assert types_anomalies(lignes) == attendu, types_anomalies(lignes)
+    trades, ex = rj.apparier_journal(lignes)
+    sans_sortie = [a for a in rj.anomalies(trades, ex) if a["type"] == "entrée sans sortie"]
+    assert [a["symbole"] for a in sans_sortie] == ["SPX500"]       # BTCUSD (1 h) n'est pas signalée
+
+
+def test_anomalies_ne_modifient_rien():
+    lignes = [entree("2026-10-01T10:00:00", "GOLD"), sortie("2026-10-01T20:00:00", "GOLD", "SL_HIT", -1)]
+    copie = json.dumps(lignes, sort_keys=True)
+    trades, ex = rj.apparier_journal(lignes)
+    rj.anomalies(trades, ex)
+    rj.motifs(trades)
+    assert json.dumps(lignes, sort_keys=True) == copie and len(trades) == 1   # le trade anormal reste dans le bilan
+
+
+def test_champs_de_motifs_extraits():
+    lignes = [
+        entree("2026-10-01T10:00:00", "GOLD", status="BSL SWEEP", quality="A", htf_aligned=True),
+        sortie("2026-10-01T12:30:00", "GOLD", "EXPIRED", 0.4, entry_status="--", quality="A", htf_aligned=True, best_r=1.4),
+        entree("2026-10-02T10:00:00", "US100", status="--"),
+        sortie("2026-10-02T10:20:00", "US100", "SL_HIT", -1, entry_status="RETEST"),
+    ]
+    trades, _ = rj.apparier_journal(lignes)
+    g, u = trades
+    assert g["setup"] == "BSL SWEEP" and g["qualite"] == "A" and g["htf"] == "alignée H1" and g["best_r"] == 1.4
+    assert math.isclose(g["duree_min"], 150.0)
+    assert u["setup"] == "RETEST" and u["qualite"] == "inconnue" and u["htf"] == "inconnue" and u["best_r"] is None
+
+
+def test_motifs_sl_rapide_et_retour_apres_1r():
+    def tr(statut, r, duree, best):
+        return {"symbole": "X", "entree": "2026-10-01T10:00:00", "sortie": "2026-10-01T11:00:00", "statut": statut,
+                "r": r, "duree_min": duree, "best_r": best}
+    m = rj.motifs([
+        tr("SL_HIT", -1, 30, 0.2), tr("SL_HIT", -1, 31, 1.2), tr("SL_HIT", -1, 5, None),   # 2 SL rapides sur 3
+        tr("EXPIRED", -0.4, 150, 1.0),      # retour : best 1.0, perte
+        tr("EXPIRED", -0.4, 150, 0.9),      # best < 1 : non compté
+        tr("EXPIRED", 0.6, 150, 1.5),       # gain : non compté
+        tr("TP_HIT", 2.0, 60, None),        # best_r inconnu : hors base
+    ])
+    assert m["sl_rapide"]["n"] == 2 and m["sl_rapide"]["sur"] == 3
+    assert m["retour_apres_1r"]["n"] == 2 and m["retour_apres_1r"]["sur"] == 5      # le SL à best 1.2 compte aussi
+    assert math.isclose(m["retour_apres_1r"]["r_perdu"], 1.4)
+    assert m["par_sortie"]["SL_HIT"]["n"] == 3 and m["par_sortie"]["TP_HIT"]["n"] == 1
+
+
+def test_rapport_motifs_et_anomalies():
+    lignes = []
+    for i in range(32):
+        j = f"2026-10-{i // 2 + 1:02d}"
+        h = 10 if i % 2 == 0 else 14
+        lignes += [entree(f"{j}T{h:02d}:00:00", "GOLD", status="BSL SWEEP"),
+                   sortie(f"{j}T{h:02d}:20:00" if i % 4 == 0 else f"{j}T{h + 2:02d}:30:00", "GOLD",
+                          "SL_HIT" if i % 4 == 0 else "EXPIRED", -1 if i % 4 == 0 else 0.5, best_r=1.1 if i % 4 == 0 else 0.7)]
+    lignes.append(sortie("2026-10-20T09:00:00", "GOLD", "TP_HIT", None))                 # orpheline
+    trades, ex = rj.apparier_journal(lignes)
+    txt = rj.rapport_markdown(trades, ex, "test.json", "25/10/2026", tirages=100)
+    assert "## Motifs récurrents (descriptif" in txt and "SL touché en 30 min ou moins : **8 sur 8**" in txt
+    assert "atteint au moins +1 R avant de finir en perte : **8 sur 32**" in txt and "plafond" in txt
+    assert "## Qualité des données" in txt and "sortie orpheline" in txt
+    court = rj.rapport_markdown(trades[:10], ex, "test.json", "25/10/2026", tirages=100)
+    assert "## Motifs récurrents" not in court and "## Qualité des données" in court   # pas de motifs sous 30 trades
+
+
 def main():
     tests = [(nom, f) for nom, f in sorted(globals().items()) if nom.startswith("test_") and callable(f)]
     for nom, f in tests:

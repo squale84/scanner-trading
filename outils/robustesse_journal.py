@@ -37,6 +37,31 @@ def _r_valide(v):
     return float(v) if math.isfinite(v) else None
 
 
+def _propre(v):
+    """Valeur texte utilisable, ou None (absente, vide ou « -- » du journal)."""
+    return None if v in (None, "", "--") else v
+
+
+def _duree_minutes(debut, fin):
+    try:
+        return (datetime.fromisoformat(fin) - datetime.fromisoformat(debut)).total_seconds() / 60.0
+    except (TypeError, ValueError):
+        return None
+
+
+def _etiquette_htf(v):
+    return "alignée H1" if v is True else ("non alignée H1" if v is False else "inconnue")
+
+
+def _id_test_probable(trade_id):
+    """Les trade_id réels se terminent par un horodatage en millisecondes (13 chiffres) ;
+    un suffixe court (ex. GOLD-1729000000) ressemble à une ligne de test. Heuristique, jamais une certitude."""
+    if not isinstance(trade_id, str) or "-" not in trade_id:
+        return False
+    suffixe = trade_id.rsplit("-", 1)[1]
+    return suffixe.isdigit() and len(suffixe) < 12
+
+
 def apparier_journal(lignes):
     """Apparie entrée + sortie suivante du même actif.
 
@@ -45,7 +70,8 @@ def apparier_journal(lignes):
     """
     triees = sorted(lignes, key=lambda r: r.get("time") or "")
     ouvertes, trades = {}, []
-    exclusions = {"remplacees": [], "sans_r": [], "orphelines": [], "sans_sortie": []}
+    exclusions = {"remplacees": [], "sans_r": [], "orphelines": [], "sans_sortie": [],
+                  "derniere_ligne": triees[-1].get("time") if triees else None}  # référence de date (pas l'horloge)
 
     for r in triees:
         sym = r.get("symbol")
@@ -73,6 +99,12 @@ def apparier_journal(lignes):
                         "version": r.get("version") or entree.get("version") or "inconnue",
                         "session": r.get("session_at_entry") or entree.get("session") or "inconnue",
                         "jour": (r.get("time") or "")[:10],  # jour de sortie (date UTC du journal)
+                        "setup": _propre(entree.get("status")) or _propre(r.get("entry_status")) or "inconnu",
+                        "qualite": _propre(r.get("quality")) or _propre(entree.get("quality")) or "inconnue",
+                        "htf": _etiquette_htf(r.get("htf_aligned", entree.get("htf_aligned"))),
+                        "best_r": _r_valide(r.get("best_r")),   # meilleur R atteint pendant le trade (absent avant R6.1)
+                        "duree_min": _duree_minutes(entree.get("time"), r.get("time")),
+                        "trade_id": r.get("trade_id") or entree.get("trade_id"),
                     })
     exclusions["sans_sortie"] = list(ouvertes.values())  # entrées encore ouvertes ou sortie manquante
     return trades, exclusions
@@ -219,7 +251,7 @@ def ventiler(trades, cle):
     """Évalue chaque groupe seulement s'il atteint SEUIL_MIN ; sinon « non évaluable » (N seul)."""
     groupes = {}
     for t in trades:
-        groupes.setdefault(t[cle], []).append(t)
+        groupes.setdefault(t.get(cle, "inconnu"), []).append(t)
     sortie = {}
     for nom, g in sorted(groupes.items(), key=lambda kv: -len(kv[1])):
         if len(g) < SEUIL_MIN:
@@ -227,6 +259,64 @@ def ventiler(trades, cle):
         else:
             sortie[nom] = {"n": len(g), "evaluable": True, "stats": statistiques([t["r"] for t in g])}
     return sortie
+
+
+DUREE_NORMALE_MAX_MIN = 180   # 30 bougies M5 = 150 min ; marge de 30 min avant de signaler
+SL_RAPIDE_MIN = 30            # « SL touché très vite » = en 30 minutes ou moins
+RETOUR_R = 1.0                # « retour » = a atteint au moins +1 R avant de finir en perte
+
+
+def anomalies(trades, exclusions):
+    """Signale ce qui peut fausser la mesure. Ne corrige rien, ne supprime rien : à vérifier à la main.
+
+    La référence de date est la dernière ligne du journal (jamais l'horloge), donc le résultat est reproductible."""
+    liste = []
+    for t in trades:
+        d = t.get("duree_min")
+        if d is not None and d > DUREE_NORMALE_MAX_MIN:
+            liste.append({"type": "durée anormale", "symbole": t["symbole"], "date": t["entree"],
+                          "detail": f"{d / 60:.1f} h entre l'entrée et la sortie ({t['statut']}, R {t['r']:+.2f}) : "
+                                    "le R peut ne pas correspondre à la 30e bougie M5"})
+        if d is not None and d * 60 < 2:
+            liste.append({"type": "entrée et sortie simultanées", "symbole": t["symbole"], "date": t["entree"],
+                          "detail": f"sortie {t['statut']} moins de 2 s après l'entrée (R {t['r']:+.2f})"})
+        if _id_test_probable(t.get("trade_id")):
+            liste.append({"type": "identifiant de test probable", "symbole": t["symbole"], "date": t["entree"],
+                          "detail": f"trade_id {t['trade_id']} (suffixe trop court pour un horodatage réel)"})
+    for o in exclusions.get("orphelines", []):
+        if _id_test_probable(o.get("trade_id")):
+            liste.append({"type": "ligne de test probable", "symbole": o.get("symbol"), "date": o.get("time"),
+                          "detail": f"sortie sans entrée, trade_id {o.get('trade_id')} : exclue du bilan"})
+        else:
+            liste.append({"type": "sortie orpheline", "symbole": o.get("symbol"), "date": o.get("time"),
+                          "detail": f"{o.get('status')} sans entrée connue : résultat indisponible, exclue du bilan"})
+    ref = exclusions.get("derniere_ligne")
+    for e in exclusions.get("sans_sortie", []):
+        age = _duree_minutes(e.get("time"), ref)
+        if age is not None and age > DUREE_NORMALE_MAX_MIN:
+            liste.append({"type": "entrée sans sortie", "symbole": e.get("symbol"), "date": e.get("time"),
+                          "detail": f"aucune sortie depuis {age / 60:.0f} h (une expiration survient normalement à 2 h 30) : "
+                                    "position probablement bloquée ou sortie perdue"})
+    return liste
+
+
+def motifs(trades):
+    """Compte des motifs récurrents. DESCRIPTIF : des effectifs sur l'échantillon, jamais une preuve."""
+    sl = [t for t in trades if t["statut"] == "SL_HIT"]
+    sl_rapides = [t for t in sl if t.get("duree_min") is not None and t["duree_min"] <= SL_RAPIDE_MIN]
+    avec_best = [t for t in trades if t.get("best_r") is not None]
+    retours = [t for t in avec_best if t["best_r"] >= RETOUR_R and t["r"] < 0]
+    par_sortie = {}
+    for t in trades:
+        s = par_sortie.setdefault(t["statut"], {"n": 0, "r_total": 0.0})
+        s["n"] += 1
+        s["r_total"] += t["r"]
+    return {
+        "sl_rapide": {"n": len(sl_rapides), "sur": len(sl), "cas": sl_rapides},
+        "retour_apres_1r": {"n": len(retours), "sur": len(avec_best), "cas": retours,
+                            "r_perdu": sum(-t["r"] for t in retours)},
+        "par_sortie": par_sortie,
+    }
 
 
 # --------------------------------------------------------------------------------------------
@@ -292,7 +382,8 @@ def rapport_markdown(trades, exclusions, source, date_rapport, tirages=TIRAGES_D
         if ecart > 0.05:
             out += ["> Les deux méthodes divergent de plus de 5 points : **la méthode par blocs d'un jour fait foi.**", ""]
 
-        for cle, titre in (("version", "version du script"), ("symbole", "actif"), ("session", "session d'entrée")):
+        for cle, titre in (("version", "version du script"), ("symbole", "actif"), ("session", "session d'entrée"),
+                           ("setup", "type de setup"), ("qualite", "qualité"), ("htf", "alignement H1")):
             groupes = ventiler(trades, cle)
             out += [f"## Ventilation par {titre}", ""]
             if not any(g["evaluable"] for g in groupes.values()):
@@ -307,6 +398,31 @@ def rapport_markdown(trades, exclusions, source, date_rapport, tirages=TIRAGES_D
                 else:
                     out.append(f"| {nom} | {g['n']} | non (N < {SEUIL_MIN}) | non évaluable | non évaluable |")
             out.append("")
+
+    if n >= SEUIL_MIN:
+        m = motifs(trades)
+        out += ["## Motifs récurrents (descriptif : des effectifs, pas une preuve)", ""]
+        sl = m["sl_rapide"]
+        out.append(f"- SL touché en {SL_RAPIDE_MIN} min ou moins : **{sl['n']} sur {sl['sur']}** stops loss")
+        rt = m["retour_apres_1r"]
+        if rt["sur"]:
+            out.append(f"- Trades ayant atteint au moins +{RETOUR_R:g} R avant de finir en perte : **{rt['n']} sur {rt['sur']}** "
+                       f"(trades dont le meilleur R est connu) ; R perdu sur ces cas : {_f(rt['r_perdu'], '{:.2f}')} R. "
+                       "Ce chiffre est un plafond pour une règle de type break-even : le R maximal ne dit pas dans quel ordre "
+                       "le prix a bougé, il faut rejouer les bougies M5 pour conclure.")
+            for t in rt["cas"]:
+                out.append(f"  - {t['entree'][:16]} {t['symbole']} : meilleur R {t['best_r']:+.2f}, résultat {t['r']:+.2f} ({t['statut']})")
+        else:
+            out.append("- Retour après +1 R : non évaluable (le meilleur R n'est pas enregistré avant R6.1).")
+        out += ["- Répartition par type de sortie :"]
+        out += [f"  - {k} : {v['n']} trades, R total {_f(v['r_total'])}" for k, v in sorted(m["par_sortie"].items())]
+        out.append("")
+    ano = anomalies(trades, exclusions)
+    if ano:
+        out += ["## Qualité des données (à vérifier : rien n'a été modifié)", "",
+                "| Type | Actif | Date | Détail |", "|---|---|---|---|"]
+        out += [f"| {a['type']} | {a['symbole']} | {(a['date'] or '')[:16]} | {a['detail']} |" for a in ano]
+        out.append("")
 
     if exclusions["sans_r"] or exclusions["orphelines"]:
         out += ["## Résultat indisponible (exclus du bilan, listés à part)", ""]
