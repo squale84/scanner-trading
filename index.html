@@ -1042,6 +1042,59 @@
         .modal-panel { height: 92vh; }
     }
 
+    /* ============ CALENDRIER : bandeau, jours, repère « maintenant » ============ */
+    .cal-next {
+        background: linear-gradient(180deg, var(--bg-card-hover) 0%, var(--bg-card) 100%);
+        border: 1px solid var(--border-color); border-radius: var(--radius-lg);
+        padding: 14px 18px; margin-bottom: 14px; box-shadow: var(--shadow-card);
+    }
+    .cal-next-label { font-size: 9.5px; font-weight: 700; letter-spacing: 0.8px; text-transform: uppercase; color: var(--text-muted); }
+    .cal-next-count { font-family: var(--font-mono); font-size: 26px; font-weight: 700; line-height: 1.25; margin: 3px 0 1px; color: var(--accent-blue); }
+    .cal-next-title { font-size: 13px; font-weight: 600; color: var(--text-main); overflow-wrap: anywhere; }
+    .cal-next-expose { margin-top: 2px; font-size: 10.5px; color: var(--text-faint); font-family: var(--font-mono); }
+    .cal-next.soon { border-color: rgba(255, 199, 60, 0.55); box-shadow: 0 0 16px rgba(255, 199, 60, 0.16); }
+    .cal-next.soon .cal-next-count { color: var(--accent-gold); }
+    .cal-next.now { border-color: rgba(255, 69, 105, 0.6); box-shadow: 0 0 16px rgba(255, 69, 105, 0.2); }
+    .cal-next.now .cal-next-count { color: var(--accent-red); }
+    .log-table .cal-day-row td {
+        background: var(--bg-elevated); color: var(--text-main); font-weight: 700; letter-spacing: 0.3px;
+        padding: 10px 14px; border-top: 1px solid var(--border-color); text-transform: capitalize;
+    }
+    .cal-day-row .cal-day-count { float: right; font-weight: 600; color: var(--text-muted); text-transform: none; }
+    .log-table .cal-now-row td {
+        padding: 3px 14px; color: var(--accent-blue); font-size: 10px; font-weight: 700; letter-spacing: 0.8px;
+        border-top: 1px solid var(--accent-blue); background: rgba(47, 107, 255, 0.07);
+    }
+    .cal-past { opacity: 0.5; }
+    .cal-impact-High td:first-child { box-shadow: inset 3px 0 0 var(--accent-red); }
+    .cal-impact-Medium td:first-child { box-shadow: inset 3px 0 0 var(--accent-gold); }
+    .cal-expose { display: block; margin-top: 2px; font-size: 10px; color: var(--text-faint); }
+    /* Mobile : chaque annonce devient une carte (plus de tableau coupé à droite) */
+    @media (max-width: 640px) {
+        #view-calendar .log-table thead { display: none; }
+        #view-calendar .log-table, #view-calendar #calendar-body { display: block; width: 100%; }
+        #view-calendar #calendar-body tr:not(.cal-day-row):not(.cal-now-row) {
+            display: grid; grid-template-columns: 1fr 1fr; gap: 3px 10px; padding: 10px 14px;
+            grid-template-areas: "dev imp" "date date" "titre titre" "prev prec"; border-bottom: 1px solid #12161f;
+        }
+        #view-calendar #calendar-body tr:not(.cal-day-row):not(.cal-now-row) td { display: block; padding: 0; border: 0; white-space: normal; }
+        #view-calendar #calendar-body td:nth-child(1) { grid-area: date; font-size: 11px; }
+        #view-calendar #calendar-body td:nth-child(2) { grid-area: dev; font-size: 13px; }
+        #view-calendar #calendar-body td:nth-child(3) { grid-area: imp; justify-self: end; }
+        #view-calendar #calendar-body td:nth-child(4) { grid-area: titre; font-size: 12.5px; }
+        #view-calendar #calendar-body td:nth-child(5) { grid-area: prev; }
+        #view-calendar #calendar-body td:nth-child(6) { grid-area: prec; text-align: right; }
+        #view-calendar #calendar-body td:nth-child(5)::before,
+        #view-calendar #calendar-body td:nth-child(6)::before { content: attr(data-label) " "; color: var(--text-faint); font-size: 10px; text-transform: uppercase; }
+        .cal-day-row .cal-day-count { float: none; display: block; margin-top: 2px; }
+        #view-calendar #calendar-body tr.cal-day-row, #view-calendar #calendar-body tr.cal-now-row { display: block; }
+        #view-calendar #calendar-body tr.cal-day-row td, #view-calendar #calendar-body tr.cal-now-row td { display: block; width: 100%; }
+        /* la barre d'impact entoure toute la carte, pas seulement la date */
+        #view-calendar #calendar-body tr td:first-child { box-shadow: none; }
+        #view-calendar #calendar-body tr.cal-impact-High { box-shadow: inset 3px 0 0 var(--accent-red); }
+        #view-calendar #calendar-body tr.cal-impact-Medium { box-shadow: inset 3px 0 0 var(--accent-gold); }
+    }
+
     /* ============ CARTE CLÔTURÉE REPLIÉE ============
        Une carte clôturée (TP touché, SL touché, expirée) se replie en tuile 2 h après sa clôture (attribut data-collapsed, posé
        par le JS : il survit aux réécritures de card.className). Elle garde son nom, le sens, le badge de résultat, la ligne de
@@ -1439,6 +1492,12 @@
     </div><!-- /view-journal -->
 
     <div id="view-calendar" style="display:none;">
+        <div class="cal-next" id="cal-next">
+            <div class="cal-next-label">Prochaine annonce forte</div>
+            <div class="cal-next-count" id="cal-next-count">--</div>
+            <div class="cal-next-title" id="cal-next-title">Calendrier en chargement…</div>
+            <div class="cal-next-expose" id="cal-next-expose"></div>
+        </div>
         <div class="log-section">
             <div class="log-header">
                 <span class="log-title" id="calendar-title">📅 Calendrier économique (semaine en cours, ton fuseau horaire)</span>
@@ -1818,6 +1877,7 @@
     let calendarData = [];
     let isCalendarCached = false;
     let calendarSourceDown = false;   // le serveur sert son cache car la source ne répond pas
+    let calendarLoaded = false;       // au moins un chargement réussi (une semaine vide est alors une vraie réponse, pas un chargement)
     let calendarLoadError = false;    // le dernier chargement du calendrier a échoué (le bandeau de synthèse ne dit alors pas « en chargement »)
     let calendarFetchedAt = null;     // date de la dernière récupération réussie par le serveur
     let lastAlerts = {};              // dernière alerte reçue par actif (état serveur)
@@ -4804,6 +4864,7 @@
             } catch (e) {}
 
             calendarLoadError = false;
+            calendarLoaded = true;
             renderCalendarTable();
             checkUpcomingEvents();
             updateNewsCardProtection();
@@ -4961,8 +5022,36 @@
         }
         empty.style.display = 'none';
 
-        body.innerHTML = filtered.map(ev => {
+        // Regroupement par jour (« Aujourd'hui · dimanche 25 octobre »), repère « maintenant » dans le jour courant, annonces passées
+        // estompées. Les textes ajoutés ici viennent de constantes ou de dates formatées, jamais du contenu du calendrier.
+        const jourCle = d => new Date(d).toDateString();
+        const maintenantD = new Date();
+        const auj = maintenantD.toDateString();
+        const demain = new Date(maintenantD.getTime() + 86400000).toDateString();
+        const hier = new Date(maintenantD.getTime() - 86400000).toDateString();
+        const libJour = d => {
+            const k = jourCle(d);
+            const pre = k === auj ? "Aujourd'hui · " : (k === demain ? 'Demain · ' : (k === hier ? 'Hier · ' : ''));
+            return pre + new Intl.DateTimeFormat('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' }).format(new Date(d));
+        };
+        const exposesDe = pays => Object.keys(ASSET_CURRENCIES).filter(sym => ASSET_CURRENCIES[sym].includes(pays));
+        const heureMaintenant = new Intl.DateTimeFormat('fr-FR', { hour: '2-digit', minute: '2-digit' }).format(maintenantD);
+        const marqueur = `<tr class="cal-now-row"><td colspan="6">▸ MAINTENANT · ${heureMaintenant}</td></tr>`;
+        const IMPACTS = ['High', 'Medium', 'Low', 'Holiday'];
+        const lignes = [];
+        let jourCourant = null, marqueurPose = false;
+        filtered.forEach(ev => {
+            const cle = jourCle(ev.date);
+            if (cle !== jourCourant) {
+                // fin d'« aujourd'hui » sans repère posé : toutes les annonces du jour étaient passées
+                if (jourCourant === auj && !marqueurPose) { lignes.push(marqueur); marqueurPose = true; }
+                jourCourant = cle;
+                const duJour = filtered.filter(e => jourCle(e.date) === cle);
+                const fortes = duJour.filter(e => e.impact === 'High').length;
+                lignes.push(`<tr class="cal-day-row"><td colspan="6">${libJour(ev.date)}<span class="cal-day-count">${duJour.length} annonce${duJour.length > 1 ? 's' : ''}${fortes ? ` · ${fortes} forte${fortes > 1 ? 's' : ''}` : ''}</span></td></tr>`);
+            }
             const mins = minutesUntil(ev.date);
+            if (cle === auj && !marqueurPose && mins > 0) { lignes.push(marqueur); marqueurPose = true; }
             // Heure locale du navigateur (pas de timeZone forcée = fuseau de l'utilisateur)
             const localTime = new Intl.DateTimeFormat('fr-FR', { weekday: 'short', hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit' }).format(new Date(ev.date));
             const nyTime = new Intl.DateTimeFormat('fr-FR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/New_York' }).format(new Date(ev.date));
@@ -4970,17 +5059,22 @@
             if (isToday(ev.date)) rowClass = 'calendar-row-today';
             if (mins >= -15 && mins <= 15) rowClass = 'calendar-row-now';
             else if (mins > 15 && mins <= 60) rowClass = 'calendar-row-soon';
-            return `
+            rowClass += ` cal-impact-${IMPACTS.includes(ev.impact) ? ev.impact : 'Low'}` + (mins < -15 ? ' cal-past' : '');
+            const expo = (ev.impact === 'High' || ev.impact === 'Medium') ? exposesDe(ev.country) : [];
+            const expoTxt = expo.length ? `<span class="cal-expose">Exposés : ${expo.slice(0, 6).join(' · ')}${expo.length > 6 ? ' +' + (expo.length - 6) : ''}</span>` : '';
+            lignes.push(`
                 <tr class="${rowClass}">
                     <td style="color: #cbd5e1; white-space:nowrap;">${localTime}<span style="display:block; color: var(--text-faint); font-size:10px;">New York ${nyTime}</span></td>
                     <td style="font-weight:700; color:#fff;" title="${CAL_COUNTRY_FR[ev.country] || ''}">${ev.country || '--'}</td>
                     <td><span class="impact-badge impact-${ev.impact}">${CAL_IMPACT_FR[ev.impact] || ev.impact || '--'}</span></td>
-                    <td style="color:#cbd5e1;" title="${(ev.title || '').replace(/"/g, '&quot;')}">${translateEventTitle(ev.title)}</td>
-                    <td style="color:#fff;">${ev.forecast || '--'}</td>
-                    <td style="color: var(--text-muted);">${ev.previous || '--'}</td>
+                    <td style="color:#cbd5e1;" title="${(ev.title || '').replace(/"/g, '&quot;')}">${translateEventTitle(ev.title)}${expoTxt}</td>
+                    <td data-label="Prévision" style="color:#fff;">${ev.forecast || '--'}</td>
+                    <td data-label="Précédent" style="color: var(--text-muted);">${ev.previous || '--'}</td>
                 </tr>
-            `;
-        }).join('');
+            `);
+        });
+        if (jourCourant === auj && !marqueurPose) lignes.push(marqueur);
+        body.innerHTML = lignes.join('');
     }
 
     function pushCalendarToast(ev, minsLeft) {
@@ -5136,7 +5230,7 @@
         return `dans ${Math.floor(h / 24)} j ${h % 24} h`;
     }
 
-    function updateSummaryStrip() {
+    function updateSummaryStripCore() {
         const rEl = document.getElementById('sum-r');
         if (!rEl) return;
 
@@ -5179,7 +5273,7 @@
         xEl.removeAttribute('title');
         if (!calendarData || calendarData.length === 0) {
             cEl.textContent = '--';
-            tEl.textContent = (calendarSourceDown || calendarLoadError) ? 'Calendrier indisponible (source injoignable)' : 'Calendrier en chargement…';
+            tEl.textContent = (calendarSourceDown || calendarLoadError) ? 'Calendrier indisponible (source injoignable)' : (calendarLoaded ? 'Aucune annonce enregistrée cette semaine' : 'Calendrier en chargement…');
             return;
         }
         const ev = calendarData.find(e => e.impact === 'High' && minutesUntil(e.date) > -5);   // -5 min : encore « à l'instant »
@@ -5201,6 +5295,17 @@
             xEl.textContent = 'Aucun actif suivi n\'est exposé à cette devise';
         }
     }
+
+    // Bandeau « Prochaine annonce forte » de l'onglet Calendrier : recopie celui du Scanner (une seule logique, deux affichages).
+    function updateCalendarBanner() {
+        const box = document.getElementById('cal-next'), src = document.getElementById('sum-news');
+        if (!box || !src) return;
+        box.className = 'cal-next' + (src.classList.contains('now') ? ' now' : (src.classList.contains('soon') ? ' soon' : ''));
+        document.getElementById('cal-next-count').textContent = document.getElementById('sum-news-count').textContent;
+        document.getElementById('cal-next-title').textContent = document.getElementById('sum-news-title').textContent;
+        document.getElementById('cal-next-expose').textContent = document.getElementById('sum-news-expose').textContent;
+    }
+    function updateSummaryStrip() { updateSummaryStripCore(); updateCalendarBanner(); }
 
     /* ===================== PROTECTION NEWS (CALENDRIER <-> CARTES) ===================== */
     const ASSET_CURRENCIES = {
@@ -5312,6 +5417,7 @@
     initBackground();
     updateSummaryStrip();
     refreshClosedCards();
+    setInterval(() => { if (document.getElementById('view-calendar').style.display !== 'none' && calendarData.length) renderCalendarTable(); }, 60 * 1000);   // repère « maintenant »
     setInterval(refreshClosedCards, 60 * 1000);   // repli des cartes clôturées depuis plus de 2 h
     setInterval(updateSummaryStrip, 5 * 1000); // bandeau de synthèse : compte à rebours, R du jour (calcul local, très léger)
     setInterval(updateNewsCardProtection, 30 * 1000); // Protection news vérifiée toutes les 30s
