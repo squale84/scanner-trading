@@ -1042,6 +1042,28 @@
         .modal-panel { height: 92vh; }
     }
 
+    /* ============ NAVIGATION DU BAS (téléphone) ============
+       Les trois onglets sont à portée de pouce, fixés en bas ; les onglets du haut sont masqués sur téléphone (pas de doublon).
+       Couche 200 : sous les fenêtres modales (250), au-dessus de la barre du haut (100). */
+    .bottom-nav { display: none; }
+    @media (max-width: 760px) {
+        .view-tabs { display: none; }
+        body { padding-bottom: 92px; }
+        .bottom-nav {
+            display: flex; position: fixed; left: 0; right: 0; bottom: 0; z-index: 200;
+            background: rgba(10, 13, 19, 0.96); border-top: 1px solid var(--border-color);
+            padding: 6px 8px calc(6px + env(safe-area-inset-bottom, 0px));
+            -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
+        }
+        .bn-item {
+            flex: 1; display: flex; flex-direction: column; align-items: center; gap: 2px;
+            background: none; border: none; border-top: 2px solid transparent; border-radius: 0;
+            padding: 6px 4px 4px; cursor: pointer; font-family: var(--font-ui); font-size: 11px; font-weight: 700; color: var(--text-muted);
+        }
+        .bn-ico { font-size: 19px; line-height: 1.1; }
+        .bn-item.active { color: var(--accent-blue); border-top-color: var(--accent-blue); }
+    }
+
     /* ============ CALENDRIER : bandeau, jours, repère « maintenant » ============ */
     .cal-next {
         background: linear-gradient(180deg, var(--bg-card-hover) 0%, var(--bg-card) 100%);
@@ -1148,6 +1170,7 @@
        z-index négatif : derrière tout le contenu, jamais cliquable. Les cartes sont opaques : le décor se voit surtout
        dans les marges et à travers la barre du haut. */
     #bg-candles { position: fixed; top: 0; left: 0; width: 100%; height: 100%; z-index: -1; pointer-events: none; }
+    @media (max-width: 760px) { #bg-candles { opacity: 0.55; } }   /* petit écran : décor plus discret, texte plus lisible */
 
     /* ============ MENTION DE COPYRIGHT ============ */
     .site-footer {
@@ -1531,6 +1554,12 @@
     </div><!-- /view-calendar -->
 
 </div>
+
+<nav class="bottom-nav" id="bottom-nav" aria-label="Navigation principale">
+    <button class="bn-item active" id="bn-scanner" onclick="switchView('scanner')"><span class="bn-ico">🖥️</span><span>Scanner</span></button>
+    <button class="bn-item" id="bn-journal" onclick="switchView('journal')"><span class="bn-ico">📔</span><span>Journal</span></button>
+    <button class="bn-item" id="bn-calendar" onclick="switchView('calendar')"><span class="bn-ico">📅</span><span>Calendrier</span></button>
+</nav>
 
 <footer class="site-footer">
     <div class="site-footer-main">© 2026 Tedesco Stéphane. Tous droits réservés.</div>
@@ -2758,6 +2787,7 @@
         document.getElementById('tab-scanner').classList.toggle('active', view === 'scanner');
         document.getElementById('tab-journal').classList.toggle('active', view === 'journal');
         document.getElementById('tab-calendar').classList.toggle('active', view === 'calendar');
+        ['scanner', 'journal', 'calendar'].forEach(v => { const b = document.getElementById('bn-' + v); if (b) b.classList.toggle('active', v === view); });
         try { localStorage.setItem('ictRadarView', view); } catch (e) {}
         if (view === 'journal') { drawEquityCurve(); drawWinRateGauge(); }
         if (view === 'calendar' && calendarData.length === 0) loadCalendar();
