@@ -112,3 +112,23 @@ Optionnels : intégration au skill `audit-journal`, affichage dashboard (phase 2
 3. Accord pour une lecture seule de Neon (ou export manuel de `/api/journal`).
 4. Méthode B (blocs d'un jour) comme référence : d'accord ?
 5. Rapport seulement, ou aussi intégré à `audit-journal` plus tard.
+
+## 11. Décisions prises et évolutions (25/10/2026)
+
+Décisions de Stéphane (« d'accord pour tout ») :
+1. `BE_HIT` : compté comme trade nul (R = 0), comme le fait déjà `_compute_r_multiple`. Absent du journal à ce jour.
+2. Fichiers dans `outils/` (outil) et `tests/` (tests).
+3. Tirage par blocs d'un jour comme référence.
+4. Rapport seul pour l'instant (pas d'intégration à `audit-journal` ni au dashboard).
+
+Évolutions ajoutées à l'outil (toujours en lecture seule) :
+- **Qualité des données** : signale, sans rien modifier, les durées supérieures à 3 h, les entrées et sorties à la même
+  seconde, les `trade_id` de test probables (suffixe de moins de 12 chiffres), les sorties orphelines et les entrées sans sortie
+  depuis plus de 3 h (référence de date = dernière ligne du journal, jamais l'horloge).
+- **Motifs récurrents** (descriptif, aucune preuve) : SL touché en 30 minutes ou moins, trades ayant atteint +1 R avant de
+  finir en perte (le R maximal ne donne pas l'ordre des mouvements : plafond pour une règle break-even, à rejouer sur les
+  bougies M5), répartition par type de sortie.
+- Ventilations supplémentaires : type de setup, qualité, alignement H1 (« non évaluable » sous 30 trades par groupe).
+
+Reste à faire : lecture directe de Neon en lecture seule (évite l'export manuel), comparaison de deux versions,
+relecture des anomalies avec `audit-signaux-ict`.
