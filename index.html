@@ -4424,8 +4424,8 @@
         } else if (htfAligned === false) {
             items.push({
                 icon: '❌',
-                title: `Contre-Flux H1 (Reversal à contre-courant)`,
-                desc: `Signal à contre-tendance de la structure H1 : probabilité statistique réduite.`
+                title: `H1 non aligné (pas de soutien du flux H1)`,
+                desc: `Le Radar ne voit ni biais H1 ${isBuy ? 'haussier' : 'baissier'} ni zone H1 testée dans le sens du trade : le flux supérieur est neutre ou contraire. Signal sans appui de l'H1, pas forcément à contre-tendance.`
             });
         } else {
             items.push({
@@ -4516,7 +4516,7 @@
             if (!pdOk) flaws.push(`entrée à contre-courant de la zone ${pdZone}`);
             if (!isInstLiq) flaws.push('absence de vrai balayage de liquidité institutionnelle');
             if (!inKz) flaws.push('trade exécuté hors Killzone');
-            if (htfAligned === false) flaws.push('lutte directe contre le flux H1');
+            if (htfAligned === false) flaws.push('pas de soutien du flux H1 (neutre ou contraire)');
 
             const flawTxt = flaws.length ? flaws.join(', ') : 'invalidation par volatilité de marché';
             pmText.innerHTML = `<strong>Invalidation rapide :</strong> Le trade n'a jamais développé de momentum favorable (MFE max de ${bestR > 0 ? '+' + bestR.toFixed(2) + 'R' : '0R'}). Faiblesses constatées : <em>${flawTxt}</em>.`;
