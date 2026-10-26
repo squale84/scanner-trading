@@ -1340,7 +1340,7 @@
     <div class="section-container" id="sec-crypto" style="margin-top: 8px;">
         <div class="section-header">
             <div class="section-tag tag-crypto"><span>⚡ MARCHÉ CRYPTOMONNAIES (24/7)</span></div>
-            <span class="count-pill">5 ACTIFS</span>
+            <span class="count-pill">9 ACTIFS</span>
         </div>
         <div class="grid" id="grid-crypto"></div>
     </div>
@@ -1787,7 +1787,11 @@
             { sym: "ETHUSD",   label: "ETHEREUM / USD" },
             { sym: "SOLUSD",   label: "SOLANA / USD" },
             { sym: "ADAUSDT",  label: "CARDANO / USDT" },
-            { sym: "DOGEUSDT", label: "DOGECOIN / USDT" }
+            { sym: "DOGEUSDT", label: "DOGECOIN / USDT" },
+            { sym: "AVAXUSDT", label: "AVALANCHE / USDT" },
+            { sym: "BCHUSD",   label: "BITCOIN CASH / USD" },
+            { sym: "LTCUSDT",  label: "LITECOIN / USDT" },
+            { sym: "TRUMPU",   label: "TRUMP (BINANCE)" }
         ]
     };
 
@@ -1805,7 +1809,11 @@
         ETHUSD: "BINANCE:ETHUSDT",
         SOLUSD: "BINANCE:SOLUSDT",
         ADAUSDT: "BINANCE:ADAUSDT",
-        DOGEUSDT: "BINANCE:DOGEUSDT"
+        DOGEUSDT: "BINANCE:DOGEUSDT",
+        AVAXUSDT: "BINANCE:AVAXUSDT",
+        BCHUSD: "PEPPERSTONE:BCHUSD",
+        LTCUSDT: "BINANCE:LTCUSDT",
+        TRUMPU: "BINANCE:TRUMPU"
     };
 
     // Mise en page TradingView de l'utilisateur, avec l'indicateur Radar chargé : le bouton
@@ -2917,7 +2925,8 @@
     const SPOKEN_NAMES = {
         GOLD: "L'or", US100: 'Le Nasdaq', SPX500: 'Le S&P 500', GER40: 'Le DAX', FR40: 'Le CAC 40',
         USOIL: 'Le pétrole', NATGAS: 'Le gaz naturel', EURUSD: 'Euro dollar', USDJPY: 'Dollar yen',
-        BTCUSD: 'Le bitcoin', ETHUSD: "L'ether", SOLUSD: 'Solana', ADAUSDT: 'Cardano', DOGEUSDT: 'Dogecoin'
+        BTCUSD: 'Le bitcoin', ETHUSD: "L'ether", SOLUSD: 'Solana', ADAUSDT: 'Cardano', DOGEUSDT: 'Dogecoin',
+        AVAXUSDT: 'Avalanche', BCHUSD: 'Bitcoin Cash', LTCUSDT: 'Litecoin', TRUMPU: 'Trump'
     };
     // Prix lu à voix haute : la virgule est dite, et les décimales d'un petit prix ou de plus de 2 chiffres sont lues chiffre
     // par chiffre (« zéro virgule 0 7 7 7 3 »), bien plus clair qu'un grand nombre. Valeur non numérique : rien n'est dit.
@@ -5352,7 +5361,11 @@
         ETHUSD:   ["USD"],
         SOLUSD:   ["USD"],
         ADAUSDT:  ["USD"],
-        DOGEUSDT: ["USD"]
+        DOGEUSDT: ["USD"],
+        AVAXUSDT: ["USD"],
+        BCHUSD:   ["USD"],
+        LTCUSDT:  ["USD"],
+        TRUMPU:   ["USD"]
     };
 
     const newsVoiceAlerted = new Set();
