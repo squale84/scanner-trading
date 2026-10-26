@@ -2577,6 +2577,7 @@
                     <span class="pos-r" style="color:${rColor};">${rTxt}${prog.valid ? ` · ${prog.pct}% vers TP` : ''}</span>
                 </div>
                 ${gaugeHtml(pos)}
+                ${(() => { const c = conseilStopSuiveur(pos); return c ? `<div class="pos-note" style="color: var(--accent-gold); font-weight: 700;">🎯 TP${c.numero} atteint → stop suiveur conseillé : ${c.consigne}</div>` : ''; })()}
                 <div class="pos-note${stale ? ' stale' : ''}">Dernier prix ${formatDisplay(pos.last_price)} · reçu ${upd ? upd.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }) : '--'}${stale ? ` · ⚠ aucune mise à jour depuis ${Math.round(ageMin)} min` : ''}</div>
             </div>`;
         }).join('');
@@ -2593,7 +2594,78 @@
         }
         serverPositions = positions || {};
         renderOpenPositions();
+        verifierObjectifsAtteints(serverPositions, false);
+        objectifsInitialises = true;
         return true;
+    }
+
+    /* ===================== ALERTE « OBJECTIF ATTEINT » + STOP SUIVEUR (TP1, TP2, TP3) =====================
+       Quand une position en cours atteint un objectif intermédiaire, la page prévient (message + voix) et indique où remonter le stop :
+         TP1 atteint -> stop à l'entrée ; TP2 atteint -> stop sur TP1 ; TP3 atteint -> stop sur TP2.
+       C'est un CONSEIL : le site ne déplace aucun stop (l'ordre est à passer chez ton courtier). Le dernier objectif (TP final)
+       n'est pas concerné : le Radar annonce déjà la sortie. L'atteinte est lue sur le meilleur R de la position (clôtures M5 du Radar).
+       Chaque objectif n'est annoncé qu'une fois par trade, même après un F5 ; au premier chargement de la page, les objectifs déjà
+       atteints sont notés sans être annoncés. */
+    const OBJECTIFS_CLE = 'ictRadarObjectifsAnnonces';
+    const objectifsMemoire = new Set();
+    let objectifsInitialises = false;
+    function objectifDejaAnnonce(cle) {
+        if (objectifsMemoire.has(cle)) return true;
+        try { if ((JSON.parse(localStorage.getItem(OBJECTIFS_CLE) || '{}') || {})[cle]) { objectifsMemoire.add(cle); return true; } } catch (e) {}
+        return false;
+    }
+    function marquerObjectifAnnonce(cle) {
+        objectifsMemoire.add(cle);
+        try {
+            const maintenant = Date.now();
+            let m = {};
+            try { m = JSON.parse(localStorage.getItem(OBJECTIFS_CLE) || '{}') || {}; } catch (e) { m = {}; }
+            Object.keys(m).forEach(k => { if (maintenant - m[k] > 3 * 86400000) delete m[k]; });   // purge après 3 jours
+            m[cle] = maintenant;
+            localStorage.setItem(OBJECTIFS_CLE, JSON.stringify(m));
+        } catch (e) {}
+    }
+    function ciblesIntermediaires(pos) {
+        const t = (Array.isArray(pos.targets) ? pos.targets : []).map(x => ({ r: parseFloat(x.r), p: x.p })).filter(x => isFinite(x.r)).sort((a, b) => a.r - b.r);
+        return t.slice(0, Math.min(t.length - 1, 3));   // TP1..TP3, jamais le dernier objectif
+    }
+    // Plus haut objectif intermédiaire atteint (1..3) et consigne de stop ; null si aucun.
+    function conseilStopSuiveur(pos) {
+        const cibles = ciblesIntermediaires(pos);
+        const best = Number(pos.best_r) || 0;
+        let h = -1;
+        cibles.forEach((c, i) => { if (best >= c.r) h = i; });
+        if (h < 0) return null;
+        const consigne = h === 0 ? `à l'entrée (${formatDisplay(pos.entry_price)})` : `sur le TP${h} (${formatDisplay(cibles[h - 1].p)})`;
+        const voix = h === 0 ? `à l'entrée, ${spokenNumber(String(pos.entry_price))}` : `sur le T P ${h}, ${spokenNumber(String(cibles[h - 1].p))}`;
+        return { numero: h + 1, consigne, voix };
+    }
+    function verifierObjectifsAtteints(positions, test) {
+        Object.values(positions || {}).forEach(pos => {
+            const cibles = ciblesIntermediaires(pos);
+            const c = conseilStopSuiveur(pos);
+            if (!c) return;
+            const id = test ? `test|${pos.symbol}|${pos.opened_at}` : (pos.trade_id || `${pos.symbol}|${pos.opened_at}`);
+            let nouveau = false;
+            for (let i = 0; i < c.numero; i++) {   // tous les objectifs atteints sont notés ; un seul message pour le plus haut
+                const cle = `objectif|${id}|${i + 1}`;
+                if (!objectifDejaAnnonce(cle)) { marquerObjectifAnnonce(cle); nouveau = true; }
+            }
+            if (!nouveau || (!objectifsInitialises && !test)) return;   // premier chargement : noté sans annonce
+            const nom = SPOKEN_NAMES[pos.symbol] || pos.symbol;
+            const texte = `${test ? 'Test : ' : ''}TP${c.numero} atteint sur ${pos.symbol} : stop suiveur ${c.consigne}`;
+            const stack = document.getElementById('toast-stack');
+            if (stack) {
+                const toast = document.createElement('div');
+                toast.className = 'toast tp';
+                toast.innerHTML = `<div class="toast-top"><span class="toast-sym">🎯 ${pos.symbol}</span><span class="toast-time">${formatTime()}</span></div>
+                    <div class="toast-msg"></div><div class="toast-hint">Conseil : le site ne déplace aucun stop, à toi de le monter.</div>`;
+                toast.querySelector('.toast-msg').textContent = `${test ? '(Test) ' : ''}TP${c.numero} atteint : monte ton stop ${c.consigne}`;
+                stack.appendChild(toast);
+                setTimeout(() => { toast.classList.add('closing'); setTimeout(() => toast.remove(), 250); }, 12000);
+            }
+            triggerNotification(pos.symbol, null, `${test ? 'Test. ' : ''}${nom.replace(/^(Le |L')/, m => m.toLowerCase())} : objectif ${c.numero} atteint. Monte ton stop suiveur ${c.voix}.`);
+        });
     }
 
     async function loadPositionsFromServer() {
@@ -4916,6 +4988,7 @@
             testPositions[sym].best_r = Math.max(testPositions[sym].best_r, r);
             testPositions[sym].last_update = new Date().toISOString();
             renderOpenPositions();
+            verifierObjectifsAtteints(testPositions, true);
             processData({ symbol: sym, status: "PRICE_UPDATE", direction: dir, quality: grade, rr: "3.4", ...levels, current_price: px }, { local: true });
         }, delay);
         priceUpdate(-0.4, 2500);  // mouvement défavorable
