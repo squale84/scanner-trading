@@ -189,6 +189,22 @@ def _tf_propre(v):
     t = str(v).strip().upper() if v is not None else ""
     return t if re.fullmatch(r"[A-Z]{1,2}[0-9]{1,3}", t) else None
 
+# Le Radar envoie le nom du graphique TradingView (syminfo.ticker), qui diffère parfois du symbole des cartes du
+# site : sur le graphique Solana il vaut « SOLU » alors que la carte est « SOLUSD » (sans carte, le front ignore l'alerte).
+SYMBOLES_ALIAS = {"SOLU": "SOLUSD"}
+
+def _symbole_canonique(symbole):
+    return SYMBOLES_ALIAS.get(symbole, symbole)
+
+def _reprendre_position_sous_alias(ancien, nouveau):
+    """Un trade ouvert avant l'alias reste sous l'ancien nom : on le renomme pour que ses mises à jour et sa clôture le retrouvent."""
+    if ancien == nouveau or ancien not in open_positions or nouveau in open_positions:
+        return
+    pos = open_positions.pop(ancien)
+    pos["symbol"] = nouveau
+    open_positions[nouveau] = pos
+    _save_positions_to_disk(nouveau)
+
 def _parse_num(v):
     try:
         return float(v)
@@ -1231,9 +1247,12 @@ async def receive_webhook(request: Request):
             return JSONResponse(status_code=400, content={"error": "JSON invalide"})
 
     _sync_storage()
-    symbol = data.get("symbol", "UNKNOWN").upper()
+    symbol_recu = data.get("symbol", "UNKNOWN").upper()
+    symbol = _symbole_canonique(symbol_recu)
+    data["symbol"] = symbol
     status = data.get("status", "INFO")
     direction = data.get("direction", "NONE")
+    _reprendre_position_sous_alias(symbol_recu, symbol)
 
     if status == "EVENT":
         global market_events_version
