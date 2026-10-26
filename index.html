@@ -1208,6 +1208,7 @@
         <select class="btn-nav" id="voice-select" onchange="onVoiceChange()" aria-label="Voix des annonces" title="Voix des annonces vocales (signaux, macros). Le choix est mémorisé dans ce navigateur ; la liste dépend des voix françaises installées sur cet appareil.">
             <option value="">🗣️ Voix par défaut</option>
         </select>
+        <button class="btn-nav" id="voice-test" onclick="testerVoix()" title="Dit une phrase test et indique à l'écran si la voix part ou pourquoi elle ne part pas (utile sur téléphone).">🔈 Test voix</button>
         <button class="btn-nav" onclick="openQrModal()">📱 QR Mobile</button>
         <button class="btn-nav" id="bg-toggle" onclick="toggleBackground()" title="Affiche ou masque le décor de bougies en arrière-plan (choix mémorisé dans ce navigateur).">🕯️ Fond ON</button>
         <button class="btn-nav" id="admin-lock-btn" onclick="adminLogout()" style="display:none;" title="Ferme la session administrateur sur cet appareil : le Reset redemandera le code.">🔒 Verrouiller</button>
@@ -2743,6 +2744,7 @@
             utterance.pitch = 1.0;
             const frVoice = voixChoisie();
             if (frVoice) utterance.voice = frVoice;
+            surveillerVoix(utterance, false);
             window.speechSynthesis.speak(utterance);
         } catch (e) {
             console.warn("Erreur synthèse vocale:", e);
@@ -2784,14 +2786,67 @@
         const sel = document.getElementById('voice-select');
         try { localStorage.setItem(VOIX_CLE, sel.value); } catch (e) {}
         if (!('speechSynthesis' in window)) return;
-        try {   // essai immédiat avec la voix choisie
+        testerVoix();   // essai immédiat avec la voix choisie
+    }
+
+    /* Diagnostic de la voix : au lieu d'un silence sans explication (fréquent sur téléphone), un message à l'écran dit si la voix part
+       ou pourquoi elle ne part pas. */
+    let dernierMessageVoix = 0;
+    function messageVoix(texte, probleme) {
+        const maintenant = Date.now();
+        if (probleme) {
+            if (maintenant - dernierMessageVoix < 30000) return;   // pas de rafale de messages
+            dernierMessageVoix = maintenant;
+        }
+        const stack = document.getElementById('toast-stack');
+        if (!stack) return;
+        const t = document.createElement('div');
+        t.className = 'toast ' + (probleme ? 'sl' : 'tp');
+        t.innerHTML = '<div class="toast-top"><span class="toast-sym">🔈 Voix</span></div><div class="toast-msg"></div>';
+        t.querySelector('.toast-msg').textContent = texte;
+        stack.appendChild(t);
+        setTimeout(() => { t.classList.add('closing'); setTimeout(() => t.remove(), 250); }, probleme ? 14000 : 6000);
+    }
+    function expliquerErreurVoix(code) {
+        if (code === 'not-allowed') return 'Le navigateur bloque le son tant que tu n’as pas touché la page : touche l’écran une fois, puis appuie sur « Test voix ».';
+        if (code === 'language-unavailable' || code === 'voice-unavailable' || code === 'synthesis-unavailable') return 'Aucune voix française utilisable sur cet appareil : installe la voix française dans les réglages de synthèse vocale du téléphone.';
+        if (code === 'audio-busy' || code === 'audio-hardware') return 'La sortie audio est occupée ou indisponible (appel, autre application) : réessaie.';
+        return 'La voix a échoué (' + (code || 'erreur inconnue') + ').';
+    }
+    function surveillerVoix(u, test) {
+        let demarre = false;
+        u.onstart = () => {
+            demarre = true;
+            if (test) messageVoix('Voix lancée : ' + (u.voice ? u.voice.name : 'voix par défaut du téléphone') + '. Si tu n’entends rien, monte le volume média (pas celui des sonneries).', false);
+        };
+        u.onerror = (e) => {
+            if (e.error === 'interrupted' || e.error === 'canceled') return;   // coupée volontairement par une annonce suivante
+            messageVoix(expliquerErreurVoix(e.error), true);
+        };
+        if (test) setTimeout(() => {
+            if (!demarre) messageVoix('La voix ne démarre pas (aucun son produit). Vérifie qu’une voix française est installée dans la synthèse vocale du téléphone, puis recharge la page et réessaie.', true);
+        }, 3500);
+    }
+    function testerVoix() {
+        if (!('speechSynthesis' in window)) {
+            messageVoix('Ce navigateur n’a pas de synthèse vocale : essaie Chrome ou Samsung Internet.', true);
+            return;
+        }
+        const fr = voixFrancaises().length;
+        if (!fr) messageVoix('Aucune voix française trouvée par le navigateur (' + window.speechSynthesis.getVoices().length + ' voix au total). La voix par défaut du téléphone sera tentée.', true);
+        try {
             window.speechSynthesis.cancel();
             const u = new SpeechSynthesisUtterance('Signal d’achat sur le Nasdaq. Entrée, stop, objectif.');
             u.lang = 'fr-FR';
             const v = voixChoisie();
             if (v) u.voice = v;
-            window.speechSynthesis.speak(u);
-        } catch (e) {}
+            surveillerVoix(u, true);
+            setTimeout(() => {   // petit délai après cancel() : certains Chrome Android ignorent un speak() immédiat
+                try { window.speechSynthesis.resume(); window.speechSynthesis.speak(u); } catch (e) { messageVoix('La voix a échoué (' + e.message + ').', true); }
+            }, 80);
+        } catch (e) {
+            messageVoix('La voix a échoué (' + e.message + ').', true);
+        }
     }
 
     if ('speechSynthesis' in window) {
@@ -2994,6 +3049,7 @@
             const frVoice = voixChoisie();
             if (frVoice) utterance.voice = frVoice;
             utterance.rate = detail ? 1.0 : 1.05;   // annonce détaillée (prix) : un peu plus lente pour bien entendre les chiffres
+            surveillerVoix(utterance, false);
             window.speechSynthesis.speak(utterance);
         }
     }
