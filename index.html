@@ -1205,6 +1205,9 @@
     <div class="status-section">
         <button class="btn-nav" onclick="simulateSignal()">⚡ Signal test</button>
         <button class="btn-nav" id="audio-toggle" onclick="toggleAudio()">🔊 Audio ON</button>
+        <select class="btn-nav" id="voice-select" onchange="onVoiceChange()" aria-label="Voix des annonces" title="Voix des annonces vocales (signaux, macros). Le choix est mémorisé dans ce navigateur ; la liste dépend des voix françaises installées sur cet appareil.">
+            <option value="">🗣️ Voix par défaut</option>
+        </select>
         <button class="btn-nav" onclick="openQrModal()">📱 QR Mobile</button>
         <button class="btn-nav" id="bg-toggle" onclick="toggleBackground()" title="Affiche ou masque le décor de bougies en arrière-plan (choix mémorisé dans ce navigateur).">🕯️ Fond ON</button>
         <button class="btn-nav" id="admin-lock-btn" onclick="adminLogout()" style="display:none;" title="Ferme la session administrateur sur cet appareil : le Reset redemandera le code.">🔒 Verrouiller</button>
@@ -2674,8 +2677,7 @@
             utterance.lang = "fr-FR";
             utterance.rate = 1.0;
             utterance.pitch = 1.0;
-            const voices = window.speechSynthesis.getVoices();
-            const frVoice = voices.find(v => v.lang && v.lang.startsWith("fr"));
+            const frVoice = voixChoisie();
             if (frVoice) utterance.voice = frVoice;
             window.speechSynthesis.speak(utterance);
         } catch (e) {
@@ -2683,10 +2685,57 @@
         }
     }
 
+    /* ===================== CHOIX DE LA VOIX (annonces de signaux et macros) ===================== */
+    // Voix françaises du navigateur ; celle choisie est mémorisée dans ce navigateur (nom exact). Introuvable (voix désinstallée,
+    // autre appareil) : retour à la première voix française, comme avant.
+    const VOIX_CLE = 'ictRadarVoice';
+    function voixFrancaises() {
+        try { return window.speechSynthesis.getVoices().filter(v => v.lang && v.lang.toLowerCase().startsWith('fr')); } catch (e) { return []; }
+    }
+    function voixChoisie() {
+        const fr = voixFrancaises();
+        let nom = '';
+        try { nom = localStorage.getItem(VOIX_CLE) || ''; } catch (e) {}
+        return fr.find(v => v.name === nom) || fr[0] || null;
+    }
+    function remplirChoixVoix() {
+        const sel = document.getElementById('voice-select');
+        if (!sel) return;
+        let nom = '';
+        try { nom = localStorage.getItem(VOIX_CLE) || ''; } catch (e) {}
+        const fr = voixFrancaises();
+        sel.innerHTML = '';
+        const defaut = document.createElement('option');
+        defaut.value = ''; defaut.textContent = '🗣️ Voix par défaut';
+        sel.appendChild(defaut);
+        fr.forEach(v => {
+            const o = document.createElement('option');
+            o.value = v.name;
+            o.textContent = '🗣️ ' + v.name.replace(/^Microsoft\s+/i, '').replace(/\s+-\s+French.*$/i, '') + (v.localService ? '' : ' (en ligne)');
+            sel.appendChild(o);
+        });
+        sel.value = fr.some(v => v.name === nom) ? nom : '';
+    }
+    function onVoiceChange() {
+        const sel = document.getElementById('voice-select');
+        try { localStorage.setItem(VOIX_CLE, sel.value); } catch (e) {}
+        if (!('speechSynthesis' in window)) return;
+        try {   // essai immédiat avec la voix choisie
+            window.speechSynthesis.cancel();
+            const u = new SpeechSynthesisUtterance('Signal d’achat sur le Nasdaq. Entrée, stop, objectif.');
+            u.lang = 'fr-FR';
+            const v = voixChoisie();
+            if (v) u.voice = v;
+            window.speechSynthesis.speak(u);
+        } catch (e) {}
+    }
+
     if ('speechSynthesis' in window) {
         window.speechSynthesis.onvoiceschanged = () => {
             try { window.speechSynthesis.getVoices(); } catch (e) {}
+            remplirChoixVoix();
         };
+        remplirChoixVoix();
     }
 
     function updateIctMacros() {
@@ -2878,7 +2927,7 @@
         if ('speechSynthesis' in window) {
             const utterance = new SpeechSynthesisUtterance(spokenMessage(symbol, dir, status, detail));
             utterance.lang = 'fr-FR';
-            const frVoice = window.speechSynthesis.getVoices().find(v => v.lang && v.lang.toLowerCase().startsWith('fr'));
+            const frVoice = voixChoisie();
             if (frVoice) utterance.voice = frVoice;
             utterance.rate = detail ? 1.0 : 1.05;   // annonce détaillée (prix) : un peu plus lente pour bien entendre les chiffres
             window.speechSynthesis.speak(utterance);
