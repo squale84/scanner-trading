@@ -316,6 +316,9 @@ def _new_position(symbol, status, data, now, recovered=False):
         "auto_filtered": data.get("auto_filtered", False),
         "auto_reason": data.get("auto_reason"),
         "targets": _clean_targets(data),
+        # Dernier objectif intermédiaire (TP1..TP3) déjà notifié sur Telegram. None = position reprise ou antérieure à cette
+        # fonction : le premier calcul note l'état sans rien envoyer (jamais d'alerte pour un objectif atteint avant).
+        "tp_notifie": None if recovered else 0,
     }
 
 def _append_journal(row):
@@ -351,6 +354,7 @@ def _record_journal_event(symbol, status, direction, data):
         r_now = _r_at_price(pos, pos["last_price"])
         if r_now is not None:
             pos["best_r"] = max(pos.get("best_r") or 0.0, r_now)
+        _verifier_objectif_notifie(pos)
         _save_positions_to_disk(symbol)
         return []
 
@@ -1304,6 +1308,127 @@ async def reset_card(data: ResetRequest, request: Request):
     print(f"🔄 [{sym}] Carte remise en STANDBY.")
     return _persistence_response(sym, persisted)
 
+# ---------------------------------------------------------------------------------------------------------------------------
+# Notifications Telegram (téléphone verrouillé, page fermée). Le serveur n'envoie que ce qui compte : une entrée, un objectif
+# intermédiaire atteint (TP1, TP2, TP3, avec le conseil de stop suiveur) et une sortie. JAMAIS les mises à jour de prix de 5 min.
+# Réglage par variables d'environnement du serveur (jamais dans le code ni dans Git) : TELEGRAM_BOT_TOKEN et TELEGRAM_CHAT_ID.
+# Absentes : la fonction est désactivée. Une panne de Telegram ne bloque jamais le webhook, et le jeton n'est jamais écrit
+# dans les journaux (seul un motif d'échec court est affiché).
+# ---------------------------------------------------------------------------------------------------------------------------
+_notifs_en_attente: List[str] = []
+_taches_notifications: set = set()
+_dernier_test_telegram = 0.0
+
+def _telegram_config():
+    jeton = (os.environ.get("TELEGRAM_BOT_TOKEN") or "").strip()
+    chat = (os.environ.get("TELEGRAM_CHAT_ID") or "").strip()
+    return (jeton, chat) if jeton and chat else None
+
+async def _telegram_envoyer(texte):
+    """Envoie un message. Renvoie (ok, motif) ; ne lève jamais d'exception ; le jeton ne sort jamais d'ici."""
+    config = _telegram_config()
+    if config is None:
+        return False, "non_configure"
+    jeton, chat = config
+    try:
+        async with httpx.AsyncClient(timeout=6.0) as client:
+            rep = await client.post(f"https://api.telegram.org/bot{jeton}/sendMessage",
+                                    json={"chat_id": chat, "text": str(texte)[:3500], "disable_web_page_preview": True})
+        return (True, "ok") if rep.status_code == 200 else (False, f"http_{rep.status_code}")
+    except Exception as e:  # noqa: BLE001 - seul le nom de l'erreur est gardé : son texte peut contenir l'adresse (donc le jeton)
+        return False, type(e).__name__
+
+async def _envoyer_notifications(textes):
+    for t in textes:
+        ok, motif = await _telegram_envoyer(t)
+        if not ok:
+            print(f"📨 Telegram : message non envoyé ({motif})")
+
+def _lancer_notifications(textes):
+    """Envoi en arrière-plan : le webhook répond tout de suite, quelle que soit la vitesse de Telegram."""
+    if not textes or _telegram_config() is None:
+        return
+    tache = asyncio.ensure_future(_envoyer_notifications(list(textes)))
+    _taches_notifications.add(tache)
+    tache.add_done_callback(_taches_notifications.discard)
+
+def _fmt_r(r):
+    return f"{r:+.2f}".replace(".", ",") + " R"
+
+def _sens_texte(direction):
+    return "▲ ACHAT" if direction == "BUY" else ("▼ VENTE" if direction == "SELL" else "—")
+
+def _texte_entree(row):
+    tf = f" ({row['tf']})" if row.get("tf") else ""
+    return (f"{_sens_texte(row.get('direction'))} {row.get('symbol')}{tf}\n{row.get('status')}\n"
+            f"Entrée {row.get('entry_price')} · Stop {row.get('sl_price')} · Objectif {row.get('tp_price')}\n"
+            f"Grade {row.get('quality', '--')} · R:R {row.get('rr', '--')}")
+
+def _texte_sortie(row):
+    titre = {"TP_HIT": "🟢 TP touché", "SL_HIT": "🔴 SL touché", "EXPIRED": "⏱ Expiré", "BE_HIT": "⚪ Break-even touché"}.get(row.get("status"), row.get("status"))
+    r = row.get("r_multiple")
+    resultat = _fmt_r(r) if isinstance(r, (int, float)) else "indisponible"
+    return f"{titre} — {row.get('symbol')} ({_sens_texte(row.get('direction'))})\nRésultat : {resultat}"
+
+def _textes_pour_lignes(lignes):
+    textes = []
+    for row in lignes:
+        if row.get("kind") == "entry":
+            textes.append(_texte_entree(row))
+        elif row.get("kind") == "exit" and row.get("status") in ("TP_HIT", "SL_HIT", "EXPIRED", "BE_HIT"):
+            textes.append(_texte_sortie(row))
+    return textes
+
+def _cibles_intermediaires(pos):
+    """TP1..TP3 triés par R croissant, jamais le dernier objectif (la sortie finale est déjà notifiée)."""
+    cibles = []
+    for t in (pos.get("targets") or []):
+        r, p = _parse_num(t.get("r")), t.get("p")
+        if r is not None and p is not None:
+            cibles.append((r, p))
+    cibles.sort(key=lambda c: c[0])
+    return cibles[:max(0, min(len(cibles) - 1, 3))]
+
+def _verifier_objectif_notifie(pos):
+    """Met en file un message quand un objectif intermédiaire vient d'être atteint (une seule fois par objectif et par trade).
+    Appelée avant l'enregistrement de la position : la mémoire « tp_notifie » est donc sauvegardée avec elle (pas de doublon
+    après un redémarrage). Plusieurs objectifs franchis d'un coup : un seul message, pour le plus haut."""
+    cibles = _cibles_intermediaires(pos)
+    best = pos.get("best_r") or 0.0
+    atteint = 0
+    for i, (r, _p) in enumerate(cibles):
+        if best >= r:
+            atteint = i + 1
+    deja = pos.get("tp_notifie")
+    if deja is None:                      # position reprise ou antérieure : on note l'état, sans rien envoyer
+        pos["tp_notifie"] = atteint
+        return
+    if atteint <= deja:
+        return
+    pos["tp_notifie"] = atteint
+    conseil = (f"à l'entrée ({pos.get('entry_price')})" if atteint == 1 else f"sur le TP{atteint - 1} ({cibles[atteint - 2][1]})")
+    _notifs_en_attente.append(
+        f"🎯 {pos.get('symbol')} — TP{atteint} atteint ({_sens_texte(pos.get('direction'))}, meilleur moment {_fmt_r(best)})\n"
+        f"→ Monte ton stop suiveur {conseil}.\nEntrée {pos.get('entry_price')} · Stop actuel {pos.get('sl_price')}")
+
+def _vider_notifications():
+    textes = list(_notifs_en_attente)
+    _notifs_en_attente.clear()
+    return textes
+
+@app.post("/api/notifications/test")
+async def test_notification():
+    """Bouton « Test Telegram » de la page : un message fixe, au plus un toutes les 30 s (aucun texte venu de l'extérieur)."""
+    global _dernier_test_telegram
+    if _telegram_config() is None:
+        return {"ok": False, "raison": "non_configure"}
+    maintenant = time.time()
+    if maintenant - _dernier_test_telegram < 30:
+        return JSONResponse(status_code=429, content={"ok": False, "raison": "trop_rapide"})
+    _dernier_test_telegram = maintenant
+    ok, motif = await _telegram_envoyer("🔔 Test du scanner : si tu lis ce message, les notifications Telegram fonctionnent.")
+    return {"ok": ok, "raison": motif}
+
 @app.post("/webhook")
 async def receive_webhook(request: Request):
     try:
@@ -1358,7 +1483,9 @@ async def receive_webhook(request: Request):
     # Aucune attente (await) entre ce relevé et la fin des écritures : le compteur d'échecs ne peut
     # pas être modifié par une autre requête entre-temps.
     failures_before = storage.STATUS["write_failures"]
+    _notifs_en_attente.clear()
     added_rows = _record_journal_event(symbol, status, direction, data)
+    textes_telegram = _textes_pour_lignes(added_rows) + _vider_notifications()
     last_alerts[symbol] = {"time": datetime.utcnow().isoformat(), "status": status}
     _save_last_alerts(symbol)
     persisted = storage.STATUS["write_failures"] == failures_before
@@ -1373,6 +1500,7 @@ async def receive_webhook(request: Request):
     await manager.broadcast(_positions_message())
     await manager.broadcast(_last_alerts_message())
     await manager.broadcast(_storage_message())
+    _lancer_notifications(textes_telegram)
     return _persistence_response(symbol, persisted)
 
 @app.websocket("/ws")

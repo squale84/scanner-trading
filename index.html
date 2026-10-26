@@ -1233,6 +1233,7 @@
         </select>
         <button class="btn-nav" id="voice-test" onclick="testerVoix()" title="Dit une phrase test et indique à l'écran si la voix part ou pourquoi elle ne part pas (utile sur téléphone).">🔈 Test voix</button>
         <button class="btn-nav" onclick="openQrModal()">📱 QR Mobile</button>
+        <button class="btn-nav" id="telegram-test" onclick="testerTelegram()" title="Envoie un message de test sur ton Telegram (notifications sur téléphone verrouillé : entrée, objectifs TP1-TP3, sortie).">🔔 Test Telegram</button>
         <button class="btn-nav" id="bg-toggle" onclick="toggleBackground()" title="Affiche ou masque le décor de bougies en arrière-plan (choix mémorisé dans ce navigateur).">🕯️ Fond ON</button>
         <button class="btn-nav" id="admin-lock-btn" onclick="adminLogout()" style="display:none;" title="Ferme la session administrateur sur cet appareil : le Reset redemandera le code.">🔒 Verrouiller</button>
         <div class="system-pill" title="Connexion entre cette page et le serveur. Ne garantit pas que chaque alerte TradingView fonctionne : voir « Dernière alerte » sur chaque carte du Scanner.">
@@ -2978,6 +2979,31 @@
             }, 80);
         } catch (e) {
             messageVoix('La voix a échoué (' + e.message + ').', true);
+        }
+    }
+
+    /* Notifications Telegram (téléphone verrouillé) : le serveur envoie les messages ; ce bouton vérifie seulement que la liaison marche. */
+    function toastTelegram(texte, probleme) {
+        const stack = document.getElementById('toast-stack');
+        if (!stack) return;
+        const t = document.createElement('div');
+        t.className = 'toast ' + (probleme ? 'sl' : 'tp');
+        t.innerHTML = '<div class="toast-top"><span class="toast-sym">🔔 Telegram</span></div><div class="toast-msg"></div>';
+        t.querySelector('.toast-msg').textContent = texte;
+        stack.appendChild(t);
+        setTimeout(() => { t.classList.add('closing'); setTimeout(() => t.remove(), 250); }, probleme ? 14000 : 7000);
+    }
+    async function testerTelegram() {
+        try {
+            const res = await fetch('/api/notifications/test', { method: 'POST' });
+            const d = await res.json().catch(() => ({}));
+            if (d.ok) toastTelegram('Message de test envoyé : regarde ton Telegram.', false);
+            else if (d.raison === 'non_configure') toastTelegram('Telegram n\u2019est pas configuré sur le serveur : le jeton du bot et l\u2019identifiant de conversation manquent (réglages Render).', true);
+            else if (d.raison === 'trop_rapide') toastTelegram('Patiente une trentaine de secondes entre deux tests.', true);
+            else if (/^http_(400|401|403|404)$/.test(d.raison || '')) toastTelegram('Telegram a refusé le message (' + d.raison.replace('http_', 'code ') + ') : vérifie le jeton du bot et l\u2019identifiant de conversation, et envoie d\u2019abord un message à ton bot.', true);
+            else toastTelegram('Envoi impossible (' + (d.raison || 'erreur ' + res.status) + ').', true);
+        } catch (e) {
+            toastTelegram('Serveur injoignable : réessaie dans un instant.', true);
         }
     }
 
