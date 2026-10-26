@@ -1131,6 +1131,27 @@
     .card[data-collapsed="1"] .progress-wrapper { margin-bottom: 8px; }
     .card[data-collapsed="1"] .btn-chart { padding: 5px 10px; font-size: 11px; }
 
+    /* ============ CARTE ACTIVE RÉDUITE (choix de l'utilisateur) ============
+       Une position en cours peut être réduite en tuile : nom, sens (achat / vente), badge d'état, Reset, barre de progression avec
+       SL / Entrée / TP1-TP3 et marqueur du prix. Les niveaux détaillés, les étiquettes, la taille, la liste des TP et le bouton graphique
+       sont masqués. Attribut data-compact (comme data-collapsed) : il survit aux réécritures de card.className. */
+    .btn-compact { display: none; background: var(--bg-inset); border: 1px solid #2b3648; color: var(--text-muted); border-radius: 6px;
+        font-size: 11px; line-height: 1; padding: 4px 7px; cursor: pointer; }
+    .btn-compact:hover { color: #fff; border-color: #37455a; }
+    .card.active-buy .btn-compact, .card.active-sell .btn-compact { display: inline-flex; }
+    .card[data-compact="1"] { padding: 10px 14px; }
+    .card[data-compact="1"] .card-top { margin-bottom: 2px; }
+    .card[data-compact="1"] .sym-sub,
+    .card[data-compact="1"] .tags-row,
+    .card[data-compact="1"] .metrics,
+    .card[data-compact="1"] .card-footer,
+    .card[data-compact="1"] .card-autotune-alert,
+    .card[data-compact="1"] .card-gauge .pos-note,
+    .card[data-compact="1"] .gauge-px,
+    .card[data-compact="1"] [id^="simple-bar-"] { display: none; }
+    .card[data-compact="1"] .gauge { height: 46px; margin-top: 0; }
+    .card[data-compact="1"] .progress-wrapper { margin-bottom: 0; }
+
     /* ============ BANDEAU DE SYNTHÈSE (scanner) ============ */
     .summary-strip {
         display: grid;
@@ -1311,6 +1332,7 @@
             <button class="filter-btn" onclick="applyFilter('ACTIVE', this)">EN COURS</button>
             <button class="filter-btn" onclick="applyFilter('TRAD', this)">TRADITIONNEL</button>
             <button class="filter-btn" onclick="applyFilter('CRYPTO', this)">CRYPTO</button>
+            <button class="filter-btn" id="compact-all-toggle" onclick="toggleToutesCartesCompactes()" title="Réduit ou agrandit toutes les positions en cours : nom, sens, barre de progression avec TP1-TP3. Le chevron ▾ de chaque carte règle une position seule.">📏 POSITIONS RÉDUITES : NON</button>
         </div>
         <div class="right-controls">
             <div class="risk-input-group">
@@ -1870,6 +1892,7 @@
             <div class="card-top">
                 <div class="sym-group"><span class="sym-name">${sym}</span><span class="sym-sub">${label.text}</span></div>
                 <div class="badge-wrapper">
+                    <button class="btn-compact" id="compact-${sym}" onclick="toggleCarteCompacte('${sym}')" title="Réduire cette position (nom, sens, barre de progression)">▾</button>
                     <button class="btn-reset" id="reset-${sym}" onclick="resetAsset('${sym}')">✕ Reset</button>
                     <span class="badge-status" id="badge-${sym}">STANDBY</span>
                 </div>
@@ -3279,6 +3302,51 @@
     function updateActiveKpi() {
         document.getElementById("kpi-active").textContent = activePositions.size;
         refreshCardFilter();
+        appliquerCartesCompactes();
+    }
+
+    /* Cartes actives réduites : choix mémorisé dans ce navigateur. « defaut » = réglage du bouton global ; « perso » = choix d'une
+       carte précise (chevron), prioritaire sur le réglage global. Une carte au repos ou clôturée n'est jamais réduite par ce choix. */
+    const CARTES_COMPACTES_CLE = 'ictRadarCartesCompactes';
+    let cartesCompactes = { defaut: false, perso: {} };
+    try {
+        const sauve = JSON.parse(localStorage.getItem(CARTES_COMPACTES_CLE) || 'null');
+        if (sauve && typeof sauve === 'object') cartesCompactes = { defaut: !!sauve.defaut, perso: (sauve.perso && typeof sauve.perso === 'object') ? sauve.perso : {} };
+    } catch (e) {}
+    function carteCompacte(sym) {
+        const p = cartesCompactes.perso[sym];
+        return p === true || p === false ? p : cartesCompactes.defaut;
+    }
+    function sauverCartesCompactes() {
+        try { localStorage.setItem(CARTES_COMPACTES_CLE, JSON.stringify(cartesCompactes)); } catch (e) {}
+    }
+    function appliquerCartesCompactes() {
+        document.querySelectorAll('.card').forEach(card => {
+            const sym = card.id.replace('card-', '');
+            const active = card.classList.contains('active-buy') || card.classList.contains('active-sell');
+            const reduite = carteCompacte(sym);
+            if (active && reduite) card.dataset.compact = '1'; else delete card.dataset.compact;
+            const b = document.getElementById('compact-' + sym);
+            if (b) {
+                b.textContent = reduite ? '▸' : '▾';
+                b.title = reduite ? 'Agrandir cette position (niveaux, TP, taille, graphique)' : 'Réduire cette position (nom, sens, barre de progression)';
+            }
+        });
+        const g = document.getElementById('compact-all-toggle');
+        if (g) {
+            g.textContent = '📏 POSITIONS RÉDUITES : ' + (cartesCompactes.defaut ? 'OUI' : 'NON');
+            g.classList.toggle('active', cartesCompactes.defaut);
+        }
+    }
+    function toggleCarteCompacte(sym) {
+        cartesCompactes.perso[sym] = !carteCompacte(sym);
+        sauverCartesCompactes();
+        appliquerCartesCompactes();
+    }
+    function toggleToutesCartesCompactes() {
+        cartesCompactes = { defaut: !cartesCompactes.defaut, perso: {} };   // le bouton global remet toutes les cartes sur le même réglage
+        sauverCartesCompactes();
+        appliquerCartesCompactes();
     }
 
     function suggestedSize(entry, sl) {
@@ -5625,6 +5693,7 @@
     }
 
     loadPortfolioVal();
+    appliquerCartesCompactes();
     recomputePerformancePanel();
     initJournalTabs();
     initCalendarCache();
