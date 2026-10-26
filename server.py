@@ -196,6 +196,16 @@ SYMBOLES_ALIAS = {"SOLU": "SOLUSD"}
 def _symbole_canonique(symbole):
     return SYMBOLES_ALIAS.get(symbole, symbole)
 
+def _alias_dans_journal(lignes):
+    """Lignes de journal écrites avant l'alias sous l'ancien nom (« SOLU ») : relues sous le nom canonique, EN MÉMOIRE seulement
+    (la base n'est pas modifiée). Sans ça, l'entrée « SOLU » et la sortie « SOLUSD » d'un même trade ne se retrouvent pas : le
+    journal affiche le trade « en cours » et la sortie est exclue des statistiques comme orpheline."""
+    for ligne in lignes:
+        canonique = SYMBOLES_ALIAS.get(ligne.get("symbol"))
+        if canonique:
+            ligne["symbol"] = canonique
+    return lignes
+
 def _reprendre_position_sous_alias(ancien, nouveau):
     """Un trade ouvert avant l'alias reste sous l'ancien nom : on le renomme pour que ses mises à jour et sa clôture le retrouvent."""
     if ancien == nouveau or ancien not in open_positions or nouveau in open_positions:
@@ -1102,7 +1112,7 @@ def _load_initial_state():
     for sym, t in (remote_resets or {}).items():
         if (t or "") > (card_resets.get(sym) or ""):
             card_resets[sym] = t
-    journal_log[:] = remote_journal
+    journal_log[:] = _alias_dans_journal(remote_journal)
     _seed_market_state()
     _rebuild_closed_cards()
     _bump_positions_version()
