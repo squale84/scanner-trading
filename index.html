@@ -1924,7 +1924,6 @@
     let storageStatus = null;         // état de la persistance (base de données) côté serveur
     let calendarDayFilter = 'TODAY';
     let calendarImpactFilter = 'ALL';
-    let calendarAlerted = new Set();
     let currentModalSymbol = null;
     let chartAutoOpen = true;
     let isSyncing = true;
@@ -2772,9 +2771,40 @@
         macroVoiceActive = false;
     }
 
-    const macroAnnouncedSet = new Set();
     let lastMacroDateKey = "";
     let lastSpokenSecTimestamp = 0;
+
+    // Annonces vocales déjà faites (macros, annonces économiques) : mémorisées dans le navigateur, donc elles ne sont pas
+    // redites après un F5 ni à la réouverture de l'onglet. Purgées après 2 jours. Sans stockage local : mémoire de la page seulement.
+    const ANNONCES_CLE = 'ictRadarAnnoncesDites';
+    const annoncesMemoire = new Set();
+    function annonceDejaFaite(cle) {
+        if (annoncesMemoire.has(cle)) return true;
+        try {
+            if ((JSON.parse(localStorage.getItem(ANNONCES_CLE) || '{}') || {})[cle]) { annoncesMemoire.add(cle); return true; }
+        } catch (e) {}
+        return false;
+    }
+    function marquerAnnonceFaite(cle) {
+        annoncesMemoire.add(cle);
+        try {
+            const maintenant = Date.now();
+            let m = {};
+            try { m = JSON.parse(localStorage.getItem(ANNONCES_CLE) || '{}') || {}; } catch (e) { m = {}; }
+            Object.keys(m).forEach(k => { if (maintenant - m[k] > 2 * 86400000) delete m[k]; });
+            m[cle] = maintenant;
+            localStorage.setItem(ANNONCES_CLE, JSON.stringify(m));
+        } catch (e) {}
+    }
+    // Alerte d'entrée ou de sortie reçue en double en direct (TradingView peut renvoyer la même alerte) : même clé dans les 10 min.
+    const alertesRecentes = new Map();
+    function alerteEnDouble(cle, fenetreMs = 600000) {
+        const maintenant = Date.now();
+        alertesRecentes.forEach((t, k) => { if (maintenant - t > fenetreMs) alertesRecentes.delete(k); });
+        if (alertesRecentes.has(cle)) return true;
+        alertesRecentes.set(cle, maintenant);
+        return false;
+    }
 
     function updateMacroAudioBtn() {
         const btn = document.getElementById("macro-audio-toggle");
@@ -2879,8 +2909,7 @@
         const { totalSec, dateKey } = getNYTimeComponents(now);
 
         if (dateKey !== lastMacroDateKey) {
-            macroAnnouncedSet.clear();
-            lastMacroDateKey = dateKey;
+            lastMacroDateKey = dateKey;   // les clés d'annonce contiennent la date : rien à vider
         }
 
         const widget = document.getElementById("macro-widget");
@@ -2910,8 +2939,8 @@
             subtitleEl.textContent = `Fin dans ${formatDuration(remainingSec)} (${activeMacro.end} NY)`;
 
             const startKey = `${dateKey}_${activeMacro.id}_start`;
-            if (!macroAnnouncedSet.has(startKey)) {
-                macroAnnouncedSet.add(startKey);
+            if (!annonceDejaFaite(startKey)) {
+                marquerAnnonceFaite(startKey);
                 speakMacro(`Attention. Début de la ${activeMacro.name}.`);
             }
         } else {
@@ -2945,8 +2974,8 @@
 
             if (!isTomorrow && remSecBeforeStart <= 120 && remSecBeforeStart >= 115) {
                 const preKey = `${dateKey}_${nextMacro.id}_pre2m`;
-                if (!macroAnnouncedSet.has(preKey)) {
-                    macroAnnouncedSet.add(preKey);
+                if (!annonceDejaFaite(preKey)) {
+                    marquerAnnonceFaite(preKey);
                     speakMacro(`Préparation. La ${nextMacro.name} commence dans deux minutes.`);
                 }
             }
@@ -3759,7 +3788,7 @@
             if (isTP) tpCount++; else if (data.status === "SL_HIT") slCount++;
             updateWinRate();
 
-            if (!silent) {
+            if (!silent && !alerteEnDouble(`X|${sym}|${data.trade_id || ''}|${data.status}`)) {   // même sortie reçue deux fois : une seule annonce
                 const entreeRef = lastSignalData[sym] || null;
                 triggerNotification(sym, null, data.status, entreeRef ? { entryDir: entreeRef.direction, r: computeRMultiple(entreeRef, data) } : undefined);
                 pushToast(sym, data, 'exit');
@@ -3822,7 +3851,7 @@
         lastSignalSession[sym] = sessionLabelNow();
         renderCardGauge(sym);
 
-        if (!silent) {
+        if (!silent && !alerteEnDouble(`E|${sym}|${data.trade_id || ''}|${data.status}|${dir}|${data.entry_price}`)) {   // même entrée reçue deux fois : une seule annonce
             triggerNotification(sym, dir, data.status, data);
             highlightNewSignal(sym, dir);
             pushToast(sym, data, 'entry');
@@ -5309,18 +5338,31 @@
     }
 
     // Alerte 30 min avant tout événement à impact Medium/High (une seule fois par événement)
+    // Une seule phrase vocale par pays et par heure de publication (plusieurs publications à la même heure : IPC m/m, sous-jacent,
+    // a/a…) ; chaque publication garde son toast. Une publication déjà annoncée (même après un F5) n'est pas redite.
+    function phraseAnnonceEco(country, mins, titres) {
+        const uniques = [...new Set(titres)];
+        const liste = uniques.length === 1 ? uniques[0]
+            : uniques.length <= 3 ? uniques.slice(0, -1).join(', ') + ' et ' + uniques[uniques.length - 1]
+            : uniques.slice(0, 2).join(', ') + ' et ' + (uniques.length - 2) + ' autres publications';
+        return `${uniques.length > 1 ? 'Annonces économiques' : 'Annonce économique'} ${CAL_COUNTRY_FR[country] ? '(' + CAL_COUNTRY_FR[country] + ') ' : ''}dans ${Math.round(mins)} minutes : ${liste}`;
+    }
     function checkUpcomingEvents() {
+        const groupes = new Map();
         calendarData.forEach(ev => {
             if (ev.impact !== 'High' && ev.impact !== 'Medium') return;
-            const key = ev.title + '|' + ev.date;
-            if (calendarAlerted.has(key)) return;
+            const key = 'cal|' + ev.title + '|' + ev.date;
+            if (annonceDejaFaite(key)) return;
             const mins = minutesUntil(ev.date);
             if (mins > 0 && mins <= 30) {
-                calendarAlerted.add(key);
+                marquerAnnonceFaite(key);
                 pushCalendarToast(ev, mins);
-                triggerNotification(ev.country, null, `Annonce économique ${CAL_COUNTRY_FR[ev.country] ? '(' + CAL_COUNTRY_FR[ev.country] + ') ' : ''}dans ${Math.round(mins)} minutes : ${translateEventTitle(ev.title)}`);
+                const gk = ev.country + '|' + ev.date;
+                if (!groupes.has(gk)) groupes.set(gk, { country: ev.country, mins, titres: [] });
+                groupes.get(gk).titres.push(translateEventTitle(ev.title));
             }
         });
+        groupes.forEach(g => triggerNotification(g.country, null, phraseAnnonceEco(g.country, g.mins, g.titres)));
         renderCalendarTable(); // rafraîchit la mise en évidence "imminent"
         updateNewsCardProtection();
     }
@@ -5547,8 +5589,6 @@
         TRUMPU:   ["USD"]
     };
 
-    const newsVoiceAlerted = new Set();
-
     function updateNewsCardProtection() {
         if (!calendarData || calendarData.length === 0) return;
 
@@ -5558,9 +5598,9 @@
             const mins = minutesUntil(ev.date);
             // Fenêtre de déclenchement à 15 min (tolérance 13.8 à 15.2 min pour cycle 30s)
             if (mins <= 15.2 && mins >= 13.8) {
-                const voiceKey = `${ev.country}_${ev.date}_${ev.title || ''}`;
-                if (!newsVoiceAlerted.has(voiceKey)) {
-                    newsVoiceAlerted.add(voiceKey);
+                const voiceKey = `voix15|${ev.country}|${ev.date}`;   // une seule annonce par pays et par heure, même s'il y a plusieurs publications
+                if (!annonceDejaFaite(voiceKey)) {
+                    marquerAnnonceFaite(voiceKey);
                     speakMacro(`Attention. Annonce économique majeure sur le ${ev.country} dans 15 minutes.`);
                 }
             }
