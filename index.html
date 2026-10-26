@@ -1312,7 +1312,7 @@
         <div class="right-controls">
             <div class="risk-input-group">
                 <label for="risk-val">Risque max / trade</label>
-                <input type="number" id="risk-val" class="risk-input" value="50" step="10" oninput="onRiskChange()" title="Mémorisé dans ce navigateur, pour cette adresse du site (pas partagé entre appareils).">
+                <input type="number" id="risk-val" class="risk-input" value="50" step="10" oninput="onRiskChange()" title="Mémorisé sur le serveur : retrouvé sur tous tes navigateurs et appareils.">
                 <span>€</span>
             </div>
             <div class="toggle-group">
@@ -1397,7 +1397,7 @@
                 <div>
                     <div class="metric-label">Taille portefeuille</div>
                     <div style="display:flex; align-items:center; gap:4px; margin-top:3px;">
-                        <input type="number" id="portfolio-val" value="10000" step="100" min="0" oninput="onPortfolioChange()" title="Mémorisé dans ce navigateur, pour cette adresse du site (pas partagé entre appareils)." style="width:90px; background:var(--bg-inset); border:1px solid var(--border-color); border-radius:6px; color:#fff; font-family:var(--font-mono); font-size:15px; padding:3px 6px;">
+                        <input type="number" id="portfolio-val" value="10000" step="100" min="0" oninput="onPortfolioChange()" title="Mémorisé sur le serveur : retrouvé sur tous tes navigateurs et appareils." style="width:90px; background:var(--bg-inset); border:1px solid var(--border-color); border-radius:6px; color:#fff; font-family:var(--font-mono); font-size:15px; padding:3px 6px;">
                         <span style="font-size:13px;color:var(--text-muted);">€</span>
                     </div>
                 </div>
@@ -1925,8 +1925,8 @@
     let journalTrades = []; // { rMultiple } par trade clôturé, pour recalculer le PF/€ si le risque change
 
     /* ===================== PANNEAU PERFORMANCE (Gains/Pertes, Profit Factor, Portefeuille) ===================== */
-    // Les valeurs saisies sont mémorisées dans CE navigateur, pour CETTE adresse de site : un autre appareil, un autre navigateur
-    // ou une autre adresse (tunnel Cloudflare qui change à chaque démarrage, Render, localhost) repart des valeurs par défaut.
+    // Les valeurs saisies sont mémorisées dans ce navigateur (secours) ET sur le serveur (voir syncReglagesServeur) : sans le serveur,
+    // un autre appareil, navigateur ou adresse (tunnel Cloudflare qui change à chaque démarrage, Render, localhost) repartirait des défauts.
     function loadSavedNumber(cle, idChamp) {
         try {
             const saved = localStorage.getItem(cle);
@@ -1937,11 +1937,67 @@
     function loadPortfolioVal() {
         loadSavedNumber('ictRadarPortfolioVal', 'portfolio-val');
         loadSavedNumber('ictRadarRiskVal', 'risk-val');
+        syncReglagesServeur();
+    }
+
+    // Les deux réglages sont aussi gardés côté serveur (/api/reglages) : ils suivent l'utilisateur d'un navigateur ou d'une
+    // adresse à l'autre. Le serveur fait foi s'il a une valeur ; sinon la valeur de ce navigateur lui est envoyée.
+    // N'est envoyé que ce que l'utilisateur a réellement saisi : jamais une valeur par défaut, qui écraserait celle d'un autre appareil.
+    const REGLAGES_CHAMPS = { portfolio: 'portfolio-val', risk: 'risk-val' };
+    const REGLAGES_CLES_LOCALES = { portfolio: 'ictRadarPortfolioVal', risk: 'ictRadarRiskVal' };
+    let reglagesSansEnvoi = false, reglagesTimer = null;
+    const reglagesAEnvoyer = new Set();
+
+    function nombreReglageValide(v) {
+        return v !== null && v !== undefined && String(v).trim() !== '' && isFinite(Number(v)) && Number(v) >= 0 && Number(v) <= 1e9 ? Number(v) : null;
+    }
+
+    async function syncReglagesServeur() {
+        try {
+            const res = await fetch('/api/reglages', { cache: 'no-store' });
+            if (!res.ok) return;
+            const serveur = await res.json();
+            reglagesSansEnvoi = true;
+            try {
+                for (const [cle, idChamp] of Object.entries(REGLAGES_CHAMPS)) {
+                    const champ = document.getElementById(idChamp);
+                    if (nombreReglageValide(serveur[cle]) !== null) {
+                        if (parseNum(champ.value) !== serveur[cle]) {
+                            champ.value = serveur[cle];
+                            if (cle === 'portfolio') onPortfolioChange(); else onRiskChange();
+                        }
+                    } else {
+                        let local = null;
+                        try { local = nombreReglageValide(localStorage.getItem(REGLAGES_CLES_LOCALES[cle])); } catch (e) {}
+                        if (local !== null) reglagesAEnvoyer.add(cle);   // valeur saisie ici, inconnue du serveur : on la lui confie
+                    }
+                }
+            } finally { reglagesSansEnvoi = false; }
+            if (reglagesAEnvoyer.size) envoyerReglagesServeur();
+        } catch (e) { /* serveur injoignable : les valeurs de ce navigateur restent utilisées */ }
+    }
+
+    function envoyerReglagesServeur(cleModifiee) {
+        if (reglagesSansEnvoi) return;
+        if (cleModifiee) reglagesAEnvoyer.add(cleModifiee);
+        clearTimeout(reglagesTimer);
+        reglagesTimer = setTimeout(() => {
+            const corps = {};
+            for (const cle of reglagesAEnvoyer) {
+                const v = nombreReglageValide(document.getElementById(REGLAGES_CHAMPS[cle]).value);
+                if (v !== null) corps[cle] = v;
+            }
+            if (!Object.keys(corps).length) return;
+            reglagesAEnvoyer.clear();
+            fetch('/api/reglages', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(corps) })
+                .catch(() => {});
+        }, 600);
     }
 
     function onPortfolioChange() {
         try { localStorage.setItem('ictRadarPortfolioVal', document.getElementById('portfolio-val').value); } catch (e) {}
         recomputePerformancePanel();
+        envoyerReglagesServeur('portfolio');
     }
 
     function recomputePerformancePanel() {
@@ -3111,6 +3167,7 @@
         });
         if (currentModalSymbol) updateModalSidePanel(currentModalSymbol);
         recomputePerformancePanel();
+        envoyerReglagesServeur('risk');
     }
 
     function renderPositionSize(sym, data) {
