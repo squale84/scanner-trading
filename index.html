@@ -1329,7 +1329,7 @@
     <div class="controls-bar">
         <div class="filter-group">
             <span class="filter-label">Filtrer</span>
-            <button class="filter-btn active" onclick="applyFilter('ALL', this)">TOUS (14)</button>
+            <button class="filter-btn active" id="filter-all-btn" onclick="applyFilter('ALL', this)">TOUS (18)</button>
             <button class="filter-btn" onclick="applyFilter('ACTIVE', this)">EN COURS</button>
             <button class="filter-btn" onclick="applyFilter('TRAD', this)">TRADITIONNEL</button>
             <button class="filter-btn" onclick="applyFilter('CRYPTO', this)">CRYPTO</button>
@@ -1357,7 +1357,7 @@
     <div class="section-container" id="sec-trad">
         <div class="section-header">
             <div class="section-tag tag-trad"><span>🏛️ INDICES, MATIÈRES PREMIÈRES &amp; FOREX</span></div>
-            <span class="count-pill">9 ACTIFS</span>
+            <span class="count-pill" id="count-trad">9 ACTIFS</span>
         </div>
         <div class="grid" id="grid-trad"></div>
     </div>
@@ -1366,7 +1366,7 @@
     <div class="section-container" id="sec-crypto" style="margin-top: 8px;">
         <div class="section-header">
             <div class="section-tag tag-crypto"><span>⚡ MARCHÉ CRYPTOMONNAIES (24/7)</span></div>
-            <span class="count-pill">9 ACTIFS</span>
+            <span class="count-pill" id="count-crypto">9 ACTIFS</span>
         </div>
         <div class="grid" id="grid-crypto"></div>
     </div>
@@ -1925,6 +1925,11 @@
         ASSETS.TRAD.forEach(a => tradGrid.insertAdjacentHTML("beforeend", cardTemplate(a.sym, { text: a.label, cat: "TRAD" })));
         const cryptoGrid = document.getElementById("grid-crypto");
         ASSETS.CRYPTO.forEach(a => cryptoGrid.insertAdjacentHTML("beforeend", cardTemplate(a.sym, { text: a.label, cat: "CRYPTO" })));
+        // Compteurs déduits de la liste des actifs : ils ne se périment plus quand on ajoute une carte.
+        const nbTrad = ASSETS.TRAD.length, nbCrypto = ASSETS.CRYPTO.length;
+        const btnTous = document.getElementById("filter-all-btn");
+        if (btnTous) btnTous.textContent = `TOUS (${nbTrad + nbCrypto})`;
+        [["count-trad", nbTrad], ["count-crypto", nbCrypto]].forEach(([id, n]) => { const el = document.getElementById(id); if (el) el.textContent = `${n} ACTIFS`; });
     }
     buildGrids();
 
