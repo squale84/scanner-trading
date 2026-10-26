@@ -4478,8 +4478,19 @@
             const eTs = tradeData.entryTime || '';
             const xTs = tradeData.exitTime || '';
 
-            const url = `/api/candles?symbol=${encodeURIComponent(sym)}&entry_ts=${encodeURIComponent(eTs)}&exit_ts=${encodeURIComponent(xTs)}&entry_price=${ep}&sl_price=${sl}&tp_price=${tp}&exit_price=${xp}&best_r=${bestR}&direction=${dir}`;
-            const resp = await fetch(url);
+            // Un paramètre numérique vide (position encore ouverte : pas de prix de sortie, pas de meilleur R) fait refuser la
+            // requête par le serveur (422) : on n'envoie que les paramètres renseignés.
+            const params = new URLSearchParams({ symbol: sym, entry_ts: eTs });
+            if (xTs) params.set('exit_ts', xTs);
+            if (dir) params.set('direction', dir);
+            [['entry_price', ep], ['sl_price', sl], ['tp_price', tp], ['exit_price', xp], ['best_r', bestR]].forEach(([cle, v]) => {
+                if (v !== '' && v !== null && v !== undefined && isFinite(Number(v))) params.set(cle, v);
+            });
+            const resp = await fetch('/api/candles?' + params.toString());
+            if (!resp.ok) {
+                if (loadingText) loadingText.textContent = `Bougies indisponibles (erreur ${resp.status}).`;
+                return;
+            }
             const data = await resp.json();
 
             if (data.status === 'success' && data.candles && data.candles.length > 0) {
