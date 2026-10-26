@@ -912,6 +912,67 @@ def _clean_market_event(symbol, data):
         return None
     return out
 
+# Réglages d'affichage du tableau de bord (taille du portefeuille simulé, risque max par trade), gardés côté serveur : ils
+# suivent l'utilisateur d'un navigateur / appareil / adresse à l'autre (le navigateur seul les oublie quand l'adresse change,
+# p. ex. tunnel Cloudflare). Nombres finis entre 0 et 1e9 uniquement ; aucune autre clé acceptée.
+REGLAGES_CLES = ("portfolio", "risk")
+REGLAGES_MAX = 1e9
+reglages: dict = {}
+_reglages_charges = False
+
+def _reglage_valide(v):
+    if isinstance(v, bool):
+        return None
+    n = _finite(v)
+    return n if n is not None and 0 <= n <= REGLAGES_MAX else None
+
+def _charger_reglages():
+    """Lit les réglages en base une seule fois. False si la lecture a échoué (on n'écrase alors rien)."""
+    global _reglages_charges
+    if _reglages_charges:
+        return True
+    stocke = storage.load_state("reglages", "reglages.json")
+    if stocke is storage.FAILED:
+        return False
+    for cle in REGLAGES_CLES:
+        n = _reglage_valide((stocke or {}).get(cle)) if isinstance(stocke, dict) else None
+        if n is not None:
+            reglages[cle] = n
+    _reglages_charges = True
+    return True
+
+@app.get("/api/reglages")
+async def get_reglages():
+    _charger_reglages()
+    return JSONResponse(content=reglages, headers={"Cache-Control": "no-store"})
+
+@app.post("/api/reglages")
+async def set_reglages(request: Request):
+    try:
+        data = await request.json()
+    except Exception:
+        return JSONResponse(status_code=400, content={"error": "JSON invalide"})
+    if not isinstance(data, dict):
+        return JSONResponse(status_code=400, content={"error": "objet attendu"})
+    propres = {}
+    for cle in REGLAGES_CLES:
+        if cle in data:
+            n = _reglage_valide(data[cle])
+            if n is None:
+                return JSONResponse(status_code=400, content={"error": f"valeur invalide pour « {cle} »"})
+            propres[cle] = n
+    if not propres:
+        return JSONResponse(status_code=400, content={"error": "aucun réglage reconnu"})
+    if not _charger_reglages():
+        return JSONResponse(status_code=503, content={"error": "réglages non lus en base : rien n'a été écrit"})
+    avant = dict(reglages)
+    reglages.update(propres)
+    if not storage.save_state("reglages", "reglages.json", reglages):
+        reglages.clear()
+        reglages.update(avant)
+        return JSONResponse(status_code=503, content={"error": "écriture en base impossible"})
+    return JSONResponse(content=reglages)
+
 @app.get("/api/events")
 async def get_market_events():
     return JSONResponse(content=list(market_events), headers={"X-Events-Version": str(market_events_version)})
