@@ -1132,13 +1132,15 @@
     .card[data-collapsed="1"] .btn-chart { padding: 5px 10px; font-size: 11px; }
 
     /* ============ CARTE ACTIVE RÉDUITE (choix de l'utilisateur) ============
-       Une position en cours peut être réduite en tuile : nom, sens (achat / vente), badge d'état, Reset, barre de progression avec
+       Une carte qui porte un trade (position en cours, ou résultat TP touché / SL touché / expirée avant le repli automatique de 2 h)
+       peut être réduite en tuile : nom, sens (achat / vente), badge d'état, Reset, barre de progression avec
        SL / Entrée / TP1-TP3 et marqueur du prix. Les niveaux détaillés, les étiquettes, la taille, la liste des TP et le bouton graphique
        sont masqués. Attribut data-compact (comme data-collapsed) : il survit aux réécritures de card.className. */
     .btn-compact { display: none; background: var(--bg-inset); border: 1px solid #2b3648; color: var(--text-muted); border-radius: 6px;
         font-size: 11px; line-height: 1; padding: 4px 7px; cursor: pointer; }
     .btn-compact:hover { color: #fff; border-color: #37455a; }
-    .card.active-buy .btn-compact, .card.active-sell .btn-compact { display: inline-flex; }
+    .card[data-trade="1"] .btn-compact { display: inline-flex; }
+    .card[data-collapsed="1"] .btn-compact { display: none; }   /* tuile déjà repliée automatiquement 2 h après la clôture */
     .card[data-compact="1"] { padding: 10px 14px; }
     .card[data-compact="1"] .card-top { margin-bottom: 2px; }
     .card[data-compact="1"] .sym-sub,
@@ -1333,7 +1335,7 @@
             <button class="filter-btn" onclick="applyFilter('ACTIVE', this)">EN COURS</button>
             <button class="filter-btn" onclick="applyFilter('TRAD', this)">TRADITIONNEL</button>
             <button class="filter-btn" onclick="applyFilter('CRYPTO', this)">CRYPTO</button>
-            <button class="filter-btn" id="compact-all-toggle" onclick="toggleToutesCartesCompactes()" title="Réduit ou agrandit toutes les positions en cours : nom, sens, barre de progression avec TP1-TP3. Le chevron ▾ de chaque carte règle une position seule.">📏 POSITIONS RÉDUITES : NON</button>
+            <button class="filter-btn" id="compact-all-toggle" onclick="toggleToutesCartesCompactes()" title="Réduit ou agrandit toutes les cartes qui portent un trade (en cours ou avec son résultat) : nom, sens, barre de progression avec TP1-TP4. Le chevron ▾ de chaque carte règle une carte seule.">📏 POSITIONS RÉDUITES : NON</button>
         </div>
         <div class="right-controls">
             <div class="risk-input-group">
@@ -3390,8 +3392,9 @@
         appliquerCartesCompactes();
     }
 
-    /* Cartes actives réduites : choix mémorisé dans ce navigateur. « defaut » = réglage du bouton global ; « perso » = choix d'une
-       carte précise (chevron), prioritaire sur le réglage global. Une carte au repos ou clôturée n'est jamais réduite par ce choix. */
+    /* Cartes réduites : choix mémorisé dans ce navigateur. « defaut » = réglage du bouton global ; « perso » = choix d'une carte
+       précise (chevron), prioritaire sur le réglage global. Seule une carte qui porte un trade (en cours ou avec son résultat) est
+       concernée ; une carte au repos n'est jamais réduite par ce choix. */
     const CARTES_COMPACTES_CLE = 'ictRadarCartesCompactes';
     let cartesCompactes = { defaut: false, perso: {} };
     try {
@@ -3408,9 +3411,12 @@
     function appliquerCartesCompactes() {
         document.querySelectorAll('.card').forEach(card => {
             const sym = card.id.replace('card-', '');
-            const active = card.classList.contains('active-buy') || card.classList.contains('active-sell');
+            const badge = document.getElementById('badge-' + sym);
+            const resultat = card.classList.contains('hit-tp') || card.classList.contains('hit-sl') || !!(badge && badge.classList.contains('EXPIRED'));
+            const avecTrade = card.classList.contains('active-buy') || card.classList.contains('active-sell') || resultat;
             const reduite = carteCompacte(sym);
-            if (active && reduite) card.dataset.compact = '1'; else delete card.dataset.compact;
+            if (avecTrade) card.dataset.trade = '1'; else delete card.dataset.trade;
+            if (avecTrade && reduite) card.dataset.compact = '1'; else delete card.dataset.compact;
             const b = document.getElementById('compact-' + sym);
             if (b) {
                 b.textContent = reduite ? '▸' : '▾';
