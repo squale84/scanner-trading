@@ -677,6 +677,7 @@
     .pos-r { margin-left: auto; font-family: var(--font-mono); font-weight: 700; font-size: 14px; }
     .pos-note { font-size: 10.5px; color: var(--text-faint); margin-top: 8px; font-family: var(--font-mono); }
     .pos-note.stale { color: var(--accent-gold); }
+    .pos-note.stale-long { color: var(--accent-red); font-weight: 700; }
     .gauge { position: relative; height: 62px; margin: 8px 10px 0; }
     .gauge-track {
         position: absolute; left: 0; right: 0; top: 26px; height: 6px; border-radius: 3px;
@@ -2577,6 +2578,20 @@
         renderModalGauge();
     }
 
+    // Position sans nouvelles : le Radar envoie une mise à jour toutes les 5 minutes tant que le trade est ouvert. Au-delà de SEUIL_SANS_NOUVELLES_MIN la carte porte
+    // « sans nouvelles depuis … » ; au-delà de SUIVI_INTERROMPU_MIN elle est marquée « suivi interrompu » (alerte TradingView expirée ou arrêtée, par exemple).
+    // La position n'est JAMAIS clôturée ni chiffrée à partir de là : le résultat reste « indisponible » tant que le Radar n'envoie pas la sortie.
+    const SEUIL_SANS_NOUVELLES_MIN = 12;
+    const SUIVI_INTERROMPU_MIN = 60;
+    // <formatDureeSansNouvelles>
+    function formatDureeSansNouvelles(min) {
+        const m = Math.max(0, Math.round(Number(min) || 0));
+        if (m < 60) return `${m} min`;
+        if (m < 1440) return `${Math.floor(m / 60)} h ${String(m % 60).padStart(2, '0')}`;
+        return `${Math.floor(m / 1440)} j ${Math.floor((m % 1440) / 60)} h`;
+    }
+    // </formatDureeSansNouvelles>
+
     function renderOpenPositions() {
         updateSummaryStrip();   // le compteur « en cours » du bandeau suit l'état serveur des positions
         const list = document.getElementById('pos-list');
@@ -2594,7 +2609,8 @@
             const rColor = prog.r === null ? 'var(--text-muted)' : (prog.r >= 0 ? 'var(--accent-green)' : 'var(--accent-red)');
             const upd = pos.last_update ? new Date(pos.last_update + (pos.isTest ? '' : 'Z')) : null;
             const ageMin = upd ? (Date.now() - upd.getTime()) / 60000 : null;
-            const stale = !pos.isTest && ageMin !== null && ageMin > 12;
+            const stale = !pos.isTest && ageMin !== null && ageMin > SEUIL_SANS_NOUVELLES_MIN;
+            const interrompu = stale && ageMin >= SUIVI_INTERROMPU_MIN;
             const opened = pos.opened_at ? new Date(pos.opened_at + (pos.isTest ? '' : 'Z')).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }) : '?';
             return `
             <div class="pos-card ${dirCls}">
@@ -2609,7 +2625,7 @@
                 </div>
                 ${gaugeHtml(pos)}
                 ${(() => { const c = conseilStopSuiveur(pos); return c ? `<div class="pos-note" style="color: var(--accent-gold); font-weight: 700;">🎯 TP${c.numero} atteint → stop suiveur conseillé : ${c.consigne}</div>` : ''; })()}
-                <div class="pos-note${stale ? ' stale' : ''}">Dernier prix ${formatDisplay(pos.last_price)} · reçu ${upd ? upd.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }) : '--'}${stale ? ` · ⚠ aucune mise à jour depuis ${Math.round(ageMin)} min` : ''}</div>
+                <div class="pos-note${stale ? ' stale' : ''}${interrompu ? ' stale-long' : ''}">Dernier prix ${formatDisplay(pos.last_price)} · reçu ${upd ? upd.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }) : '--'}${stale ? ` · ⚠ sans nouvelles depuis ${formatDureeSansNouvelles(ageMin)}` : ''}${interrompu ? ' · suivi interrompu : résultat indisponible' : ''}</div>
             </div>`;
         }).join('');
         renderAllGauges();
